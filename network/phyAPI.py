@@ -127,7 +127,7 @@ class phyAPI(FlaskView):
         except Exception as error:
             print("An exception occurred:", error)
             callback = {"error": str(error)}
-        return callback, 200
+        return jsonify(callback), 200
     
     @route('/set/PHY', methods=['POST'])
     def setTx(self):
