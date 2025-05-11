@@ -215,9 +215,9 @@ def testReceiver():
             except Exception as error:
                 print("An exception occurred:", error)
                 pass
-        samples = rx.data2IQ(data)
-        print(samples)
-        print(len(samples))
+        # samples = rx.data2IQ(data)
+        print(data)
+        print(len(data))
 
     print("Stopping RX")
     rx.stop()
