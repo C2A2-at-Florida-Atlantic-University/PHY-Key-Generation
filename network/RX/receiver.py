@@ -1,7 +1,10 @@
 
 import struct
 import socket
-import json  
+import json
+
+from flask import jsonify
+import numpy as np  
 if __name__ != '__main__':
     from RX.mpsk import MPSK
     from RX.pkt_rcv_gr38 import packetReceive
@@ -210,13 +213,17 @@ def testReceiver():
         print("Retrieving UDP data")
         while not(received):
             try:
-                data=rx.retrieve_IQ(dataSize=8192,samples=1024)
+                data=rx.retrieve_IQ(samples=1024)
                 received = True
             except Exception as error:
                 print("An exception occurred:", error)
                 pass
         # samples = rx.data2IQ(data)
-        print(data)
+        real_data = np.real(data)
+        imag_data = np.imag(data)
+        callback = {"real": real_data.tolist(), "imag": imag_data.tolist()}
+        print(jsonify(callback))
+        # print(data)
         print(len(data))
 
     print("Stopping RX")
