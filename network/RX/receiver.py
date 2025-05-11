@@ -2,9 +2,14 @@
 import struct
 import socket
 import json  
-from RX.mpsk import MPSK
-from RX.pkt_rcv_gr38 import packetReceive
-from RX.sinusoid import Sinusoid
+if __name__ != '__main__':
+    from RX.mpsk import MPSK
+    from RX.pkt_rcv_gr38 import packetReceive
+    from RX.sinusoid import Sinusoid
+else:
+    from mpsk import MPSK
+    from pkt_rcv_gr38 import packetReceive
+    from sinusoid import Sinusoid
 import time
 class Receiver():
     def __init__(self,gain,samp_rate,freq,bandwidth=20000000,buffer_size=0x800,SDR_ADDR="",UDP_port=40868,UDP_IP="127.0.0.1"):

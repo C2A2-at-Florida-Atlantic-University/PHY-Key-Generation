@@ -2,11 +2,18 @@ from datetime import datetime
 import time
 import uuid
 import json
-from TX.mpsk import MPSK
-from TX.sinusoid import Sinusoid
-from TX.pkt_xmt_gr38 import packetTransmit
-from TX.pnSequence import pnSequence
-from TX.FileSource import FileSource
+if __name__ != '__main__':
+    from TX.mpsk import MPSK
+    from TX.sinusoid import Sinusoid
+    from TX.pkt_xmt_gr38 import packetTransmit
+    from TX.pnSequence import pnSequence
+    from TX.FileSource import FileSource
+else:
+    from mpsk import MPSK
+    from sinusoid import Sinusoid
+    from pkt_xmt_gr38 import packetTransmit
+    from pnSequence import pnSequence
+    from FileSource import FileSource
 
 class Transmitter():
     def __init__(self,
