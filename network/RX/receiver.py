@@ -192,7 +192,7 @@ def testReceiver():
     print("Starting RX")
     rx.clear_UDP_socket()
     rx.start()
-    if rxType == "Data":
+    if rxType == "1":
         received = False
         while not(received):
             try:
@@ -205,7 +205,7 @@ def testReceiver():
                 pass
             time.sleep(2)
         print(contents)
-    elif rxType == "Sinusoid":
+    elif rxType == "2":
         received = False
         print("Retrieving UDP data")
         while not(received):
