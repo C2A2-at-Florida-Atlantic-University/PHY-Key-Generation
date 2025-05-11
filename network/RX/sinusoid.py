@@ -62,11 +62,7 @@ class Sinusoid(gr.top_block):
             ",".join((self.SDR_ADDR, "")),
             uhd.stream_args(
                 cpu_format="fc32",
-                args=(
-                    "num_recv_frames=200;"
-                    "recv_frame_size=1024;"
-                    "wire_buffer_size=262144"
-                ),
+                args="",
                 channels=[0],
             )
         )

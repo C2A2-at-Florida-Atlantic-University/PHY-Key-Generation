@@ -69,11 +69,7 @@ class packetTransmit(gr.top_block):
             # stream args: one channel of complex floats
             uhd.stream_args(
                 cpu_format="fc32",
-                args=(
-                    "num_send_frames=200;"
-                    "send_frame_size=1024;"
-                    "wire_buffer_size=262144"
-                ),
+                args="",
                 channels=[0],
             ),
             ""  # XML or args string (unused here)
