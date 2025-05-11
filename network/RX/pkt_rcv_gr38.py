@@ -53,7 +53,7 @@ class packetReceive(gr.top_block):
         )
         # self.iio_pluto_source_0=iio.pluto_source(self.SDR_ID, self.freq, self.samp_rate, self.bandwidth, 
         #                                         self.buffer_size, True, True, True, 'manual', self.gain, '', True)
-        self.usrp_source = uhd.usrp_source(
+        self.usrp_src = uhd.usrp_source(
             ",".join((self.SDR_ADDR, "")),
             uhd.stream_args(
                 cpu_format="fc32",
@@ -102,7 +102,7 @@ class packetReceive(gr.top_block):
         self.connect((self.digital_lms_dd_equalizer_cc_0, 0), (self.digital_costas_loop_cc_0, 0))
         self.connect((self.digital_map_bb_0, 0), (self.digital_correlate_access_code_xx_ts_0, 0))
         self.connect((self.digital_symbol_sync_xx_0, 0), (self.digital_lms_dd_equalizer_cc_0, 0))
-        self.connect((self.usrp_source, 0), (self.mmse_resampler_xx_0, 0))
+        self.connect((self.usrp_src, 0), (self.mmse_resampler_xx_0, 0))
         self.connect((self.mmse_resampler_xx_0, 0), (self.blocks_throttle_0, 0))
 
 
