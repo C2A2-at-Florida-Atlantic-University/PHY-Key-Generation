@@ -113,14 +113,21 @@ class phyAPI(FlaskView):
 
     @route('/rx/recordIQ', methods=['POST'])
     def rx_recordIQ(self):
-        data=request.get_json()
-        phy.receiver.start()
-        IQ_data = phy.receiver.retrieve_IQ(samples=data["samples"])
-        phy.receiver.stop()
-        real_data = np.real(IQ_data)
-        imag_data = np.imag(IQ_data)
-        callback = {"real": real_data.tolist(), "imag": imag_data.tolist()}
-        return jsonify(callback), 200
+        try:
+            data=request.get_json()
+            phy.receiver.start()
+            print("Recording IQ data")
+            print("Data:",data)
+            IQ_data = phy.receiver.retrieve_IQ(samples=data["samples"])
+            phy.receiver.stop()
+            real_data = np.real(IQ_data)
+            imag_data = np.imag(IQ_data)
+            callback = {"real": real_data.tolist(), "imag": imag_data.tolist()}
+            print("Callback:", callback)
+        except Exception as error:
+            print("An exception occurred:", error)
+            callback = {"error": str(error)}
+        return callback, 200
     
     @route('/set/PHY', methods=['POST'])
     def setTx(self):
