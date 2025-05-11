@@ -222,6 +222,7 @@ def testReceiver():
         real_data = np.real(data)
         imag_data = np.imag(data)
         callback = {"real": real_data.tolist(), "imag": imag_data.tolist()}
+        print("Callback:", callback)
         print(jsonify(callback))
         # print(data)
         print(len(data))
