@@ -1,15 +1,13 @@
 {
     "node":{
-        "ip":"100.0.0.0",
+        "ip":"ota-nuc1.emulab.net",
         "id":0
     },
     "NET":{
         "port":5002,
         "id":"NODE_SERIAL_NUMBER",
         "radio":"USRP",
-        "ip":"",
-        "gainRX":0,
-        "gainTX":0
+        "ip":""
     },
     "AI":{
         "port":5003

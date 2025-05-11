@@ -184,7 +184,7 @@ def testReceiver():
         rx.set_rx_data()
     elif rxType == "2":
         print("Setting sinusoid receiver")
-        rx.set_rx_sinusoid()
+        rx.set_rx_IQ()
     else:
         print("no option "+rxType)
         return

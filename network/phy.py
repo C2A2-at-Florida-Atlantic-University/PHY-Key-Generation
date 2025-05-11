@@ -5,7 +5,7 @@ from TX.transmitter import Transmitter, create_data_packet
 from phyAPI import phyAPI
 
 class PHY:
-    def __init__(self,txSamplingRate=600e3,rxSamplingRate=600e3*2,txGain=0,rxGain=30,freq1=2.4e9,freq2=3.1e9, bandwidth=None, buffer_size=0x800):
+    def __init__(self,txSamplingRate=1e6,rxSamplingRate=1e6*2,txGain=80,rxGain=70,freq1=3.55e9,freq2=3.56e9, bandwidth=20000000, buffer_size=0x800):
         conf = getConf(file="../config.json")
         self.NodeIP = conf['node']['ip']
         self.NetPort = conf['NET']['port']
@@ -16,13 +16,24 @@ class PHY:
         self.gain = {"rx":rxGain,"tx":txGain}
         self.buffer_size=buffer_size
         self.bandwidth={"rx":int(0.8 * rxSamplingRate),"tx":int(0.8 * txSamplingRate)} if bandwidth is None else {"rx":bandwidth,"tx":bandwidth}
-        self.transmitter = Transmitter(gain=self.gain["tx"],samp_rate=self.samplingRate["tx"],
-                                    freq=self.freq["tx"], bandwidth=self.bandwidth["tx"], 
-                                    buffer_size=self.buffer_size,SDR_ID="ip:192.168.2.1")
-        self.receiver = Receiver(gain=self.gain["rx"],samp_rate=self.samplingRate["rx"],
-                                freq=self.freq["rx"],bandwidth=self.bandwidth["rx"],
-                                buffer_size=self.buffer_size,SDR_ID="ip:192.168.2.1",
-                                UDP_port=40868,UDP_IP="127.0.0.1")
+        self.transmitter = Transmitter(
+            gain=self.gain["tx"],
+            samp_rate=self.samplingRate["tx"],
+            freq=self.freq["tx"], 
+            bandwidth=self.bandwidth["tx"], 
+            buffer_size=self.buffer_size,
+            SDR_ADDR=""
+        )
+        self.receiver = Receiver(
+            gain=self.gain["rx"],
+            samp_rate=self.samplingRate["rx"],
+            freq=self.freq["rx"],
+            bandwidth=self.bandwidth["rx"],
+            buffer_size=self.buffer_size,
+            SDR_ADDR="",
+            UDP_port=40868,
+            UDP_IP="127.0.0.1"
+        )
     
     def startAPI(self, apiPort=5002):
         self.api = phyAPI()
@@ -325,8 +336,6 @@ def testPHY():
         # handle the exception
         print("An exception occurred:", error)
         pass
-    
-    
     
 if __name__ == '__main__':
     # testPHY()
