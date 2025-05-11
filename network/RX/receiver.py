@@ -3,7 +3,7 @@ import struct
 import socket
 import json
 
-from flask import jsonify
+from flask import Flask, jsonify
 import numpy as np  
 if __name__ != '__main__':
     from RX.mpsk import MPSK
@@ -165,7 +165,6 @@ class Receiver():
         self.clear_UDP_socket()
 
 def testReceiver():
-
     samp_rate=1e6
     gain=70
     freq=3.55e9
@@ -223,7 +222,10 @@ def testReceiver():
         imag_data = np.imag(data)
         callback = {"real": real_data.tolist(), "imag": imag_data.tolist()}
         print("Callback:", callback)
-        print(jsonify(callback))
+        app = Flask(__name__)
+        with app.app_context():
+            response = jsonify(callback)
+        print(response)
         # print(data)
         print(len(data))
 
