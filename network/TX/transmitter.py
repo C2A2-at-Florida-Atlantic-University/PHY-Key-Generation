@@ -72,23 +72,7 @@ class Transmitter():
         json_string=json.dumps(data)
         length, values=self.str_to_length_and_decimals(json_string)
         sps=2
-        if self.type != "data":
-            print("setting TX data")
-            self.type = "data"
-            self.tx=packetTransmit(input=values,input_len=length,samp_rate=self.samp_rate,
-                                sps=sps,gain=self.gain,freq=self.freq,buffer_size=self.buffer_size,
-                                bandwidth=self.bandwidth,SDR_ADDR=self.SDR_ADDR)
-        else:
-            print("TX data already set, setting message")
-            del self.tx
-            self.tx=packetTransmit(input=values,input_len=length,samp_rate=self.samp_rate,
-                                sps=sps,gain=self.gain,freq=self.freq,buffer_size=self.buffer_size,
-                                bandwidth=self.bandwidth,SDR_ADDR=self.SDR_ADDR)
-
-    def setData(self,data):
-        json_string=json.dumps(data)
-        length, values=self.str_to_length_and_decimals(json_string)
-        sps=2 
+        self.type = "data"
         del self.tx
         self.tx=packetTransmit(
             input=values,
@@ -99,10 +83,11 @@ class Transmitter():
             freq=self.freq,
             buffer_size=self.buffer_size,
             bandwidth=self.bandwidth,
-            SDR_ADDR=self.SDR_ADDR
-        )
+            SDR_ADDR=self.SDR_ADDR)
         
     def set_tx_M_PSK(self,M):
+        self.type = "mpsk"
+        del self.tx
         self.tx = MPSK(
             samp_rate=self.samp_rate,
             sps=4,
@@ -115,6 +100,8 @@ class Transmitter():
         )
 
     def set_tx_sinusoid(self):
+        self.type = "sinusoid"
+        del self.tx
         self.tx=Sinusoid(
             samp_rate=self.samp_rate,
             gain=self.gain,
@@ -124,6 +111,8 @@ class Transmitter():
             SDR_ADDR=self.SDR_ADDR)
         
     def set_tx_pnSequence(self,sequence="glfsr"):
+        self.type = "pnSequence"
+        del self.tx
         self.tx=pnSequence(
             samp_rate=self.samp_rate,
             gain=self.gain,
@@ -135,6 +124,8 @@ class Transmitter():
         )
     
     def set_tx_fileSource(self,filename="'/home/siwn/siwn-node/network/Matlab/BPSK.dat"):
+        self.type = "fileSource"
+        del self.tx
         self.tx=FileSource(
             samp_rate=self.samp_rate,
             gain=self.gain,
@@ -193,8 +184,8 @@ def TestTransmitter():
 def TestTxSinusoid():
     print("Testing Tx Sinusoid")
     print("Setting up parameters")
-    samp_rate=600e3
-    gain=31
+    samp_rate=1e6
+    gain=80
     freq=3.55e9
     buffer_size=8192
     bandwidth=20000000
