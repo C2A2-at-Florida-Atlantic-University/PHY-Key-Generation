@@ -23,7 +23,9 @@ if __name__ == '__main__':
 from gnuradio import blocks, digital, filter, gr, uhd
 import pmt
 import sys
-from TX.packet_format_gr38 import packet_format
+from packet_format_gr38 import packet_format
+# import previous path ../ using sys
+sys.path.append('../')
 
 class packetTransmit(gr.top_block):
     def __init__(self,
