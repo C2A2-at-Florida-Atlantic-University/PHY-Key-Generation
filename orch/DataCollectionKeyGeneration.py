@@ -31,7 +31,7 @@ def setPHY(nodeID,port,params):
         "x": params["x"],
         "freq": params["freq"],
         "SamplingRate": params["SamplingRate"],
-        "gain": params["gain"][params["x"]][nodeID]
+        "gain": params["gain"][nodeID][params["x"]]
     }
     headers = {'Content-Type': 'application/json'}
     response = requests.post(APILink(NodeIPs[nodeID],port,path), data=json.dumps(data), headers=headers)
@@ -227,8 +227,6 @@ samplesPerExample = 1024
 samplesPerPacket = 8192
 freq = 3.55e9
 samp_rate = 1e6
-gainRX = 80
-gainTX = 30
 
 paramsTx = {
     "x":"tx",
