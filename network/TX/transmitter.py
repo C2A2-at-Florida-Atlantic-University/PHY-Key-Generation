@@ -187,7 +187,7 @@ def TestTxSinusoid():
     print("Testing Tx Sinusoid")
     print("Setting up parameters")
     samp_rate=600e3
-    gain=0
+    gain=31
     freq=3.550e9
     buffer_size=8192
     bandwidth=20000000

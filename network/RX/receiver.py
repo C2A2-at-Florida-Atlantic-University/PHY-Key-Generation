@@ -151,7 +151,7 @@ class Receiver():
 def testReceiver():
 
     samp_rate=600e3
-    gain=60
+    gain=31
     freq=3.550e9
 
     print("Radio Setup Parameters")
