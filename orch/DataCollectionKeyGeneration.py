@@ -11,6 +11,7 @@ def APILink(IP,port,path):
 def recordIQ(nodeID,port):
     path = "/rx/recordIQ"
     response_rx = requests.get(APILink(NodeIPs[nodeID],port,path))
+    print("Response:",response_rx)
     response_json = response_rx.json()
     imag = response_json["imag"]
     real = response_json["real"]
@@ -138,14 +139,14 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
             setRXNode(params,Alice)
             time.sleep(timeSleep)
             
-            real1, imaginary1 = RecordNodeData(rx=Alice)
+            real1, imaginary1 = RecordNodeData(Alice)
             IQ_N1 = np.concatenate((imaginary1[0:numberOfSamples], real1[0:numberOfSamples]), axis=None)
             IQ_Samples = np.concatenate((IQ_Samples,[IQ_N1]), axis=0)
             labels.append(channel_Labels[0])
             instance.append(1)
             ids.append(id)
             
-            real2, imaginary2 = RecordNodeData(rx=Eve)
+            real2, imaginary2 = RecordNodeData(Eve)
             IQ_N3_1 = np.concatenate((imaginary2[0:numberOfSamples], real2[0:numberOfSamples]), axis=None)
             IQ_Samples = np.concatenate((IQ_Samples,[IQ_N3_1]), axis=0)
             labels.append(channel_Labels[1])  
@@ -156,7 +157,7 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
             # plot_waveform("Waveform Bob TX & Alice RX",real1[0:numberOfSamples],imaginary1[0:numberOfSamples])
             # plot_spectrogram("Spectrogram Bob TX & Eve RX",real2[0:numberOfSamples],imaginary2[0:numberOfSamples])
             # plot_waveform("Waveform Bob TX & Eve RX",real2[0:numberOfSamples],imaginary2[0:numberOfSamples])
-            stopTXNode(tx=Bob)
+            stopTXNode(Bob)
             time.sleep(timeSleep)
 
         else:
@@ -165,7 +166,7 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
             setRXNode(params,Bob)
             time.sleep(timeSleep)
             
-            real1, imaginary1 = RecordNodeData(rx=Bob)
+            real1, imaginary1 = RecordNodeData(Bob)
             IQ_N2 = np.concatenate((imaginary1[0:numberOfSamples], real1[0:numberOfSamples]), axis=None)
             if(i == 1):
                 IQ_Samples = np.array([IQ_N2])
@@ -175,7 +176,7 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
             instance.append(3)
             ids.append(id)
 
-            real2, imaginary2 = RecordNodeData(rx=Eve)
+            real2, imaginary2 = RecordNodeData(Eve)
             IQ_N3_2 = np.concatenate((imaginary2[0:numberOfSamples], real2[0:numberOfSamples]), axis=None)
             IQ_Samples = np.concatenate((IQ_Samples,[IQ_N3_2]), axis=0)
             labels.append(channel_Labels[2])
@@ -185,7 +186,7 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
             # plot_waveform("Waveform Alice TX & Bob RX",real1[0:numberOfSamples],imaginary1[0:numberOfSamples])
             # plot_spectrogram("Spectrogram Alice TX & Eve RX",real2[0:numberOfSamples],imaginary2[0:numberOfSamples])
             # plot_waveform("Waveform Alice TX & Eve RX",real2[0:numberOfSamples],imaginary2[0:numberOfSamples])
-            stopTXNode(tx=Alice)
+            stopTXNode(Alice)
             time.sleep(timeSleep)
         
         i = i + 1
@@ -212,8 +213,8 @@ NodeIPs = {
 NodeGains = {
     1:{"tx":80,"rx":70},
     2:{"tx":80,"rx":70},
-    3:{"tx":31,"rx":31},
-    4:{"tx":31,"rx":31},
+    3:{"tx":80,"rx":70},
+    4:{"tx":80,"rx":70},
     5:{"tx":31,"rx":31},
     6:{"tx":31,"rx":31},
     7:{"tx":31,"rx":31},
@@ -242,10 +243,10 @@ paramsRx = {
 }
 params = {"tx":paramsTx,"rx":paramsRx}
 
-packages = 100
+packages = 2
 type = "sinusoid" #pnSequence, MPSK, sinusoid
 
-nodes = [1,2,3]
+nodes = [3,4,5]
 
 IQ_Samples, labels, instance, ids = collect_data_ping_pong_3Nodes(params, nodes, packages, type)
 

@@ -210,7 +210,7 @@ def testReceiver():
         print("Retrieving UDP data")
         while not(received):
             try:
-                data=rx.retrieve_raw_data(dataSize=8192)
+                data=rx.retrieve_IQ(dataSize=8192,samples=1024)
                 received = True
             except Exception as error:
                 print("An exception occurred:", error)
