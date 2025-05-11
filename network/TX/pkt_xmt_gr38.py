@@ -56,6 +56,7 @@ class packetTransmit(gr.top_block):
         self.SDR_ADDR=SDR_ADDR
         self.input=input
         self.input_len=input_len
+        self.max_buf = 1024*1024  
         ##################################################
         # Blocks
         ##################################################
@@ -68,7 +69,11 @@ class packetTransmit(gr.top_block):
             # stream args: one channel of complex floats
             uhd.stream_args(
                 cpu_format="fc32",
-                args="",
+                args=(
+                    "num_send_frames=200;"
+                    "send_frame_size=1024;"
+                    "wire_buffer_size=262144"
+                ),
                 channels=[0],
             ),
             ""  # XML or args string (unused here)
@@ -78,6 +83,7 @@ class packetTransmit(gr.top_block):
         self.usrp_sink.set_gain(self.gain, 0)
         # choose TX port on B200-series / X300-series
         self.usrp_sink.set_antenna("TX/RX", 0)
+        self.usrp_sink.set_max_output_buffer(self.max_buf)
         self.digital_crc32_async_bb_1=digital.crc32_async_bb(False)
         self.digital_constellation_modulator_0=digital.generic_mod(
             constellation=bpsk,

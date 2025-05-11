@@ -55,11 +55,16 @@ class MPSK(gr.top_block):
         
         # self.iio_pluto_source_0=iio.pluto_source(self.SDR_ID, self.freq, self.samp_rate, self.bandwidth, 
         #                                         self.buffer_size, True, True, True, 'manual', self.gain, '', True)
+        self.max_buf = 1024*1024  
         self.usrp_source = uhd.usrp_source(
             ",".join((self.SDR_ADDR, "")),
             uhd.stream_args(
                 cpu_format="fc32",
-                args="",
+                args=(
+                    "num_recv_frames=200;"
+                    "recv_frame_size=1024;"
+                    "wire_buffer_size=262144"
+                ),
                 channels=[0],
             )
         )
@@ -67,7 +72,7 @@ class MPSK(gr.top_block):
         self.usrp_source.set_center_freq(self.freq, 0)
         self.usrp_source.set_gain(self.gain, 0)
         self.usrp_source.set_antenna("RX2", 0)
-        
+        self.usrp_source.set_max_output_buffer(self.max_buf)
         self.digital_symbol_sync_xx_0_0 = digital.symbol_sync_cc(
             digital.TED_SIGNAL_TIMES_SLOPE_ML,
             sps,
@@ -110,7 +115,7 @@ class MPSK(gr.top_block):
 
     def set_samp_rate(self, samp_rate):
         self.samp_rate = samp_rate
-        self.usrp_src.set_samp_rate(self.samp_rate)
+        self.usrp_source.set_samp_rate(self.samp_rate)
 
     def get_rrc_taps(self):
         return self.rrc_taps
@@ -131,14 +136,14 @@ class MPSK(gr.top_block):
 
     def set_gain(self, gain):
         self.gain = gain
-        self.usrp_src.set_gain(self.gain, 0)
+        self.usrp_source.set_gain(self.gain, 0)
 
     def get_freq(self):
         return self.freq
 
     def set_freq(self, freq):
         self.freq = freq
-        self.usrp_src.set_center_freq(self.freq, 0)
+        self.usrp_source.set_center_freq(self.freq, 0)
 
     def get_buffer_size(self):
         return self.buffer_size

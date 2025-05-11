@@ -57,24 +57,28 @@ class Sinusoid(gr.top_block):
         )
         # self.iio_pluto_source_0=iio.pluto_source(SDR_ID, freq, samp_rate, bandwidth, buffer_size, True, True, True, 'manual', gain, '', True)
         # UHD USRP source block
-        self.usrp_src = uhd.usrp_source(
-            # device args: empty = first UHD device found
+        self.max_buf = 1024*1024  
+        self.usrp_source = uhd.usrp_source(
             ",".join((self.SDR_ADDR, "")),
-            # stream args: one channel of 32-bit complex floats
             uhd.stream_args(
                 cpu_format="fc32",
-                args="",
+                args=(
+                    "num_recv_frames=200;"
+                    "recv_frame_size=1024;"
+                    "wire_buffer_size=262144"
+                ),
                 channels=[0],
-            ),
+            )
         )
-        self.usrp_src.set_samp_rate(self.samp_rate)
-        self.usrp_src.set_center_freq(self.freq, 0)
-        self.usrp_src.set_gain(self.gain, 0)
-        self.usrp_src.set_antenna('RX2', 0)
+        self.usrp_source.set_samp_rate(self.samp_rate)
+        self.usrp_source.set_center_freq(self.freq, 0)
+        self.usrp_source.set_gain(self.gain, 0)
+        self.usrp_source.set_antenna("RX2", 0)
+        self.usrp_source.set_max_output_buffer(self.max_buf)
         ##################################################
         # Connections
         ##################################################
-        self.connect((self.usrp_src, 0), (self.udp_sink, 0))
+        self.connect((self.usrp_source, 0), (self.udp_sink, 0))
 
     def closeEvent(self, event):
         self.settings.setValue("geometry", self.saveGeometry())
@@ -85,21 +89,21 @@ class Sinusoid(gr.top_block):
 
     def set_samp_rate(self, samp_rate):
         self.samp_rate=samp_rate
-        self.usrp_src.set_samp_rate(self.samp_rate)
+        self.usrp_source.set_samp_rate(self.samp_rate)
 
     def get_gain(self):
         return self.gain
 
     def set_gain(self, gain):
         self.gain=gain
-        self.usrp_src.set_gain(self.gain, 0)
+        self.usrp_source.set_gain(self.gain, 0)
 
     def get_freq(self):
         return self.freq
 
     def set_freq(self, freq):
         self.freq=freq
-        self.usrp_src.set_center_freq(self.freq, 0)
+        self.usrp_source.set_center_freq(self.freq, 0)
 
     def get_buffer_size(self):
         return self.buffer_size

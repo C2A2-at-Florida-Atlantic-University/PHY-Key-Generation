@@ -32,13 +32,6 @@ class Transmitter():
         self.tx = None
         self.type = "None"
         self.set_tx_data("default")
-        print("Transmitter Initialized")
-        print("Gain: "+str(self.gain))
-        print("Sampling Rate: "+str(self.samp_rate))
-        print("Frequency: "+str(self.freq))
-        print("Bandwidth: "+str(self.bandwidth))
-        print("Buffer Size: "+str(self.buffer_size))
-        print("SDR ADDR: "+str(self.SDR_ADDR))
         
     def setFreq(self,freq):
         self.freq = freq

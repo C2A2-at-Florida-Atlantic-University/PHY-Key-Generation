@@ -49,13 +49,18 @@ class pnSequence(gr.top_block):
         ##################################################
 
         # self.iio_pluto_sink_0=iio.pluto_sink(SDR_ID, freq, samp_rate, bandwidth, buffer_size, True, gain, '', True)
+        self.max_buf = 1024*1024  
         self.usrp_sink = uhd.usrp_sink(
             # device address string: blank => first USRP found
             ",".join((self.SDR_ADDR, "")),
             # stream args: one channel of complex floats
             uhd.stream_args(
                 cpu_format="fc32",
-                args="",
+                args=(
+                    "num_send_frames=200;"
+                    "send_frame_size=1024;"
+                    "wire_buffer_size=262144"
+                ),
                 channels=[0],
             ),
             ""  # XML or args string (unused here)
@@ -65,6 +70,7 @@ class pnSequence(gr.top_block):
         self.usrp_sink.set_gain(self.gain, 0)
         # choose TX port on B200-series / X300-series
         self.usrp_sink.set_antenna("TX/RX", 0)
+        self.usrp_sink.set_max_output_buffer(self.max_buf)
         self.blocks_vector_source_x_1 = blocks.vector_source_f(self.sequences[self.sequence], True, 1, [])
         self.blocks_null_source_1 = blocks.null_source(gr.sizeof_float*1)
         self.blocks_float_to_complex_0 = blocks.float_to_complex(1)
