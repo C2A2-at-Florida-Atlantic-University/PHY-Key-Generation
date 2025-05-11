@@ -63,8 +63,7 @@ class Sinusoid(gr.top_block):
         self.usrp_sink.set_gain(self.gain, 0)
         # choose TX port on B200-series / X300-series
         self.usrp_sink.set_antenna("TX/RX", 0)
-        self.analog_sig_source_x_0=analog.sig_source_c(samp_rate, analog.GR_SIN_WAVE, freq/128, 1, 0, 0)
-
+        self.analog_sig_source_x_0=analog.sig_source_c(samp_rate, analog.GR_SIN_WAVE, 1000, 1, 0, 0)
         ##################################################
         # Connections
         ##################################################

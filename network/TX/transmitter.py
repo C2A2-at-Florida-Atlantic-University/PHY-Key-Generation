@@ -102,6 +102,13 @@ class Transmitter():
     def set_tx_sinusoid(self):
         self.type = "sinusoid"
         del self.tx
+        print("Setting sinusoid transmitter")
+        print("Gain: "+str(self.gain))
+        print("Sampling Rate: "+str(self.samp_rate))
+        print("Frequency: "+str(self.freq))
+        print("Bandwidth: "+str(self.bandwidth))
+        print("Buffer Size: "+str(self.buffer_size))
+        print("SDR ADDR: "+str(self.SDR_ADDR))
         self.tx=Sinusoid(
             samp_rate=self.samp_rate,
             gain=self.gain,
@@ -157,9 +164,15 @@ def create_data_packet(data):
 def TestTransmitter():
     samp_rate=1e6
     gain=80
-    freq=3.550e9
-    transmitter = Transmitter(gain,samp_rate,freq,
-        bandwidth=20000000,buffer_size=8192,SDR_ADDR="")
+    freq=3.55e9
+    transmitter = Transmitter(
+        gain=gain,
+        samp_rate=samp_rate,
+        freq=freq,
+        bandwidth=20000000,
+        buffer_size=8192,
+        SDR_ADDR=""
+    )
     txType = input("Transmitter Type [Data (1), Sinusoid (2)]:")
     if txType == "1":
         print("Writing input")
