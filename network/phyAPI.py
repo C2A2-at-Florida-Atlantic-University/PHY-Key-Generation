@@ -111,7 +111,7 @@ class phyAPI(FlaskView):
         callback = {"contents": "done"}
         return jsonify(callback), 200
 
-    @route('/rx/recordIQ', methods=['GET'])
+    @route('/rx/recordIQ', methods=['POST'])
     def rx_recordIQ(self):
         try:
             data=request.get_json()

@@ -8,11 +8,16 @@ import h5py
 def APILink(IP,port,path):
     return "http://"+IP+":"+port+path    
 
-def recordIQ(nodeID,port):
+def recordIQ(nodeID,port,samples):
     path = "/rx/recordIQ"
-    response_rx = requests.get(APILink(NodeIPs[nodeID],port,path))
-    print("Response:",response_rx)
-    response_json = response_rx.json()
+    data = {
+        "samples": samples
+    }
+    headers = {'Content-Type': 'application/json'}
+    response = requests.post(APILink(NodeIPs[nodeID],port,path), data=json.dumps(data), headers=headers)
+    # response_rx = requests.get(APILink(NodeIPs[nodeID],port,path))
+    print("Response:",response)
+    response_json = response.json()
     imag = response_json["imag"]
     real = response_json["real"]
     return real,imag
@@ -107,8 +112,8 @@ def setRXNode(params,nodeID):
     response = setRxIQ(nodeID,port["radio"])
     response = setPHY(nodeID,port["radio"],params["rx"])
     
-def RecordNodeData(nodeID):
-    return recordIQ(nodeID,port["radio"])
+def RecordNodeData(nodeID,samples):
+    return recordIQ(nodeID,port["radio"],samples)
     
 def stopTXNode(nodeID):
     response = stop_tx(nodeID,port["radio"])
@@ -139,14 +144,14 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
             setRXNode(params,Alice)
             time.sleep(timeSleep)
             
-            real1, imaginary1 = RecordNodeData(Alice)
+            real1, imaginary1 = RecordNodeData(Alice, samples=numberOfSamples)
             IQ_N1 = np.concatenate((imaginary1[0:numberOfSamples], real1[0:numberOfSamples]), axis=None)
             IQ_Samples = np.concatenate((IQ_Samples,[IQ_N1]), axis=0)
             labels.append(channel_Labels[0])
             instance.append(1)
             ids.append(id)
             
-            real2, imaginary2 = RecordNodeData(Eve)
+            real2, imaginary2 = RecordNodeData(Eve, samples=numberOfSamples)
             IQ_N3_1 = np.concatenate((imaginary2[0:numberOfSamples], real2[0:numberOfSamples]), axis=None)
             IQ_Samples = np.concatenate((IQ_Samples,[IQ_N3_1]), axis=0)
             labels.append(channel_Labels[1])  
@@ -166,7 +171,7 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
             setRXNode(params,Bob)
             time.sleep(timeSleep)
             
-            real1, imaginary1 = RecordNodeData(Bob)
+            real1, imaginary1 = RecordNodeData(Bob, samples=numberOfSamples)
             IQ_N2 = np.concatenate((imaginary1[0:numberOfSamples], real1[0:numberOfSamples]), axis=None)
             if(i == 1):
                 IQ_Samples = np.array([IQ_N2])
@@ -176,7 +181,7 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
             instance.append(3)
             ids.append(id)
 
-            real2, imaginary2 = RecordNodeData(Eve)
+            real2, imaginary2 = RecordNodeData(Eve, samples=numberOfSamples)
             IQ_N3_2 = np.concatenate((imaginary2[0:numberOfSamples], real2[0:numberOfSamples]), axis=None)
             IQ_Samples = np.concatenate((IQ_Samples,[IQ_N3_2]), axis=0)
             labels.append(channel_Labels[2])
