@@ -3,7 +3,6 @@ import json
 import numpy as np
 import time
 import matplotlib.pyplot as plt
-from scipy import signal
 import h5py
 
 def APILink(IP,port,path):
@@ -92,15 +91,6 @@ def plotTimeDomain(I,Q,samples=-1,id=0):
     plt.grid(True)
     plt.axhline(0, color='black',linewidth=0.5)
     plt.axvline(0, color='black',linewidth=0.5)
-    plt.show()
-
-def plotSpectrogram(I,Q,fs,samples=-1,id=0):
-    x = np.array([complex(Q[i],I[i]) for i in range(len(I))])
-    f, t, Sxx = signal.spectrogram(x, fs)
-    plt.title('Spectrogram Plot Node: '+str(id))
-    plt.pcolormesh(t, f, Sxx, shading='gouraud')
-    plt.ylabel('Frequency [Hz]')
-    plt.xlabel('Time [sec]')
     plt.show()
 
 def setTXNode(params,type,nodeID,metadata = {"pnSequence":"glfsr"}):
