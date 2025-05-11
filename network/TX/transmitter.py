@@ -164,19 +164,19 @@ def create_data_packet(data):
     return content
 
 def TestTransmitter():
-    samp_rate=600e3
-    gain=10
+    samp_rate=1e6
+    gain=80
     freq=3.550e9
     transmitter = Transmitter(gain,samp_rate,freq,
         bandwidth=20000000,buffer_size=8192,SDR_ADDR="")
-    txType = input("Transmitter Type [Sinusoid, Data, Code]:")
-    if txType == "Data":
+    txType = input("Transmitter Type [Data (1), Sinusoid (2)]:")
+    if txType == "1":
         print("Writing input")
         data=input("Input: ")
         content=create_data_packet(data)
         print("Setting data transmitter")
         transmitter.set_tx_data(content)
-    elif txType == "Sinusoid":
+    elif txType == "2":
         print("Setting sinusoid transmitter")
         transmitter.set_tx_sinusoid()
     else:
@@ -195,7 +195,7 @@ def TestTxSinusoid():
     print("Setting up parameters")
     samp_rate=600e3
     gain=31
-    freq=3.550e9
+    freq=3.55e9
     buffer_size=8192
     bandwidth=20000000
     SDR_ADDR=""

@@ -28,7 +28,7 @@ class Sinusoid(gr.top_block):
     def __init__(self,
                 samp_rate=1000000,
                 gain=0,
-                freq=2400000000,
+                freq=3.55e9,
                 buffer_size=8192,
                 bandwidth=20000000,
                 SDR_ADDR=""):

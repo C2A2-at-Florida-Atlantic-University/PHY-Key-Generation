@@ -12,7 +12,15 @@ else:
     from sinusoid import Sinusoid
 import time
 class Receiver():
-    def __init__(self,gain,samp_rate,freq,bandwidth=20000000,buffer_size=0x800,SDR_ADDR="",UDP_port=40868,UDP_IP="127.0.0.1"):
+    def __init__(self,
+                gain,
+                samp_rate,
+                freq,
+                bandwidth=20000000,
+                buffer_size=0x800,
+                SDR_ADDR="",
+                UDP_port=40868,
+                UDP_IP="127.0.0.1"):
         self.gain = gain
         self.samp_rate = samp_rate
         self.freq = freq
@@ -155,9 +163,9 @@ class Receiver():
 
 def testReceiver():
 
-    samp_rate=600e3
-    gain=31
-    freq=3.550e9
+    samp_rate=1e6
+    gain=70
+    freq=3.55e9
 
     print("Radio Setup Parameters")
     rx = Receiver(
@@ -170,11 +178,11 @@ def testReceiver():
         UDP_port=40868,
         UDP_IP="127.0.0.1")
     
-    rxType = input("Receiver Type [IQ, Data, Code]:")
-    if rxType == "Data":
+    rxType = input("Receiver Type [Data (1), IQ (2)]:")
+    if rxType == "1":
         print("Setting data receiver")
         rx.set_rx_data()
-    elif rxType == "IQ":
+    elif rxType == "2":
         print("Setting sinusoid receiver")
         rx.set_rx_sinusoid()
     else:

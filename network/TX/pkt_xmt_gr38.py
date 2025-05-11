@@ -34,7 +34,7 @@ class packetTransmit(gr.top_block):
                 samp_rate=600e3,
                 sps = 2,
                 gain=10,
-                freq=2.4e9,
+                freq=3.55e9,
                 buffer_size=32768,
                 bandwidth=20000000,
                 SDR_ADDR=""):

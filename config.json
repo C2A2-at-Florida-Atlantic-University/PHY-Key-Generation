@@ -6,8 +6,10 @@
     "NET":{
         "port":5002,
         "id":"NODE_SERIAL_NUMBER",
-        "radio":"plutoSDR",
-        "ip":"192.168.2.1"
+        "radio":"USRP",
+        "ip":"",
+        "gainRX":0,
+        "gainTX":0
     },
     "AI":{
         "port":5003
