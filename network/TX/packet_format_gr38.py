@@ -18,9 +18,19 @@ class packet_format(gr.sync_block):
         self.message_port_register_out(pmt.intern('PDU_out0'))
         self.set_msg_handler(pmt.intern('PDU_in'), self.handle_msg)
 
-    def handle_msg(self, msg):
-        inMsg = pmt.to_python (msg)
-        pld = inMsg[1] ## type-> numpy.ndarray
+    def handle_msg(self, msg_pmt):
+        # inMsg = pmt.to_python (msg)
+        # pld = inMsg[1] ## type-> numpy.ndarray
+
+        # 1) metadata = pmt.car(msg_pmt)   # if you ever need it
+        data_pmt = pmt.cdr(msg_pmt)
+
+        # 2) extract raw bytes from the u8vector
+        byte_list = pmt.u8vector_elements(data_pmt)  
+        # returns a Python list of ints (0–255)
+
+        # 3) turn into a numpy array
+        pld = np.array(byte_list, dtype=np.uint8)
         mLen = len(pld)
         if (mLen > 0):
             ## create a numpy array of type 'int' with preamble and sync word
