@@ -20,18 +20,22 @@ if __name__ == '__main__':
         except:
             print("Warning: failed to XInitThreads()")
 
-from gnuradio import blocks
+from gnuradio import blocks, digital, filter, gr, uhd
 import pmt
-from gnuradio import digital
-from gnuradio import filter
-from gnuradio import gr
 import sys
-import iio
 from TX.packet_format_gr38 import packet_format
 
 class packetTransmit(gr.top_block):
-    def __init__(self,input,input_len,samp_rate=600e3,sps = 2,gain=10,freq=2.4e9,buffer_size=32768,
-                bandwidth=20000000,SDR_ID="ip:192.168.2.1"):
+    def __init__(self,
+                input,
+                input_len,
+                samp_rate=600e3,
+                sps = 2,
+                gain=10,
+                freq=2.4e9,
+                buffer_size=32768,
+                bandwidth=20000000,
+                SDR_ADDR=""):
         
         gr.top_block.__init__(self, "txData")
         ##################################################
@@ -47,7 +51,7 @@ class packetTransmit(gr.top_block):
         self.buffer_size=buffer_size
         self.bpsk=bpsk=digital.constellation_bpsk().base()
         self.bandwidth=bandwidth
-        self.SDR_ID=SDR_ID
+        self.SDR_ADDR=SDR_ADDR
         self.input=input
         self.input_len=input_len
         ##################################################
@@ -55,7 +59,23 @@ class packetTransmit(gr.top_block):
         ##################################################
         self.packet_format_gr38=packet_format()
         self.mmse_resampler_xx_0=filter.mmse_resampler_cc(0, 1.0/((usrp_rate/samp_rate)*rs_ratio))
-        self.iio_pluto_sink_0=iio.pluto_sink(SDR_ID, freq, samp_rate, bandwidth, buffer_size, True, gain, '', True)
+        # self.iio_pluto_sink_0=iio.pluto_sink(SDR_ID, freq, samp_rate, bandwidth, buffer_size, True, gain, '', True)
+        self.usrp_sink = uhd.usrp_sink(
+            # device address string: blank => first USRP found
+            ",".join((self.SDR_ADDR, "")),
+            # stream args: one channel of complex floats
+            uhd.stream_args(
+                cpu_format="fc32",
+                args="",
+                channels=[0],
+            ),
+            ""  # XML or args string (unused here)
+        )
+        self.usrp_sink.set_samp_rate(self.samp_rate)
+        self.usrp_sink.set_center_freq(self.freq, 0)
+        self.usrp_sink.set_gain(self.gain, 0)
+        # choose TX port on B200-series / X300-series
+        self.usrp_sink.set_antenna("TX/RX", 0)
         self.digital_crc32_async_bb_1=digital.crc32_async_bb(False)
         self.digital_constellation_modulator_0=digital.generic_mod(
             constellation=bpsk,
@@ -79,7 +99,7 @@ class packetTransmit(gr.top_block):
         self.connect((self.blocks_pdu_to_tagged_stream_0, 0), (self.digital_constellation_modulator_0, 0))
         self.connect((self.blocks_throttle_0, 0), (self.blocks_multiply_const_vxx_0, 0))
         self.connect((self.digital_constellation_modulator_0, 0), (self.blocks_throttle_0, 0))
-        self.connect((self.mmse_resampler_xx_0, 0), (self.iio_pluto_sink_0, 0))
+        self.connect((self.mmse_resampler_xx_0, 0), (self.usrp_sink, 0))
 
     def closeEvent(self, event):
         self.settings.setValue("geometry", self.saveGeometry())
@@ -109,7 +129,7 @@ class packetTransmit(gr.top_block):
     def set_samp_rate(self, samp_rate):
         self.samp_rate=samp_rate
         self.blocks_throttle_0.set_sample_rate(self.samp_rate)
-        self.iio_pluto_sink_0.set_params(self.freq, self.samp_rate, self.bandwidth, self.gain, '', True)
+        self.usrp_sink.set_samp_rate(self.samp_rate)
         self.mmse_resampler_xx_0.set_resamp_ratio(1.0/((self.usrp_rate/self.samp_rate)*self.rs_ratio))
 
     def get_rs_ratio(self):
@@ -124,14 +144,14 @@ class packetTransmit(gr.top_block):
 
     def set_gain(self, gain):
         self.gain=gain
-        self.iio_pluto_sink_0.set_params(self.freq, self.samp_rate, self.bandwidth, self.gain, '', True)
+        self.usrp_sink.set_gain(self.gain, 0)
 
     def get_freq(self):
         return self.freq
 
     def set_freq(self, freq):
         self.freq=freq
-        self.iio_pluto_sink_0.set_params(self.freq, self.samp_rate, self.bandwidth, self.gain, '', True)
+        self.usrp_sink.set_center_freq(self.freq, 0)
 
     def get_excess_bw(self):
         return self.excess_bw
@@ -156,7 +176,7 @@ class packetTransmit(gr.top_block):
 
     def set_bandwidth(self, bandwidth):
         self.bandwidth=bandwidth
-        self.iio_pluto_sink_0.set_params(self.freq, self.samp_rate, self.bandwidth, self.gain, '', True)
+        # self.iio_pluto_sink_0.set_params(self.freq, self.samp_rate, self.bandwidth, self.gain, '', True)
 
     def get_SDR_ID(self):
         return self.SDR_ID

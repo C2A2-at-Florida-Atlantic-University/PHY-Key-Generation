@@ -19,16 +19,19 @@ if __name__ == '__main__':
         except:
             print("Warning: failed to XInitThreads()")
 
-from gnuradio import analog
-from gnuradio import gr
+from gnuradio import analog, gr, uhd
 import sys
-import iio
 import time
 
 class Sinusoid(gr.top_block):
 
-    def __init__(self,samp_rate=1000000,gain=0,freq=2400000000,
-        buffer_size=8192,bandwidth=20000000,SDR_ID="ip:192.168.2.1"):
+    def __init__(self,
+                samp_rate=1000000,
+                gain=0,
+                freq=2400000000,
+                buffer_size=8192,
+                bandwidth=20000000,
+                SDR_ADDR=""):
         gr.top_block.__init__(self, "Sinusoid")
         ##################################################
         # Variables
@@ -38,18 +41,34 @@ class Sinusoid(gr.top_block):
         self.freq=freq 
         self.buffer_size=buffer_size 
         self.bandwidth=bandwidth 
-        self.SDR_ID=SDR_ID 
+        self.SDR_ADDR=SDR_ADDR 
 
         ##################################################
         # Blocks
         ##################################################
-        self.iio_pluto_sink_0 = iio.pluto_sink(SDR_ID, freq, samp_rate, bandwidth, buffer_size, True, gain, '', True)
+        # self.iio_pluto_sink_0 = iio.pluto_sink(SDR_ID, freq, samp_rate, bandwidth, buffer_size, True, gain, '', True)
+        self.usrp_sink = uhd.usrp_sink(
+            # device address string: blank => first USRP found
+            ",".join((self.SDR_ADDR, "")),
+            # stream args: one channel of complex floats
+            uhd.stream_args(
+                cpu_format="fc32",
+                args="",
+                channels=[0],
+            ),
+            ""  # XML or args string (unused here)
+        )
+        self.usrp_sink.set_samp_rate(self.samp_rate)
+        self.usrp_sink.set_center_freq(self.freq, 0)
+        self.usrp_sink.set_gain(self.gain, 0)
+        # choose TX port on B200-series / X300-series
+        self.usrp_sink.set_antenna("TX/RX", 0)
         self.analog_sig_source_x_0=analog.sig_source_c(samp_rate, analog.GR_SIN_WAVE, freq/128, 1, 0, 0)
 
         ##################################################
         # Connections
         ##################################################
-        self.connect((self.analog_sig_source_x_0, 0), (self.iio_pluto_sink_0, 0))
+        self.connect((self.analog_sig_source_x_0, 0), (self.usrp_sink, 0))
 
     def closeEvent(self, event):
         self.settings.setValue("geometry", self.saveGeometry())
@@ -61,14 +80,14 @@ class Sinusoid(gr.top_block):
     def set_samp_rate(self, samp_rate):
         self.samp_rate=samp_rate
         self.analog_sig_source_x_0.set_sampling_freq(self.samp_rate)
-        self.iio_pluto_sink_0.set_params(self.freq, self.samp_rate, self.bandwidth, self.gain, '', True)
+        self.usrp_sink.set_samp_rate(self.samp_rate)
 
     def get_gain(self):
         return self.gain
 
     def set_gain(self, gain):
         self.gain=gain
-        self.iio_pluto_sink_0.set_params(self.freq, self.samp_rate, self.bandwidth, self.gain, '', True)
+        self.usrp_sink.set_gain(self.gain, 0)
 
     def get_freq(self):
         return self.freq
@@ -76,7 +95,7 @@ class Sinusoid(gr.top_block):
     def set_freq(self, freq):
         self.freq=freq
         self.analog_sig_source_x_0.set_frequency(self.freq)
-        self.iio_pluto_sink_0.set_params(self.freq, self.samp_rate, self.bandwidth, self.gain, '', True)
+        self.usrp_sink.set_center_freq(self.freq, 0)
 
     def get_buffer_size(self):
         return self.buffer_size
@@ -89,7 +108,7 @@ class Sinusoid(gr.top_block):
 
     def set_bandwidth(self, bandwidth):
         self.bandwidth=bandwidth
-        self.iio_pluto_sink_0.set_params(self.freq, self.samp_rate, self.bandwidth, self.gain, '', True)
+        # self.iio_pluto_sink_0.set_params(self.freq, self.samp_rate, self.bandwidth, self.gain, '', True)
 
     def get_SDR_ID(self):
         return self.SDR_ID

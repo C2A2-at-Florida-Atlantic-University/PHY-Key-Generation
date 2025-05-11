@@ -9,17 +9,21 @@
 # Author: Jose Sanchez
 # GNU Radio version: 3.10.6.0
 
-from gnuradio import blocks
+from gnuradio import blocks, digital, gr, uhd
 import numpy
-from gnuradio import digital
-from gnuradio import gr
-import iio
 import math
 
 class MPSK(gr.top_block):
 
-    def __init__(self,samp_rate=1000000,sps=4,gain=0,freq=2400000000,
-        buffer_size=32768,bandwidth=20000000,SDR_ID="ip:192.168.2.1",M=2):
+    def __init__(self,
+                samp_rate=1000000,
+                sps=4,
+                gain=0,
+                freq=2400000000,
+                buffer_size=32768,
+                bandwidth=20000000,
+                SDR_ADDR="",
+                M=2):
         gr.top_block.__init__(self, "MPSK")
 
         ##################################################
@@ -34,7 +38,7 @@ class MPSK(gr.top_block):
         self.buffer_size = buffer_size
         self.bitsPerSymbol = bps = int(math.log(M,2))
         self.bandwidth = bandwidth
-        self.SDR_ID = SDR_ID
+        self.SDR_ADDR = SDR_ADDR
         if M == 2:
             self.ConstObj = digital.constellation_bpsk().base()
         elif M == 4:
@@ -46,7 +50,23 @@ class MPSK(gr.top_block):
         # Blocks
         ##################################################
 
-        self.iio_pluto_sink_0=iio.pluto_sink(SDR_ID, freq, samp_rate, bandwidth, buffer_size, True, gain, '', True)
+        # self.iio_pluto_sink_0=iio.pluto_sink(SDR_ID, freq, samp_rate, bandwidth, buffer_size, True, gain, '', True)
+        self.usrp_sink = uhd.usrp_sink(
+            # device address string: blank => first USRP found
+            ",".join((self.SDR_ADDR, "")),
+            # stream args: one channel of complex floats
+            uhd.stream_args(
+                cpu_format="fc32",
+                args="",
+                channels=[0],
+            ),
+            ""  # XML or args string (unused here)
+        )
+        self.usrp_sink.set_samp_rate(self.samp_rate)
+        self.usrp_sink.set_center_freq(self.freq, 0)
+        self.usrp_sink.set_gain(self.gain, 0)
+        # choose TX port on B200-series / X300-series
+        self.usrp_sink.set_antenna("TX/RX", 0)
         self.digital_constellation_modulator_0=digital.generic_mod(
             constellation=self.ConstObj,
             differential=True,
@@ -64,7 +84,7 @@ class MPSK(gr.top_block):
         ##################################################
         self.connect((self.analog_random_source_x_0_0, 0), (self.blocks_repack_bits_bb_0_0, 0))
         self.connect((self.blocks_repack_bits_bb_0_0, 0), (self.digital_constellation_modulator_0, 0))
-        self.connect((self.digital_constellation_modulator_0, 0), (self.iio_pluto_sink_0, 0))
+        self.connect((self.digital_constellation_modulator_0, 0), (self.usrp_sink, 0))
 
 
     def get_M(self):
@@ -85,21 +105,21 @@ class MPSK(gr.top_block):
 
     def set_samp_rate(self, samp_rate):
         self.samp_rate = samp_rate
-        self.iio_pluto_sink_0.set_params(self.freq, self.samp_rate, self.bandwidth, self.gain, '', True)
+        self.usrp_sink.set_samp_rate(self.samp_rate)
 
     def get_gain(self):
         return self.gain
 
     def set_gain(self, gain):
         self.gain = gain
-        self.iio_pluto_sink_0.set_params(self.freq, self.samp_rate, self.bandwidth, self.gain, '', True)
+        self.usrp_sink.set_gain(self.gain, 0)
 
     def get_freq(self):
         return self.freq
 
     def set_freq(self, freq):
         self.freq = freq
-        self.iio_pluto_sink_0.set_params(self.freq, self.samp_rate, self.bandwidth, self.gain, '', True)
+        self.usrp_sink.set_center_freq(self.freq, 0)
 
     def get_excess_bw(self):
         return self.excess_bw
@@ -125,7 +145,7 @@ class MPSK(gr.top_block):
 
     def set_bandwidth(self, bandwidth):
         self.bandwidth = bandwidth
-        self.iio_pluto_sink_0.set_params(self.freq, self.samp_rate, self.bandwidth, self.gain, '', True)
+        # self.iio_pluto_sink_0.set_params(self.freq, self.samp_rate, self.bandwidth, self.gain, '', True)
 
     def get_SDR_ID(self):
         return self.SDR_ID
@@ -138,9 +158,6 @@ class MPSK(gr.top_block):
 
     def set_ConstObj(self, ConstObj):
         self.ConstObj = ConstObj
-
-
-
 
 def main(top_block_cls=MPSK):
     tb = top_block_cls()

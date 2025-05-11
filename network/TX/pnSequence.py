@@ -9,16 +9,20 @@
 # GNU Radio version: 3.8.5.0
 # Ref: https://github.com/wineslab/cast/blob/main/radio_api/gnuradio_gui/tx.py
 
-from gnuradio import blocks
-from gnuradio import gr
+from gnuradio import blocks, gr, uhd
 import sys
 import signal
-import iio
 
 class pnSequence(gr.top_block):
 
-    def __init__(self,samp_rate=1000000,gain=0,freq=2400000000,
-        buffer_size=32768,bandwidth=20000000,SDR_ID="ip:192.168.2.1",sequence="glfsr"):
+    def __init__(self,
+                samp_rate=1000000,
+                gain=0,
+                freq=2400000000,
+                buffer_size=32768,
+                bandwidth=20000000,
+                SDR_ADDR="",
+                sequence="glfsr"):
         gr.top_block.__init__(self, "PN Sequence TX")
 
         ##################################################
@@ -29,7 +33,7 @@ class pnSequence(gr.top_block):
         self.freq = freq
         self.buffer_size = buffer_size
         self.bandwidth = bandwidth
-        self.SDR_ID = SDR_ID
+        self.SDR_ADDR = SDR_ADDR
         self.sequence = sequence
         ### See https://ece.northeastern.edu/wineslab/papers/villa2022wintech.pdf for sequences ###
         self.sequences = {"ls2":(1,1,-1,1,1,1,1,-1,1,1,-1,1,-1,-1,-1,1,1,1,-1,1,1,1,1,-1,-1,-1,1,-1,1,1,1,-1,1,1,-1,1,1,1,1,-1,1,1,-1,1,-1,-1,-1,1,-1,-1,1,-1,-1,-1,-1,1,1,1,-1,1,-1,-1,-1,1,1,1,-1,1,1,1,1,-1,1,1,-1,1,-1,-1,-1,1,1,1,-1,1,1,1,1,-1,-1,-1,1,-1,1,1,1,-1,-1,-1,1,-1,-1,-1,-1,1,-1,-1,1,-1,1,1,1,-1,1,1,-1,1,1,1,1,-1,-1,-1,1,-1,1,1,1,-1,-1,-1,1,-1,-1,-1,-1,1,-1,-1,1,-1,1,1,1,-1,-1,-1,1,-1,-1,-1,-1,1,1,1,-1,1,-1,-1,-1,1,-1,-1,1,-1,-1,-1,-1,1,-1,-1,1,-1,1,1,1,-1,1,1,-1,1,1,1,1,-1,-1,-1,1,-1,1,1,1,-1,1,1,-1,1,1,1,1,-1,1,1,-1,1,-1,-1,-1,1,1,1,-1,1,1,1,1,-1,-1,-1,1,-1,1,1,1,-1,-1,-1,1,-1,-1,-1,-1,1,-1,-1,1,-1,1,1,1,-1,1,1,-1,1,1,1,1,-1,-1,-1,1,-1,1,1,1,-1),
@@ -44,7 +48,23 @@ class pnSequence(gr.top_block):
         # Blocks
         ##################################################
 
-        self.iio_pluto_sink_0=iio.pluto_sink(SDR_ID, freq, samp_rate, bandwidth, buffer_size, True, gain, '', True)
+        # self.iio_pluto_sink_0=iio.pluto_sink(SDR_ID, freq, samp_rate, bandwidth, buffer_size, True, gain, '', True)
+        self.usrp_sink = uhd.usrp_sink(
+            # device address string: blank => first USRP found
+            ",".join((self.SDR_ADDR, "")),
+            # stream args: one channel of complex floats
+            uhd.stream_args(
+                cpu_format="fc32",
+                args="",
+                channels=[0],
+            ),
+            ""  # XML or args string (unused here)
+        )
+        self.usrp_sink.set_samp_rate(self.samp_rate)
+        self.usrp_sink.set_center_freq(self.freq, 0)
+        self.usrp_sink.set_gain(self.gain, 0)
+        # choose TX port on B200-series / X300-series
+        self.usrp_sink.set_antenna("TX/RX", 0)
         self.blocks_vector_source_x_1 = blocks.vector_source_f(self.sequences[self.sequence], True, 1, [])
         self.blocks_null_source_1 = blocks.null_source(gr.sizeof_float*1)
         self.blocks_float_to_complex_0 = blocks.float_to_complex(1)
@@ -52,7 +72,7 @@ class pnSequence(gr.top_block):
         ##################################################
         # Connections
         ##################################################
-        self.connect((self.blocks_float_to_complex_0, 0), (self.iio_pluto_sink_0, 0))
+        self.connect((self.blocks_float_to_complex_0, 0), (self.usrp_sink, 0))
         self.connect((self.blocks_null_source_1, 0), (self.blocks_float_to_complex_0, 1))
         self.connect((self.blocks_vector_source_x_1, 0), (self.blocks_float_to_complex_0, 0))
 
@@ -61,7 +81,7 @@ class pnSequence(gr.top_block):
 
     def set_samp_rate(self, samp_rate):
         self.samp_rate = samp_rate
-        self.iio_pluto_sink_0.set_params(self.freq, self.samp_rate, self.bandwidth, self.gain, '', True)
+        self.usrp_sink.set_samp_rate(self.samp_rate)
 
     def get_available_sequences(self):
         return [sequence for sequence in self.sequences]
@@ -99,14 +119,14 @@ class pnSequence(gr.top_block):
 
     def set_gain(self, gain):
         self.gain = gain
-        self.iio_pluto_sink_0.set_params(self.freq, self.samp_rate, self.bandwidth, self.gain, '', True)
+        self.usrp_sink.set_gain(self.gain, 0)
     
     def get_freq(self):
         return self.freq
 
     def set_freq(self, freq):
         self.freq = freq
-        self.iio_pluto_sink_0.set_params(self.freq, self.samp_rate, self.bandwidth, self.gain, '', True)
+        self.usrp_sink.set_center_freq(self.freq, 0)
 
     def get_buffer_size(self):
         return self.buffer_size
@@ -119,7 +139,7 @@ class pnSequence(gr.top_block):
 
     def set_bandwidth(self, bandwidth):
         self.bandwidth = bandwidth
-        self.iio_pluto_sink_0.set_params(self.freq, self.samp_rate, self.bandwidth, self.gain, '', True)
+        # self.iio_pluto_sink_0.set_params(self.freq, self.samp_rate, self.bandwidth, self.gain, '', True)
 
     def get_SDR_ID(self):
         return self.SDR_ID

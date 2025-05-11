@@ -7,13 +7,13 @@ from RX.pkt_rcv_gr38 import packetReceive
 from RX.sinusoid import Sinusoid
 import time
 class Receiver():
-    def __init__(self,gain,samp_rate,freq,bandwidth=20000000,buffer_size=0x800,SDR_ID="ip:192.168.2.1",UDP_port=40868,UDP_IP="127.0.0.1"):
+    def __init__(self,gain,samp_rate,freq,bandwidth=20000000,buffer_size=0x800,SDR_ADDR="",UDP_port=40868,UDP_IP="127.0.0.1"):
         self.gain = gain
         self.samp_rate = samp_rate
         self.freq = freq
         self.bandwidth = bandwidth
         self.buffer_size =buffer_size
-        self.SDR_ID = SDR_ID
+        self.SDR_ADDR = SDR_ADDR
         self.UDP_port=UDP_port
         self.UDP_IP=UDP_IP
         self.sock = self.set_UDP_socket()
@@ -25,7 +25,7 @@ class Receiver():
         print("Frequency: "+str(self.freq))
         print("Bandwidth: "+str(self.bandwidth))
         print("Buffer Size: "+str(self.buffer_size))
-        print("SDR ID: "+str(self.SDR_ID))
+        print("SDR ID: "+str(self.SDR_ADDR))
         print("UDP Port: "+str(self.UDP_port))
         print("UDP IP: "+str(self.UDP_IP))
 
@@ -51,19 +51,40 @@ class Receiver():
         
     def set_rx_data(self):
         sps = 2 #symbols per sample
-        self.rx=packetReceive(samp_rate=self.samp_rate,sps=sps,gain=self.gain,freq=self.freq,
-                        buffer_size=self.buffer_size,bandwidth=self.bandwidth,
-                        SDR_ID=self.SDR_ID,UDP_port=self.UDP_port)
+        self.rx=packetReceive(
+            samp_rate=self.samp_rate,
+            sps=sps,
+            gain=self.gain,
+            freq=self.freq,
+            buffer_size=self.buffer_size,
+            bandwidth=self.bandwidth,
+            SDR_ADDR=self.SDR_ADDR,
+            UDP_port=self.UDP_port
+        )
         
     def set_rx_MPSK(self,M):
-        self.rx=MPSK(samp_rate=self.samp_rate,sps=4,gain=self.gain,freq=self.freq,
-                            buffer_size=self.buffer_size,bandwidth=self.bandwidth,
-                            SDR_ID=self.SDR_ID,UDP_port=self.UDP_port,M=M)
+        self.rx=MPSK(
+            samp_rate=self.samp_rate,
+            sps=4,
+            gain=self.gain,
+            freq=self.freq,
+            buffer_size=self.buffer_size,
+            bandwidth=self.bandwidth,
+            SDR_ADDR=self.SDR_ADDR,
+            UDP_port=self.UDP_port,
+            M=M
+        )
         
     def set_rx_IQ(self):
-        self.rx=Sinusoid(samp_rate=self.samp_rate,gain=self.gain,freq=self.freq,
-                            buffer_size=self.buffer_size,bandwidth=self.bandwidth,
-                            SDR_ID=self.SDR_ID,UDP_port=self.UDP_port)
+        self.rx=Sinusoid(
+            samp_rate=self.samp_rate,
+            gain=self.gain,
+            freq=self.freq,
+            buffer_size=self.buffer_size,
+            bandwidth=self.bandwidth,
+            SDR_ADDR=self.SDR_ADDR,
+            UDP_port=self.UDP_port
+        )
         
     #Set UDP_port=40860 for retrieving IQ
     def set_UDP_socket(self):
@@ -131,12 +152,17 @@ def testReceiver():
 
     samp_rate=600e3
     gain=60
-    freq=2.4e9
+    freq=3.550e9
 
     print("Radio Setup Parameters")
-    rx = Receiver(gain,samp_rate,freq,
-        bandwidth=20000000,buffer_size=8192,
-        SDR_ID="ip:192.168.2.1",UDP_port=40868,
+    rx = Receiver(
+        gain,
+        samp_rate,
+        freq,
+        bandwidth=20000000,
+        buffer_size=8192,
+        SDR_ADDR="",
+        UDP_port=40868,
         UDP_IP="127.0.0.1")
     
     rxType = input("Receiver Type [IQ, Data, Code]:")

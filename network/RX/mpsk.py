@@ -9,17 +9,22 @@
 # Author: Jose Sanchez
 # GNU Radio version: 3.10.6.0
 
-from gnuradio import digital
-from gnuradio import gr
+from gnuradio import digital, gr, blocks, uhd
 from gnuradio.filter import firdes
-import iio
-from gnuradio import blocks
 import math
 
 class MPSK(gr.top_block):
         
-    def __init__(self,samp_rate=1000000,sps = 4,gain=10,freq=2400000000,buffer_size=32768,
-                bandwidth=20000000,SDR_ID="ip:192.168.2.1",UDP_port=40860,M=2):
+    def __init__(self,
+                samp_rate=1000000,
+                sps = 4,
+                gain=10,
+                freq=2400000000,
+                buffer_size=32768,
+                bandwidth=20000000,
+                SDR_ADDR="",
+                UDP_port=40860,
+                M=2):
 
         gr.top_block.__init__(self, "PSK_RX")
 
@@ -35,7 +40,7 @@ class MPSK(gr.top_block):
         self.freq = freq
         self.buffer_size = buffer_size
         self.bandwidth = bandwidth
-        self.SDR_ID = SDR_ID
+        self.SDR_ADDR = SDR_ADDR
         self.UDP_port = UDP_port
         self.M = M
 
@@ -43,9 +48,26 @@ class MPSK(gr.top_block):
         # Blocks
         ##################################################
 
-        self.blocks_udp_sink_1=blocks.udp_sink(gr.sizeof_gr_complex*1, '127.0.0.1', UDP_port, buffer_size, True)
-        self.iio_pluto_source_0=iio.pluto_source(self.SDR_ID, self.freq, self.samp_rate, self.bandwidth, 
-                                                self.buffer_size, True, True, True, 'manual', self.gain, '', True)
+        self.udp_sink = blocks.udp_sink(
+            gr.sizeof_gr_complex, "127.0.0.1", self.UDP_port,
+            self.buffer_size, True
+        )
+        
+        # self.iio_pluto_source_0=iio.pluto_source(self.SDR_ID, self.freq, self.samp_rate, self.bandwidth, 
+        #                                         self.buffer_size, True, True, True, 'manual', self.gain, '', True)
+        self.usrp_source = uhd.usrp_source(
+            ",".join((self.SDR_ADDR, "")),
+            uhd.stream_args(
+                cpu_format="fc32",
+                args="",
+                channels=[0],
+            )
+        )
+        self.usrp_source.set_samp_rate(self.samp_rate)
+        self.usrp_source.set_center_freq(self.freq, 0)
+        self.usrp_source.set_gain(self.gain, 0)
+        self.usrp_source.set_antenna("RX2", 0)
+        
         self.digital_symbol_sync_xx_0_0 = digital.symbol_sync_cc(
             digital.TED_SIGNAL_TIMES_SLOPE_ML,
             sps,
@@ -66,7 +88,7 @@ class MPSK(gr.top_block):
         ##################################################
         self.connect((self.digital_costas_loop_cc_0_0, 0), (self.blocks_udp_sink_1, 0))
         self.connect((self.digital_symbol_sync_xx_0_0, 0), (self.digital_costas_loop_cc_0_0, 0))
-        self.connect((self.iio_pluto_source_0, 0), (self.digital_symbol_sync_xx_0_0, 0))
+        self.connect((self.usrp_source, 0), (self.digital_symbol_sync_xx_0_0, 0))
 
 
     def get_sps(self):
@@ -88,7 +110,7 @@ class MPSK(gr.top_block):
 
     def set_samp_rate(self, samp_rate):
         self.samp_rate = samp_rate
-        self.iio_pluto_source_0.set_params(self.freq, self.samp_rate, self.bandwidth, True, True, True, 'manual', self.gain, '', True)
+        self.usrp_src.set_samp_rate(self.samp_rate)
 
     def get_rrc_taps(self):
         return self.rrc_taps
@@ -109,14 +131,14 @@ class MPSK(gr.top_block):
 
     def set_gain(self, gain):
         self.gain = gain
-        self.iio_pluto_source_0.set_params(self.freq, self.samp_rate, self.bandwidth, True, True, True, 'manual', self.gain, '', True)
+        self.usrp_src.set_gain(self.gain, 0)
 
     def get_freq(self):
         return self.freq
 
     def set_freq(self, freq):
         self.freq = freq
-        self.iio_pluto_source_0.set_params(self.freq, self.samp_rate, self.bandwidth, True, True, True, 'manual', self.gain, '', True)
+        self.usrp_src.set_center_freq(self.freq, 0)
 
     def get_buffer_size(self):
         return self.buffer_size
@@ -129,14 +151,7 @@ class MPSK(gr.top_block):
 
     def set_bandwidth(self, bandwidth):
         self.bandwidth = bandwidth
-        self.iio_pluto_source_0.set_params(self.freq, self.samp_rate, self.bandwidth, True, True, True, 'manual', self.gain, '', True)
-
-
-    def get_SDR_ID(self):
-        return self.SDR_ID
-
-    def set_SDR_ID(self, SDR_ID):
-        self.SDR_ID = SDR_ID
+        # self.iio_pluto_source_0.set_params(self.freq, self.samp_rate, self.bandwidth, True, True, True, 'manual', self.gain, '', True)
 
     def get_M(self):
         return self.M

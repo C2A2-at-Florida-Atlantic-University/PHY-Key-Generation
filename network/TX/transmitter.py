@@ -9,13 +9,19 @@ from TX.pnSequence import pnSequence
 from TX.FileSource import FileSource
 
 class Transmitter():
-    def __init__(self,gain,samp_rate,freq,bandwidth=20000000,buffer_size=0x800,SDR_ID="ip:192.168.2.1"):
+    def __init__(self,
+                gain,
+                samp_rate,
+                freq=3.550e9,
+                bandwidth=20000000,
+                buffer_size=0x800,
+                SDR_ADDR=""):
         self.gain = gain
         self.samp_rate = samp_rate
         self.freq = freq
         self.bandwidth = bandwidth
         self.buffer_size = buffer_size
-        self.SDR_ID = SDR_ID
+        self.SDR_ADDR = SDR_ADDR
         self.tx = None
         self.type = "None"
         self.set_tx_data("default")
@@ -25,7 +31,7 @@ class Transmitter():
         print("Frequency: "+str(self.freq))
         print("Bandwidth: "+str(self.bandwidth))
         print("Buffer Size: "+str(self.buffer_size))
-        print("SDR ID: "+str(self.SDR_ID))
+        print("SDR ADDR: "+str(self.SDR_ADDR))
         
     def setFreq(self,freq):
         self.freq = freq
@@ -64,42 +70,73 @@ class Transmitter():
             self.type = "data"
             self.tx=packetTransmit(input=values,input_len=length,samp_rate=self.samp_rate,
                                 sps=sps,gain=self.gain,freq=self.freq,buffer_size=self.buffer_size,
-                                bandwidth=self.bandwidth,SDR_ID=self.SDR_ID)
+                                bandwidth=self.bandwidth,SDR_ADDR=self.SDR_ADDR)
         else:
             print("TX data already set, setting message")
             del self.tx
             self.tx=packetTransmit(input=values,input_len=length,samp_rate=self.samp_rate,
                                 sps=sps,gain=self.gain,freq=self.freq,buffer_size=self.buffer_size,
-                                bandwidth=self.bandwidth,SDR_ID=self.SDR_ID)
+                                bandwidth=self.bandwidth,SDR_ADDR=self.SDR_ADDR)
 
     def setData(self,data):
         json_string=json.dumps(data)
         length, values=self.str_to_length_and_decimals(json_string)
         sps=2 
         del self.tx
-        self.tx=packetTransmit(input=values,input_len=length,samp_rate=self.samp_rate,
-                                sps=sps,gain=self.gain,freq=self.freq,buffer_size=self.buffer_size,
-                                bandwidth=self.bandwidth,SDR_ID=self.SDR_ID)
+        self.tx=packetTransmit(
+            input=values,
+            input_len=length,
+            samp_rate=self.samp_rate,
+            sps=sps,
+            gain=self.gain,
+            freq=self.freq,
+            buffer_size=self.buffer_size,
+            bandwidth=self.bandwidth,
+            SDR_ADDR=self.SDR_ADDR
+        )
         
     def set_tx_M_PSK(self,M):
-        self.tx = MPSK(samp_rate=self.samp_rate,sps=4,gain=self.gain,freq=self.freq
-                                ,buffer_size=self.buffer_size,bandwidth=self.bandwidth
-                                ,SDR_ID=self.SDR_ID,M=M)
+        self.tx = MPSK(
+            samp_rate=self.samp_rate,
+            sps=4,
+            gain=self.gain,
+            freq=self.freq,
+            buffer_size=self.buffer_size,
+            bandwidth=self.bandwidth,
+            SDR_ADDR=self.SDR_ADDR,
+            M=M
+        )
 
     def set_tx_sinusoid(self):
-        self.tx=Sinusoid(samp_rate=self.samp_rate,gain=self.gain,freq=self.freq
-                                ,buffer_size=self.buffer_size,bandwidth=self.bandwidth
-                                ,SDR_ID=self.SDR_ID)
+        self.tx=Sinusoid(
+            samp_rate=self.samp_rate,
+            gain=self.gain,
+            freq=self.freq,
+            buffer_size=self.buffer_size,
+            bandwidth=self.bandwidth,
+            SDR_ADDR=self.SDR_ADDR)
         
     def set_tx_pnSequence(self,sequence="glfsr"):
-        self.tx=pnSequence(samp_rate=self.samp_rate,gain=self.gain,freq=self.freq
-                                ,buffer_size=self.buffer_size,bandwidth=self.bandwidth
-                                ,SDR_ID=self.SDR_ID,sequence=sequence)
+        self.tx=pnSequence(
+            samp_rate=self.samp_rate,
+            gain=self.gain,
+            freq=self.freq,
+            buffer_size=self.buffer_size,
+            bandwidth=self.bandwidth,
+            SDR_ADDR=self.SDR_ADDR,
+            sequence=sequence
+        )
     
     def set_tx_fileSource(self,filename="'/home/siwn/siwn-node/network/Matlab/BPSK.dat"):
-        self.tx=FileSource(samp_rate=self.samp_rate,gain=self.gain,freq=self.freq,
-                        buffer_size=self.buffer_size,bandwidth=self.bandwidth,
-                        SDR_ID=self.SDR_ID,filename=filename)
+        self.tx=FileSource(
+            samp_rate=self.samp_rate,
+            gain=self.gain,
+            freq=self.freq,
+            buffer_size=self.buffer_size,
+            bandwidth=self.bandwidth,
+            SDR_ADDR=self.SDR_ADDR,
+            filename=filename
+        )
     
     def start(self):
         self.tx.start()
@@ -122,9 +159,9 @@ def create_data_packet(data):
 def TestTransmitter():
     samp_rate=600e3
     gain=10
-    freq=2.4e9
+    freq=3.550e9
     transmitter = Transmitter(gain,samp_rate,freq,
-        bandwidth=20000000,buffer_size=8192,SDR_ID="ip:192.168.2.1")
+        bandwidth=20000000,buffer_size=8192,SDR_ADDR="")
     txType = input("Transmitter Type [Sinusoid, Data, Code]:")
     if txType == "Data":
         print("Writing input")
@@ -151,13 +188,13 @@ def TestTxSinusoid():
     print("Setting up parameters")
     samp_rate=600e3
     gain=0
-    freq=2.4e9
+    freq=3.550e9
     buffer_size=8192
     bandwidth=20000000
-    SDR_ID="ip:192.168.2.1"
+    SDR_ADDR=""
     print("Setting transmitter")
     tx = Sinusoid(samp_rate=samp_rate,gain=gain,freq=freq,
-        buffer_size=buffer_size,bandwidth=bandwidth,SDR_ID=SDR_ID)
+        buffer_size=buffer_size,bandwidth=bandwidth,SDR_ADDR=SDR_ADDR)
     print("Transmitter Start")
     tx.start()
     t = 15

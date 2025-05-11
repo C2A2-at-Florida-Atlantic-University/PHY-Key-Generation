@@ -10,16 +10,19 @@
 # Description: packet receive (for GNURadio 3.8)
 # GNU Radio version: v3.8.5.0-6-g57bd109d
 
-from gnuradio import blocks
-from gnuradio import digital
-from gnuradio import filter
-from gnuradio import gr
-import iio
+from gnuradio import blocks, digital, filter, gr, uhd
 
 class packetReceive(gr.top_block):
 
-    def __init__(self,samp_rate=600e3,sps = 2,gain=60,freq=2.4e9,buffer_size=32768,
-                bandwidth=20000000,SDR_ID="ip:192.168.2.1",UDP_port=40860):
+    def __init__(self,
+                samp_rate=600e3,
+                sps = 2,
+                gain=60,
+                freq=3.550e9,
+                buffer_size=32768,
+                bandwidth=20000000,
+                SDR_ADDR="",
+                UDP_port=40860):
         gr.top_block.__init__(self, "packetReceive")
 
         ##################################################
@@ -36,20 +39,40 @@ class packetReceive(gr.top_block):
         self.freq=freq
         self.excess_bw=0.35
         self.buffer_size=buffer_size
-        self.bpsk=digital.constellation_bpsk().base()
         self.bandwidth=bandwidth
-        self.SDR_ID=SDR_ID
+        self.SDR_ADDR    = SDR_ADDR
         self.UDP_port=UDP_port
+        self.bpsk=digital.constellation_bpsk().base()
 
         ##################################################
         # Blocks
         ##################################################
-        self.mmse_resampler_xx_0=filter.mmse_resampler_cc(0, ((self.usrp_rate/self.samp_rate)*self.rs_ratio))
-        self.iio_pluto_source_0=iio.pluto_source(self.SDR_ID, self.freq, self.samp_rate, self.bandwidth, 
-                                                self.buffer_size, True, True, True, 'manual', self.gain, '', True)
-        self.digital_symbol_sync_xx_0=digital.symbol_sync_cc(digital.TED_MUELLER_AND_MULLER,self.sps,self.phase_bw,
-                                                            1.0,1.0,1.5,1,digital.constellation_bpsk().base(),
-                                                            digital.IR_MMSE_8TAP,128,[])
+        self.mmse_resampler_xx_0=filter.mmse_resampler_cc(
+            0, 
+            ((self.usrp_rate/self.samp_rate)*self.rs_ratio)
+        )
+        # self.iio_pluto_source_0=iio.pluto_source(self.SDR_ID, self.freq, self.samp_rate, self.bandwidth, 
+        #                                         self.buffer_size, True, True, True, 'manual', self.gain, '', True)
+        self.usrp_source = uhd.usrp_source(
+            ",".join((self.SDR_ADDR, "")),
+            uhd.stream_args(
+                cpu_format="fc32",
+                args="",
+                channels=[0],
+            ),
+        )
+        self.usrp_src.set_samp_rate(self.samp_rate)
+        self.usrp_src.set_center_freq(self.freq, 0)
+        self.usrp_src.set_gain(self.gain, 0)
+        self.usrp_src.set_antenna('RX2', 0)
+        
+        self.digital_symbol_sync_xx_0=digital.symbol_sync_cc(
+            digital.TED_MUELLER_AND_MULLER,
+            self.sps,self.phase_bw,
+            1.0,1.0,1.5,1,
+            digital.constellation_bpsk().base(),
+            digital.IR_MMSE_8TAP,128,[]
+        )
         self.digital_map_bb_0=digital.map_bb([0,1])
         self.digital_lms_dd_equalizer_cc_0=digital.lms_dd_equalizer_cc(15, 0.000001, 1, self.bpsk)
         self.digital_diff_decoder_bb_0=digital.diff_decoder_bb(self.order)
@@ -79,7 +102,7 @@ class packetReceive(gr.top_block):
         self.connect((self.digital_lms_dd_equalizer_cc_0, 0), (self.digital_costas_loop_cc_0, 0))
         self.connect((self.digital_map_bb_0, 0), (self.digital_correlate_access_code_xx_ts_0, 0))
         self.connect((self.digital_symbol_sync_xx_0, 0), (self.digital_lms_dd_equalizer_cc_0, 0))
-        self.connect((self.iio_pluto_source_0, 0), (self.mmse_resampler_xx_0, 0))
+        self.connect((self.usrp_source, 0), (self.mmse_resampler_xx_0, 0))
         self.connect((self.mmse_resampler_xx_0, 0), (self.blocks_throttle_0, 0))
 
 
@@ -112,7 +135,7 @@ class packetReceive(gr.top_block):
     def set_samp_rate(self, samp_rate):
         self.samp_rate=samp_rate
         self.blocks_throttle_0.set_sample_rate(self.samp_rate)
-        self.iio_pluto_source_0.set_params(self.freq, self.samp_rate, self.bandwidth, True, True, True, 'manual', self.gain, '', True)
+        self.usrp_src.set_samp_rate(self.samp_rate)
         self.mmse_resampler_xx_0.set_resamp_ratio(((self.usrp_rate/self.samp_rate)*self.rs_ratio))
 
     def get_rs_ratio(self):
@@ -141,14 +164,14 @@ class packetReceive(gr.top_block):
 
     def set_gain(self, gain):
         self.gain=gain
-        self.iio_pluto_source_0.set_params(self.freq, self.samp_rate, self.bandwidth, True, True, True, 'manual', self.gain, '', True)
+        self.usrp_src.set_gain(self.gain, 0)
 
     def get_freq(self):
         return self.freq
 
     def set_freq(self, freq):
         self.freq=freq
-        self.iio_pluto_source_0.set_params(self.freq, self.samp_rate, self.bandwidth, True, True, True, 'manual', self.gain, '', True)
+        self.usrp_src.set_center_freq(self.freq, 0)
 
     def get_excess_bw(self):
         return self.excess_bw
@@ -173,13 +196,7 @@ class packetReceive(gr.top_block):
 
     def set_bandwidth(self, bandwidth):
         self.bandwidth=bandwidth
-        self.iio_pluto_source_0.set_params(self.freq, self.samp_rate, self.bandwidth, True, True, True, 'manual', self.gain, '', True)
-
-    def get_SDR_ID(self):
-        return self.SDR_ID
-
-    def set_SDR_ID(self, SDR_ID):
-        self.SDR_ID=SDR_ID
+        # self.iio_pluto_source_0.set_params(self.freq, self.samp_rate, self.bandwidth, True, True, True, 'manual', self.gain, '', True)
 
 def main(top_block_cls=packetReceive):
 

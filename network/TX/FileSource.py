@@ -9,18 +9,21 @@
 # Author: Jose Sanchez
 # GNU Radio version: 3.8.5.0
 
-from gnuradio import blocks
+from gnuradio import blocks, gr, uhd
 import pmt
-from gnuradio import gr
 import sys
 import signal
-import iio
 
 class FileSource(gr.top_block):
 
-    def __init__(self,samp_rate=1000000,gain=0,freq=2400000000,
-        buffer_size=0x800,bandwidth=20000000,SDR_ID="ip:192.168.2.1",
-        filename="/home/siwn/siwn-node/network/Matlab/BPSK.dat"):
+    def __init__(self,
+                samp_rate=1000000,
+                gain=0,
+                freq=2400000000,
+                buffer_size=0x800,
+                bandwidth=20000000,
+                SDR_ADDR="",
+                filename="/users/jasv22/PowderKeyGen/network/Matlab/BPSK.dat"):
         gr.top_block.__init__(self, "File Source TX")
 
         ##################################################
@@ -31,35 +34,50 @@ class FileSource(gr.top_block):
         self.freq = freq
         self.buffer_size = buffer_size
         self.bandwidth = bandwidth
-        self.SDR_ID = SDR_ID
+        self.SDR_ADDR = SDR_ADDR
         self.filename = filename
 
         ##################################################
         # Blocks
         ##################################################
 
-        self.iio_pluto_sink_0 = iio.pluto_sink(self.SDR_ID, self.freq, self.samp_rate, self.bandwidth, self.buffer_size, True, self.gain, '', True)
+        self.usrp_sink = uhd.usrp_sink(
+            # device address string: blank => first USRP found
+            ",".join((self.SDR_ADDR, "")),
+            # stream args: one channel of complex floats
+            uhd.stream_args(
+                cpu_format="fc32",
+                args="",
+                channels=[0],
+            ),
+            ""  # XML or args string (unused here)
+        )
+        self.usrp_sink.set_samp_rate(self.samp_rate)
+        self.usrp_sink.set_center_freq(self.freq, 0)
+        self.usrp_sink.set_gain(self.gain, 0)
+        # choose TX port on B200-series / X300-series
+        self.usrp_sink.set_antenna("TX/RX", 0)
         self.blocks_file_source_0 = blocks.file_source(gr.sizeof_gr_complex*1, self.filename, True, 0, 0)
         self.blocks_file_source_0.set_begin_tag(pmt.PMT_NIL)
 
         ##################################################
         # Connections
         ##################################################
-        self.connect((self.blocks_file_source_0, 0), (self.iio_pluto_sink_0, 0))
+        self.connect((self.blocks_file_source_0, 0), (self.usrp_sink, 0))
 
     def get_samp_rate(self):
         return self.samp_rate
 
     def set_samp_rate(self, samp_rate):
         self.samp_rate = samp_rate
-        self.iio_pluto_sink_0.set_params(self.freq, self.samp_rate, self.bandwidth, self.gain, '', True)
+        self.usrp_sink.set_samp_rate(self.samp_rate)
 
     def get_gain(self):
         return self.gain
 
     def set_gain(self, gain):
         self.gain = gain
-        self.iio_pluto_sink_0.set_params(self.freq, self.samp_rate, self.bandwidth, self.gain, '', True)
+        self.usrp_sink.set_gain(self.gain, 0)
 
     def get_filename(self):
         return self.gain
@@ -73,7 +91,7 @@ class FileSource(gr.top_block):
 
     def set_freq(self, freq):
         self.freq = freq
-        self.iio_pluto_sink_0.set_params(self.freq, self.samp_rate, self.bandwidth, self.gain, '', True)
+        self.usrp_sink.set_center_freq(self.freq, 0)
 
     def get_buffer_size(self):
         return self.buffer_size
@@ -86,7 +104,7 @@ class FileSource(gr.top_block):
 
     def set_bandwidth(self, bandwidth):
         self.bandwidth = bandwidth
-        self.iio_pluto_sink_0.set_params(self.freq, self.samp_rate, self.bandwidth, self.gain, '', True)
+        # self.iio_pluto_sink_0.set_params(self.freq, self.samp_rate, self.bandwidth, self.gain, '', True)
 
     def get_SDR_ID(self):
         return self.SDR_ID
