@@ -97,7 +97,10 @@ def plotTimeDomain(I,Q,samples=-1,id=0):
     plt.grid(True)
     plt.axhline(0, color='black',linewidth=0.5)
     plt.axvline(0, color='black',linewidth=0.5)
-    plt.show()
+    # plt.show()
+    # Show for 0.5 seconds
+    plt.pause(0.5)
+    plt.clf()  # Clear the figure for the next plot
 
 def setTXNode(params,type,nodeID,metadata = {"pnSequence":"glfsr"}):
     print("type:",type)
@@ -137,6 +140,7 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
     Eve = nodes[2]
     numberOfSamples = 8192
     setRXNode(params,Eve)
+    generatePlots = True
     while i<packages*2+1:
         print(i)
         if i%2 == 0:
@@ -145,6 +149,7 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
             time.sleep(timeSleep)
             
             real1, imaginary1 = RecordNodeData(Alice, samples=numberOfSamples)
+            
             IQ_N1 = np.concatenate((imaginary1[0:numberOfSamples], real1[0:numberOfSamples]), axis=None)
             IQ_Samples = np.concatenate((IQ_Samples,[IQ_N1]), axis=0)
             labels.append(channel_Labels[0])
@@ -152,11 +157,16 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
             ids.append(id)
             
             real2, imaginary2 = RecordNodeData(Eve, samples=numberOfSamples)
+            
             IQ_N3_1 = np.concatenate((imaginary2[0:numberOfSamples], real2[0:numberOfSamples]), axis=None)
             IQ_Samples = np.concatenate((IQ_Samples,[IQ_N3_1]), axis=0)
             labels.append(channel_Labels[1])  
             instance.append(2)   
             ids.append(id)
+            
+            if(generatePlots):
+                plotTimeDomain(real1, imaginary1, samples=numberOfSamples, id=Alice)
+                plotTimeDomain(real2, imaginary2, samples=numberOfSamples, id=Eve)
             
             # plot_spectrogram("Spectrogram Bob TX & Alice RX",real1[0:numberOfSamples],imaginary1[0:numberOfSamples])
             # plot_waveform("Waveform Bob TX & Alice RX",real1[0:numberOfSamples],imaginary1[0:numberOfSamples])
@@ -192,6 +202,10 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
             # plot_spectrogram("Spectrogram Alice TX & Eve RX",real2[0:numberOfSamples],imaginary2[0:numberOfSamples])
             # plot_waveform("Waveform Alice TX & Eve RX",real2[0:numberOfSamples],imaginary2[0:numberOfSamples])
             stopTXNode(Alice)
+            
+            if(generatePlots):
+                plotTimeDomain(real1, imaginary1, samples=numberOfSamples, id=Bob)
+                plotTimeDomain(real2, imaginary2, samples=numberOfSamples, id=Eve)
             time.sleep(timeSleep)
         
         i = i + 1
@@ -203,7 +217,8 @@ def create_dataset(filename, IQ_Samples, labels, instance, ids):
         dset = data_file.create_dataset("instance", data=[instance])
         dset = data_file.create_dataset("data", data=IQ_Samples)
         dset = data_file.create_dataset("label", data=[labels])
-        
+    # Save dataset to file
+    print("Dataset saved to", filename)
 NodeIPs = {
     1:"ota-nuc1.emulab.net",
     2:"ota-nuc2.emulab.net",
@@ -248,7 +263,7 @@ paramsRx = {
 }
 params = {"tx":paramsTx,"rx":paramsRx}
 
-packages = 2
+packages = 100
 type = "sinusoid" #pnSequence, MPSK, sinusoid
 
 nodes = [3,4,5]

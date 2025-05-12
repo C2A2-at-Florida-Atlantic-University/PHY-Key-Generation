@@ -138,7 +138,8 @@ if run_for == 'Train Channel Fingerprinting':
     folder = "/home/Research/Models/ChannelFingerprint/"
     #file_path = folder+'Dataset_Channels_sinusoid_dev_1287_freq_2.4e9_sr_1e6_gain_0_60_4800_S.hdf5'
     #file_path = "/Users/josea/Research/Datasets/Train/Dataset_Channels_Pn_Sequence_1710241173.hdf5"
-    file_path = "/home/Research/Datasets/ChannelFingerprint/Train/Dataset_Channels_Pn_Sequence_1710241173.hdf5"
+    # file_path = "/home/Research/Datasets/ChannelFingerprint/Train/Dataset_Channels_Pn_Sequence_1710241173.hdf5"
+    file_path = "/Users/josea/Workspaces/PowderKeyGen/Dataset_Channels_sinusoid_100_345_1746944796.hdf5"
     # Train an RFF extractor.
     # Save the trained model.
     feature_extractor = train_channel_feature_extractor(file_path = file_path, folder_models = folder, epochs=1000)
