@@ -21,6 +21,8 @@ if __name__ == '__main__':
             print("Warning: failed to XInitThreads()")
 
 from gnuradio import blocks, digital, filter, gr, uhd
+from gnuradio.pdu import pdu_to_tagged_stream
+
 import pmt
 import sys
 # from packet_format_gr38 import packet_format
@@ -93,7 +95,7 @@ class packetTransmit(gr.top_block):
             log=False)
         self.blocks_throttle_0=blocks.throttle(gr.sizeof_gr_complex*1, samp_rate,True)
         # self.blocks_pdu_to_tagged_stream_0=blocks.pdu_to_tagged_stream(blocks.byte_t, 'packet_len')
-        self.blocks_pdu_to_tagged_stream_0 = blocks.pdu_to_tagged_stream(gr.sizeof_char, 'packet_len')
+        self.blocks_pdu_to_tagged_stream_0 = pdu_to_tagged_stream(gr.sizeof_char, 'packet_len')
         
         self.blocks_multiply_const_vxx_0=blocks.multiply_const_cc(0.5)
         self.blocks_message_strobe_0=blocks.message_strobe(pmt.cons(pmt.PMT_NIL,pmt.init_u8vector(input_len ,input)), 100)
