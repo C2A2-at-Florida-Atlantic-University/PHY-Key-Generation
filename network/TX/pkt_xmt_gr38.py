@@ -95,8 +95,8 @@ class packetTransmit(gr.top_block):
             log=False)
         self.blocks_throttle_0=blocks.throttle(gr.sizeof_gr_complex*1, samp_rate,True)
         # self.blocks_pdu_to_tagged_stream_0=blocks.pdu_to_tagged_stream(blocks.byte_t, 'packet_len')
-        self.blocks_pdu_to_tagged_stream_0 = pdu_to_tagged_stream(1, 'packet_len')
-        
+        self.blocks_pdu_to_tagged_stream_0 = pdu_to_tagged_stream(gr.sizeof_char, 'packet_len')
+        print("PDU→TS itemsize =", self.blocks_pdu_to_tagged_stream_0.itemsize())
         self.blocks_multiply_const_vxx_0=blocks.multiply_const_cc(0.5)
         self.blocks_message_strobe_0=blocks.message_strobe(pmt.cons(pmt.PMT_NIL,pmt.init_u8vector(input_len ,input)), 100)
         ##################################################
