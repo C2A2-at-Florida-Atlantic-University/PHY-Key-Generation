@@ -97,8 +97,8 @@ class packetTransmit(gr.top_block):
         # self.blocks_pdu_to_tagged_stream_0=blocks.pdu_to_tagged_stream(blocks.byte_t, 'packet_len')
         self.blocks_pdu_to_tagged_stream_0 = pdu_to_tagged_stream(gr.types.byte_t, 'packet_len')
         # print("PDU→TS itemsize =", self.blocks_pdu_to_tagged_stream_0.itemsize())
-        import inspect
-        print("PDU→TS itemsize =", inspect.getsource(self.blocks_pdu_to_tagged_stream_0))
+        # import inspect
+        # print("PDU→TS itemsize =", inspect.getsource(self.blocks_pdu_to_tagged_stream_0))
         self.blocks_multiply_const_vxx_0=blocks.multiply_const_cc(0.5)
         self.blocks_message_strobe_0=blocks.message_strobe(pmt.cons(pmt.PMT_NIL,pmt.init_u8vector(input_len ,input)), 100)
         ##################################################
