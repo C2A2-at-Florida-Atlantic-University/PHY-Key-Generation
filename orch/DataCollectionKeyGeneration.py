@@ -129,10 +129,14 @@ def setupNodesPingPong(RX1,RX2,TX,params,type,metadata = {"pnSequence":"glfsr"})
     
 def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels = [1,2,3],metadata = {"pnSequence":"glfsr"}):
     i = 1
-    IQ_Samples = np.array([])
-    labels = []
+    # IQ_Samples = np.array([])
+    I = []
+    Q = []
+    channel = []
     instance = []
     ids = []
+    tx = []
+    rx = []
     id = 0
     timeSleep = 0.15
     Alice = nodes[0]
@@ -149,20 +153,26 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
             time.sleep(timeSleep)
             
             real1, imaginary1 = RecordNodeData(Alice, samples=numberOfSamples)
-            
-            IQ_N1 = np.concatenate((imaginary1[0:numberOfSamples], real1[0:numberOfSamples]), axis=None)
-            IQ_Samples = np.concatenate((IQ_Samples,[IQ_N1]), axis=0)
-            labels.append(channel_Labels[0])
+            # IQ_N1 = np.concatenate((imaginary1[0:numberOfSamples], real1[0:numberOfSamples]), axis=None)
+            # IQ_Samples = np.concatenate((IQ_Samples,[IQ_N1]), axis=0)
+            I.append(real1[0:numberOfSamples])
+            Q.append(imaginary1[0:numberOfSamples])
+            channel.append(channel_Labels[0])
             instance.append(1)
             ids.append(id)
+            tx.append(Bob)
+            rx.append(Alice)
             
             real2, imaginary2 = RecordNodeData(Eve, samples=numberOfSamples)
-            
-            IQ_N3_1 = np.concatenate((imaginary2[0:numberOfSamples], real2[0:numberOfSamples]), axis=None)
-            IQ_Samples = np.concatenate((IQ_Samples,[IQ_N3_1]), axis=0)
-            labels.append(channel_Labels[1])  
+            # IQ_N3_1 = np.concatenate((imaginary2[0:numberOfSamples], real2[0:numberOfSamples]), axis=None)
+            # IQ_Samples = np.concatenate((IQ_Samples,[IQ_N3_1]), axis=0)
+            I.append(real2[0:numberOfSamples])
+            Q.append(imaginary2[0:numberOfSamples])
+            channel.append(channel_Labels[1])  
             instance.append(2)   
             ids.append(id)
+            tx.append(Bob)
+            rx.append(Eve)
             
             if(generatePlots):
                 plotTimeDomain(real1, imaginary1, samples=numberOfSamples, id=Alice)
@@ -182,25 +192,29 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
             time.sleep(timeSleep)
             
             real1, imaginary1 = RecordNodeData(Bob, samples=numberOfSamples)
-            IQ_N2 = np.concatenate((imaginary1[0:numberOfSamples], real1[0:numberOfSamples]), axis=None)
-            if(i == 1):
-                IQ_Samples = np.array([IQ_N2])
-            else:
-                IQ_Samples = np.concatenate((IQ_Samples,[IQ_N2]), axis=0)
-            labels.append(channel_Labels[0])
+            # IQ_N2 = np.concatenate((imaginary1[0:numberOfSamples], real1[0:numberOfSamples]), axis=None)
+            # if(i == 1):
+            #     IQ_Samples = np.array([IQ_N2])
+            # else:
+            #     IQ_Samples = np.concatenate((IQ_Samples,[IQ_N2]), axis=0)
+            I.append(real1[0:numberOfSamples])
+            Q.append(imaginary1[0:numberOfSamples])
+            channel.append(channel_Labels[0])
             instance.append(3)
             ids.append(id)
+            tx.append(Alice)
+            rx.append(Bob)
 
             real2, imaginary2 = RecordNodeData(Eve, samples=numberOfSamples)
-            IQ_N3_2 = np.concatenate((imaginary2[0:numberOfSamples], real2[0:numberOfSamples]), axis=None)
-            IQ_Samples = np.concatenate((IQ_Samples,[IQ_N3_2]), axis=0)
-            labels.append(channel_Labels[2])
+            # IQ_N3_2 = np.concatenate((imaginary2[0:numberOfSamples], real2[0:numberOfSamples]), axis=None)
+            # IQ_Samples = np.concatenate((IQ_Samples,[IQ_N3_2]), axis=0)
+            I.append(real2[0:numberOfSamples])
+            Q.append(imaginary2[0:numberOfSamples])
+            channel.append(channel_Labels[2])
             instance.append(4)
             ids.append(id)
-            # plot_spectrogram("Spectrogram Alice TX & Bob RX",real1[0:numberOfSamples],imaginary1[0:numberOfSamples])
-            # plot_waveform("Waveform Alice TX & Bob RX",real1[0:numberOfSamples],imaginary1[0:numberOfSamples])
-            # plot_spectrogram("Spectrogram Alice TX & Eve RX",real2[0:numberOfSamples],imaginary2[0:numberOfSamples])
-            # plot_waveform("Waveform Alice TX & Eve RX",real2[0:numberOfSamples],imaginary2[0:numberOfSamples])
+            tx.append(Alice)
+            rx.append(Eve)
             stopTXNode(Alice)
             
             if(generatePlots):
@@ -209,117 +223,145 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
             time.sleep(timeSleep)
         
         i = i + 1
-    return IQ_Samples, labels, instance, ids
+    return I, Q, channel, instance, ids, tx, rx
 
-def create_dataset(filename, IQ_Samples, labels, instance, ids):
+def create_dataset(filename, I, Q, channel, instance, ids, tx, rx):
     with h5py.File(filename, "w") as data_file:
+        dset = data_file.create_dataset("I", data=I)
+        dset = data_file.create_dataset("Q", data=Q)
         dset = data_file.create_dataset("ids", data=[ids])
         dset = data_file.create_dataset("instance", data=[instance])
-        dset = data_file.create_dataset("data", data=IQ_Samples)
-        dset = data_file.create_dataset("label", data=[labels])
+        dset = data_file.create_dataset("channel", data=[channel])
+        dset = data_file.create_dataset("tx", data=[tx])
+        dset = data_file.create_dataset("rx", data=[rx])
     # Save dataset to file
     print("Dataset saved to", filename)
-NodeIPs = {
-    1:"ota-nuc1.emulab.net",
-    2:"ota-nuc2.emulab.net",
-    3:"ota-nuc3.emulab.net",
-    4:"ota-nuc4.emulab.net",
-    5:"pc761.emulab.net",
-    6:"pc775.emulab.net",
-    7:"pc761.emulab.net",
-    8:"pc761.emulab.net"
-}
 
-NodeGains = {
-    1:{"tx":80,"rx":70},
-    2:{"tx":80,"rx":70},
-    3:{"tx":80,"rx":70},
-    4:{"tx":80,"rx":70},
-    5:{"tx":31,"rx":31},
-    6:{"tx":31,"rx":31},
-    7:{"tx":31,"rx":31},
-    8:{"tx":31,"rx":31}
-}
+def loadOTALabConfig():
+    # OTA Lab node IPs
+    NodeIPs = {
+        1:"ota-nuc1.emulab.net",
+        2:"ota-nuc2.emulab.net",
+        3:"ota-nuc3.emulab.net",
+        4:"ota-nuc4.emulab.net",
+        5:"pc761.emulab.net",
+        6:"pc775.emulab.net",
+        7:"pc761.emulab.net",
+        8:"pc761.emulab.net"
+    }
+    NodeGains = {
+        1:{"tx":80,"rx":70},
+        2:{"tx":80,"rx":70},
+        3:{"tx":80,"rx":70},
+        4:{"tx":80,"rx":70},
+        5:{"tx":31,"rx":31},
+        6:{"tx":31,"rx":31},
+        7:{"tx":31,"rx":31},
+        8:{"tx":31,"rx":31}
+    }
+    return NodeIPs, NodeGains
 
-port = {'orch':'5001','radio':'5002','ai':'5003'}
+if __name__ == "__main__":
 
-examples= 500
-samplesPerExample = 1024
-samplesPerPacket = 8192
-freq = 3.55e9
-samp_rate = 1e6
+    NodeIPs, NodeGains = loadOTALabConfig()
 
-paramsTx = {
-    "x":"tx",
-    "freq":freq,
-    "SamplingRate":samp_rate,
-    "gain":NodeGains
-}
-paramsRx = {
-    "x":"rx",
-    "freq":paramsTx["freq"],
-    "SamplingRate":int(paramsTx["SamplingRate"]*2),
-    "gain":NodeGains
-}
-params = {"tx":paramsTx,"rx":paramsRx}
+    port = {'orch':'5001','radio':'5002','ai':'5003'}
 
-packages = 100
-type = "sinusoid" #pnSequence, MPSK, sinusoid
+    examples= 500
+    samplesPerExample = 1024
+    samplesPerPacket = 8192
+    freq = 3.55e9
+    samp_rate = 1e6
 
-nodes = [3,4,5]
+    paramsTx = {
+        "x":"tx",
+        "freq":freq,
+        "SamplingRate":samp_rate,
+        "gain":NodeGains
+    }
+    paramsRx = {
+        "x":"rx",
+        "freq":paramsTx["freq"],
+        "SamplingRate":int(paramsTx["SamplingRate"]*2),
+        "gain":NodeGains
+    }
+    params = {"tx":paramsTx,"rx":paramsRx}
 
-IQ_Samples, labels, instance, ids = collect_data_ping_pong_3Nodes(params, nodes, packages, type)
+    packages = 100
+    type = "sinusoid" #pnSequence, MPSK, sinusoid
 
-IQ_Samples_arr = np.array(IQ_Samples)
-labels_arr = np.array(labels)
-instance_arr = np.array(instance)
-ids_arr = np.array(ids)
+    nodes = [3,4,5]
 
-print("IQ_Samples shape:",IQ_Samples_arr.shape)
-print("labels shape:",labels_arr.shape)
-print("instance shape:",instance_arr.shape)
-print("ids shape:",ids_arr.shape)   
-ts = int(time.time())
-create_dataset("Dataset_Channels_"+type+"_"+str(packages)+"_"+"".join(str(node) for node in nodes)+"_"+str(ts)+".hdf5", IQ_Samples_arr, labels_arr, instance_arr, ids_arr)
+    I, Q, channel, instance, ids, tx, rx = collect_data_ping_pong_3Nodes(
+                                        params, 
+                                        nodes, 
+                                        packages, 
+                                        type
+                                    )
+
+    I_arr = np.array(I)
+    Q_arr = np.array(Q)
+    channel_arr = np.array(channel)
+    instance_arr = np.array(instance)
+    ids_arr = np.array(ids)
+    tx_arr = np.array(tx)
+    rx_arr = np.array(rx)
+
+    print("I shape:",I_arr.shape)
+    print("Q shape:",Q_arr.shape)
+    print("channel shape:",channel_arr.shape)
+    print("instance shape:",instance_arr.shape)
+    print("ids shape:",ids_arr.shape)   
+    ts = int(time.time())
+    create_dataset(
+        "Dataset_Channels_"+type+"_"+str(packages)+"_"+"".join(str(node) for node in nodes)+"_"+str(ts)+".hdf5",
+        I_arr,
+        Q_arr,
+        channel_arr, 
+        instance_arr, 
+        ids_arr,
+        tx_arr,
+        rx_arr
+    )
 
 
 
 
-# IQ_Samples, labels, instance, ids = collect_data_ping_pong_3Nodes(params, [nodes[2],nodes[0],nodes[1]], packages, type)
+    # IQ_Samples, labels, instance, ids = collect_data_ping_pong_3Nodes(params, [nodes[2],nodes[0],nodes[1]], packages, type)
 
-# IQ_Samples_arr = np.concatenate((IQ_Samples_arr,np.array(IQ_Samples)),axis=0)
-# labels_arr = np.concatenate((labels_arr,np.array(labels)),axis=0)
-# instance_arr = np.concatenate((instance_arr,np.array(instance)),axis=0)
-# ids_arr = np.concatenate((ids_arr,np.array(ids)),axis=0)
+    # IQ_Samples_arr = np.concatenate((IQ_Samples_arr,np.array(IQ_Samples)),axis=0)
+    # labels_arr = np.concatenate((labels_arr,np.array(labels)),axis=0)
+    # instance_arr = np.concatenate((instance_arr,np.array(instance)),axis=0)
+    # ids_arr = np.concatenate((ids_arr,np.array(ids)),axis=0)
 
-# IQ_Samples, labels, instance, ids = collect_data_ping_pong_3Nodes(params, [nodes[1],nodes[2],nodes[2]], packages, type)
+    # IQ_Samples, labels, instance, ids = collect_data_ping_pong_3Nodes(params, [nodes[1],nodes[2],nodes[2]], packages, type)
 
-# IQ_Samples_arr = np.concatenate((IQ_Samples_arr,np.array(IQ_Samples)),axis=0)
-# labels_arr = np.concatenate((labels_arr,np.array(labels)),axis=0)
-# instance_arr = np.concatenate((instance_arr,np.array(instance)),axis=0)
-# ids_arr = np.concatenate((ids_arr,np.array(ids)),axis=0)
+    # IQ_Samples_arr = np.concatenate((IQ_Samples_arr,np.array(IQ_Samples)),axis=0)
+    # labels_arr = np.concatenate((labels_arr,np.array(labels)),axis=0)
+    # instance_arr = np.concatenate((instance_arr,np.array(instance)),axis=0)
+    # ids_arr = np.concatenate((ids_arr,np.array(ids)),axis=0)
 
-# ###############
+    # ###############
 
-# nodes = [2,5,4]
+    # nodes = [2,5,4]
 
-# IQ_Samples, labels, instance, ids = collect_data_ping_pong_3Nodes(params, [nodes[0],nodes[1],nodes[2]], packages, type)
+    # IQ_Samples, labels, instance, ids = collect_data_ping_pong_3Nodes(params, [nodes[0],nodes[1],nodes[2]], packages, type)
 
-# IQ_Samples_arr = np.concatenate((IQ_Samples_arr,np.array(IQ_Samples)),axis=0)
-# labels_arr = np.concatenate((labels_arr,np.array(labels)),axis=0)
-# instance_arr = np.concatenate((instance_arr,np.array(instance)),axis=0)
-# ids_arr = np.concatenate((ids_arr,np.array(ids)),axis=0)
+    # IQ_Samples_arr = np.concatenate((IQ_Samples_arr,np.array(IQ_Samples)),axis=0)
+    # labels_arr = np.concatenate((labels_arr,np.array(labels)),axis=0)
+    # instance_arr = np.concatenate((instance_arr,np.array(instance)),axis=0)
+    # ids_arr = np.concatenate((ids_arr,np.array(ids)),axis=0)
 
-# IQ_Samples, labels, instance, ids = collect_data_ping_pong_3Nodes(params, [nodes[2],nodes[0],nodes[1]], packages, type)
+    # IQ_Samples, labels, instance, ids = collect_data_ping_pong_3Nodes(params, [nodes[2],nodes[0],nodes[1]], packages, type)
 
-# IQ_Samples_arr = np.concatenate((IQ_Samples_arr,np.array(IQ_Samples)),axis=0)
-# labels_arr = np.concatenate((labels_arr,np.array(labels)),axis=0)
-# instance_arr = np.concatenate((instance_arr,np.array(instance)),axis=0)
-# ids_arr = np.concatenate((ids_arr,np.array(ids)),axis=0)
+    # IQ_Samples_arr = np.concatenate((IQ_Samples_arr,np.array(IQ_Samples)),axis=0)
+    # labels_arr = np.concatenate((labels_arr,np.array(labels)),axis=0)
+    # instance_arr = np.concatenate((instance_arr,np.array(instance)),axis=0)
+    # ids_arr = np.concatenate((ids_arr,np.array(ids)),axis=0)
 
-# IQ_Samples, labels, instance, ids = collect_data_ping_pong_3Nodes(params, [nodes[1],nodes[2],nodes[2]], packages, type)
+    # IQ_Samples, labels, instance, ids = collect_data_ping_pong_3Nodes(params, [nodes[1],nodes[2],nodes[2]], packages, type)
 
-# IQ_Samples_arr = np.concatenate((IQ_Samples_arr,np.array(IQ_Samples)),axis=0)
-# labels_arr = np.concatenate((labels_arr,np.array(labels)),axis=0)
-# instance_arr = np.concatenate((instance_arr,np.array(instance)),axis=0)
-# ids_arr = np.concatenate((ids_arr,np.array(ids)),axis=0)
+    # IQ_Samples_arr = np.concatenate((IQ_Samples_arr,np.array(IQ_Samples)),axis=0)
+    # labels_arr = np.concatenate((labels_arr,np.array(labels)),axis=0)
+    # instance_arr = np.concatenate((instance_arr,np.array(instance)),axis=0)
+    # ids_arr = np.concatenate((ids_arr,np.array(ids)),axis=0)
