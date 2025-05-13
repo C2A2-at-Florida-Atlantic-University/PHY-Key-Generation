@@ -95,7 +95,7 @@ class packetTransmit(gr.top_block):
             log=False)
         self.blocks_throttle_0=blocks.throttle(gr.sizeof_gr_complex*1, samp_rate,True)
         # self.blocks_pdu_to_tagged_stream_0=blocks.pdu_to_tagged_stream(blocks.byte_t, 'packet_len')
-        self.blocks_pdu_to_tagged_stream_0 = pdu_to_tagged_stream(gr.sizeof_char, 'packet_len')
+        self.blocks_pdu_to_tagged_stream_0 = pdu_to_tagged_stream(gr.types.byte_t, 'packet_len')
         # print("PDU→TS itemsize =", self.blocks_pdu_to_tagged_stream_0.itemsize())
         import inspect
         print("PDU→TS itemsize =", inspect.getsource(self.blocks_pdu_to_tagged_stream_0))
