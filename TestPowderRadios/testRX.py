@@ -72,14 +72,14 @@ class testRX(gr.top_block, Qt.QWidget):
         ##################################################
         # Variables
         ##################################################
-        self.samp_rate = samp_rate = 32000
+        self.samp_rate = samp_rate = 300e3
         self.gain = gain = 31
-        self.freq = freq = 3555000000
+        self.freq = freq = 3.55e9
 
         ##################################################
         # Blocks
         ##################################################
-        self._gain_range = Range(0, 76, 1, 31, 200)
+        self._gain_range = Range(-31, 76, 1, gain, 200)
         self._gain_win = RangeWidget(self._gain_range, self.set_gain, 'gain', "counter_slider", float)
         self.top_grid_layout.addWidget(self._gain_win)
         self.uhd_usrp_source_0 = uhd.usrp_source(
@@ -94,6 +94,9 @@ class testRX(gr.top_block, Qt.QWidget):
         self.uhd_usrp_source_0.set_gain(gain, 0)
         self.uhd_usrp_source_0.set_antenna('RX2', 0)
         self.uhd_usrp_source_0.set_samp_rate(samp_rate)
+        self.uhd_usrp_source_0.set_gpio_attr("FP0", "CTRL", 0)
+        self.uhd_usrp_source_0.set_gpio_attr("FP0", "DDR",  0x10, 0x10, 0)
+        self.uhd_usrp_source_0.set_gpio_attr("FP0", "OUT",  0x10, 0x10, 0)
         # No synchronization enforced.
         self.qtgui_time_sink_x_0 = qtgui.time_sink_c(
             1024, #size
