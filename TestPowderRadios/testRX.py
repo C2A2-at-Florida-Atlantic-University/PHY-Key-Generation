@@ -74,12 +74,12 @@ class testRX(gr.top_block, Qt.QWidget):
         ##################################################
         self.samp_rate = samp_rate = 600e3
         self.gain = gain = 31
-        self.freq = freq = 3.555e9
+        self.freq = freq = 3555000000
 
         ##################################################
         # Blocks
         ##################################################
-        self._gain_range = Range(-31, 76, 1, gain, 200)
+        self._gain_range = Range(0, 76, 1, 31, 200)
         self._gain_win = RangeWidget(self._gain_range, self.set_gain, 'gain', "counter_slider", float)
         self.top_grid_layout.addWidget(self._gain_win)
         self.uhd_usrp_source_0 = uhd.usrp_source(
@@ -94,9 +94,6 @@ class testRX(gr.top_block, Qt.QWidget):
         self.uhd_usrp_source_0.set_gain(gain, 0)
         self.uhd_usrp_source_0.set_antenna('RX2', 0)
         self.uhd_usrp_source_0.set_samp_rate(samp_rate)
-        self.uhd_usrp_source_0.set_gpio_attr("FP0", "CTRL", 0)
-        self.uhd_usrp_source_0.set_gpio_attr("FP0", "DDR",  0x10, 0x10, 0)
-        self.uhd_usrp_source_0.set_gpio_attr("FP0", "OUT",  0x10, 0x10, 0)
         # No synchronization enforced.
         self.qtgui_time_sink_x_0 = qtgui.time_sink_c(
             1024, #size
@@ -151,7 +148,7 @@ class testRX(gr.top_block, Qt.QWidget):
         self.qtgui_freq_sink_x_0 = qtgui.freq_sink_c(
             1024, #size
             firdes.WIN_BLACKMAN_hARRIS, #wintype
-            0, #fc
+            freq, #fc
             samp_rate, #bw
             "", #name
             1
@@ -207,7 +204,7 @@ class testRX(gr.top_block, Qt.QWidget):
 
     def set_samp_rate(self, samp_rate):
         self.samp_rate = samp_rate
-        self.qtgui_freq_sink_x_0.set_frequency_range(0, self.samp_rate)
+        self.qtgui_freq_sink_x_0.set_frequency_range(self.freq, self.samp_rate)
         self.qtgui_time_sink_x_0.set_samp_rate(self.samp_rate)
         self.uhd_usrp_source_0.set_samp_rate(self.samp_rate)
 
@@ -223,6 +220,7 @@ class testRX(gr.top_block, Qt.QWidget):
 
     def set_freq(self, freq):
         self.freq = freq
+        self.qtgui_freq_sink_x_0.set_frequency_range(self.freq, self.samp_rate)
         self.uhd_usrp_source_0.set_center_freq(self.freq, 0)
 
 

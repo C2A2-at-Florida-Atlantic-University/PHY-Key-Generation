@@ -53,7 +53,7 @@ blocks:
     min_len: '200'
     orient: Qt.Horizontal
     rangeType: float
-    start: '0'
+    start: '-31'
     step: '1'
     stop: '76'
     value: '31'
@@ -74,7 +74,7 @@ blocks:
     min_len: '200'
     orient: Qt.Horizontal
     rangeType: float
-    start: '0'
+    start: '-31'
     step: '1'
     stop: '89'
     value: '31'

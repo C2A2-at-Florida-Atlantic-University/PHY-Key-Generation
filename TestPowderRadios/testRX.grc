@@ -69,7 +69,7 @@ blocks:
   id: variable
   parameters:
     comment: ''
-    value: '32000'
+    value: 600e3
   states:
     bus_sink: false
     bus_source: false
@@ -108,7 +108,7 @@ blocks:
     color9: '"dark green"'
     comment: ''
     ctrlpanel: 'False'
-    fc: '0'
+    fc: freq
     fftsize: '1024'
     freqhalf: 'True'
     grid: 'False'
@@ -154,7 +154,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [653, 259]
+    coordinate: [582, 271]
     rotation: 0
     state: true
 - name: qtgui_time_sink_x_0
@@ -251,7 +251,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [616, 115]
+    coordinate: [576, 140]
     rotation: 0
     state: true
 - name: uhd_usrp_source_0
@@ -622,7 +622,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [177, 209]
+    coordinate: [245, 161]
     rotation: 0
     state: true
 

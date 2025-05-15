@@ -1,6 +1,6 @@
 options:
   parameters:
-    author: ''
+    author: jasv22
     category: '[GRC Hier Blocks]'
     cmake_opt: ''
     comment: ''
@@ -10,7 +10,7 @@ options:
     gen_linking: dynamic
     generate_options: qt_gui
     hier_block_src_path: '.:'
-    id: test
+    id: testTX
     max_nouts: '0'
     output_language: python
     placement: (0,0)
@@ -62,14 +62,14 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [412, 10]
+    coordinate: [412, 9]
     rotation: 0
     state: true
 - name: samp_rate
   id: variable
   parameters:
     comment: ''
-    value: '32000'
+    value: 300e3
   states:
     bus_sink: false
     bus_source: false
@@ -82,7 +82,7 @@ blocks:
   parameters:
     affinity: ''
     alias: ''
-    amp: '1'
+    amp: '2'
     comment: ''
     freq: '1000'
     maxoutbuf: '0'
@@ -91,12 +91,12 @@ blocks:
     phase: '0'
     samp_rate: samp_rate
     type: complex
-    waveform: analog.GR_COS_WAVE
+    waveform: analog.GR_SIN_WAVE
   states:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [157, 165]
+    coordinate: [268, 165]
     rotation: 0
     state: true
 - name: uhd_usrp_sink_0
