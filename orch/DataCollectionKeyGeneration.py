@@ -261,9 +261,34 @@ def loadOTALabConfig():
     }
     return NodeIPs, NodeGains
 
+def loadOTADenseConfig():
+    # OTA Lab node IPs
+    NodeIPs = {
+        1:"cnode-moran.emulab.net",
+        2:"nuc2.moran.powderwireless.net",
+        3:"pc07-fort.emulab.net",
+        4:"ota-nuc4.emulab.net",
+        5:"pc761.emulab.net",
+        6:"pc775.emulab.net",
+        7:"pc761.emulab.net",
+        8:"pc761.emulab.net"
+    }
+    NodeGains = {
+        1:{"tx":85,"rx":75},
+        2:{"tx":85,"rx":75},
+        3:{"tx":31,"rx":31},
+        4:{"tx":31,"rx":31},
+        5:{"tx":31,"rx":31},
+        6:{"tx":31,"rx":31},
+        7:{"tx":31,"rx":31},
+        8:{"tx":31,"rx":31}
+    }
+    return NodeIPs, NodeGains
+
 if __name__ == "__main__":
 
-    NodeIPs, NodeGains = loadOTALabConfig()
+    # NodeIPs, NodeGains = loadOTALabConfig()
+    NodeIPs, NodeGains = loadOTADenseConfig()
 
     port = {'orch':'5001','radio':'5002','ai':'5003'}
 
@@ -287,10 +312,10 @@ if __name__ == "__main__":
     }
     params = {"tx":paramsTx,"rx":paramsRx}
 
-    packages = 100
+    packages = 5
     type = "sinusoid" #pnSequence, MPSK, sinusoid
 
-    nodes = [3,4,5]
+    nodes = [1,2,3]
 
     I, Q, channel, instance, ids, tx, rx = collect_data_ping_pong_3Nodes(
                                         params, 

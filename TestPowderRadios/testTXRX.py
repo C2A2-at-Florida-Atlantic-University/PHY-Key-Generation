@@ -99,6 +99,9 @@ class testTXRX(gr.top_block, Qt.QWidget):
         self.uhd_usrp_source_0.set_gain(gain_RX, 0)
         self.uhd_usrp_source_0.set_antenna('RX2', 0)
         self.uhd_usrp_source_0.set_samp_rate(samp_rate)
+        self.uhd_usrp_source_0.set_gpio_attr("FP0", "CTRL", 0)
+        self.uhd_usrp_source_0.set_gpio_attr("FP0", "DDR",  0x10, 0x10, 0)
+        self.uhd_usrp_source_0.set_gpio_attr("FP0", "OUT",  0x10, 0x10, 0)
         # No synchronization enforced.
         self.uhd_usrp_sink_0 = uhd.usrp_sink(
             ",".join(("", "")),
@@ -115,6 +118,8 @@ class testTXRX(gr.top_block, Qt.QWidget):
         self.uhd_usrp_sink_0.set_clock_rate(30.72e6, uhd.ALL_MBOARDS)
         self.uhd_usrp_sink_0.set_samp_rate(samp_rate)
         self.uhd_usrp_sink_0.set_time_unknown_pps(uhd.time_spec())
+        self.uhd_usrp_sink_0.set_gpio_attr("FP0", "DDR", 0x10, 0x10, 0)
+        self.uhd_usrp_sink_0.set_gpio_attr("FP0", "OUT", 0x10, 0x10, 0)
         self.qtgui_time_sink_x_0 = qtgui.time_sink_c(
             1024, #size
             samp_rate, #samp_rate
