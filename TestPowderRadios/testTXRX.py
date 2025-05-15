@@ -77,6 +77,7 @@ class testTXRX(gr.top_block, Qt.QWidget):
         self.gain_TX = gain_TX = 0 # Max gain for TX: 89 (b210), 31 (x310)
         self.gain_RX = gain_RX = 76 # Max gain for RX: 76 (b210), 31 (x310)
         self.freq = freq = 3.55e9
+        self.amplitude = 2
 
         ##################################################
         # Blocks
@@ -210,7 +211,7 @@ class testTXRX(gr.top_block, Qt.QWidget):
 
         self._qtgui_freq_sink_x_0_win = sip.wrapinstance(self.qtgui_freq_sink_x_0.pyqwidget(), Qt.QWidget)
         self.top_grid_layout.addWidget(self._qtgui_freq_sink_x_0_win)
-        self.analog_sig_source_x_0 = analog.sig_source_c(samp_rate, analog.GR_COS_WAVE, 1000, 1, 0, 0)
+        self.analog_sig_source_x_0 = analog.sig_source_c(samp_rate, analog.GR_COS_WAVE, 1000, self.amplitude, 0, 0)
 
 
 
