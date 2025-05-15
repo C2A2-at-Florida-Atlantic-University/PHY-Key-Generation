@@ -73,7 +73,7 @@ class testTXRX(gr.top_block, Qt.QWidget):
         ##################################################
         # Variables
         ##################################################
-        self.samp_rate = samp_rate = 600e3
+        self.samp_rate = samp_rate = 1e6
         self.gain_TX = gain_TX = 89
         self.gain_RX = gain_RX = 76
         self.freq = freq = 3.55e9
@@ -81,10 +81,10 @@ class testTXRX(gr.top_block, Qt.QWidget):
         ##################################################
         # Blocks
         ##################################################
-        self._gain_TX_range = Range(gain_TX, 89, 1, 31, 200)
+        self._gain_TX_range = Range(0, 89, 1, gain_TX, 200)
         self._gain_TX_win = RangeWidget(self._gain_TX_range, self.set_gain_TX, 'gain_TX', "counter_slider", float)
         self.top_grid_layout.addWidget(self._gain_TX_win)
-        self._gain_RX_range = Range(gain_RX, 76, 1, 31, 200)
+        self._gain_RX_range = Range(0, 76, 1, gain_RX, 200)
         self._gain_RX_win = RangeWidget(self._gain_RX_range, self.set_gain_RX, 'gain_RX', "counter_slider", float)
         self.top_grid_layout.addWidget(self._gain_RX_win)
         self.uhd_usrp_source_0 = uhd.usrp_source(
