@@ -78,7 +78,7 @@ class testTX(gr.top_block, Qt.QWidget):
         ##################################################
         # Blocks
         ##################################################
-        self._gain_range = Range(0, 89, 1, 31, 200)
+        self._gain_range = Range(0, 89, 1, gain, 200)
         self._gain_win = RangeWidget(self._gain_range, self.set_gain, 'gain', "counter_slider", float)
         self.top_grid_layout.addWidget(self._gain_win)
         self.uhd_usrp_sink_0 = uhd.usrp_sink(
@@ -96,6 +96,8 @@ class testTX(gr.top_block, Qt.QWidget):
         self.uhd_usrp_sink_0.set_clock_rate(30.72e6, uhd.ALL_MBOARDS)
         self.uhd_usrp_sink_0.set_samp_rate(samp_rate)
         self.uhd_usrp_sink_0.set_time_unknown_pps(uhd.time_spec())
+        self.uhd_usrp_sink_0.set_gpio_attr("FP0", "DDR", 0x10, 0x10, 0)
+        self.uhd_usrp_sink_0.set_gpio_attr("FP0", "OUT", 0x10, 0x10, 0)
         self.analog_sig_source_x_0 = analog.sig_source_c(samp_rate, analog.GR_SIN_WAVE, 1000, 2, 0, 0)
 
 
