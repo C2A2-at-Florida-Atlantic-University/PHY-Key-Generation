@@ -70,9 +70,9 @@ class testTX(gr.top_block, Qt.QWidget):
         ##################################################
         # Variables
         ##################################################
-        self.samp_rate = samp_rate = 32000
+        self.samp_rate = samp_rate = 300e3
         self.gain = gain = 31
-        self.freq = freq = 3.55e9
+        self.freq = freq = 3.555e9
 
         ##################################################
         # Blocks

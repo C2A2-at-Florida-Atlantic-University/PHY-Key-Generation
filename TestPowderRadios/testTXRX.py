@@ -76,7 +76,7 @@ class testTXRX(gr.top_block, Qt.QWidget):
         self.samp_rate = samp_rate = 650e3
         self.gain_TX = gain_TX = 0 # Max gain for TX: 89 (b210), 31 (x310)
         self.gain_RX = gain_RX = 76 # Max gain for RX: 76 (b210), 31 (x310)
-        self.freq = freq = 3.55e9
+        self.freq = freq = 3.555e9
         self.amplitude = 2
 
         ##################################################
