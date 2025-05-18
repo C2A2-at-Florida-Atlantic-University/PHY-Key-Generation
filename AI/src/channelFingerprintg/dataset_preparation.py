@@ -94,7 +94,7 @@ class LoadDatasetChannels():
         num_row = data.shape[0]
         num_col = data.shape[1] 
         data_complex = np.zeros([num_row,round(num_col/2)],dtype=np.complex64)
-     
+    
         data_complex = data[:,:round(num_col/2)].astype('complex64') + 1j*data[:,round(num_col/2):].astype('complex64')
         return data_complex
     

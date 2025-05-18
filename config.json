@@ -1,6 +1,6 @@
 {
     "node":{
-        "ip":"ota-nuc1.emulab.net",
+        "ip":"localhost",
         "id":0
     },
     "NET":{

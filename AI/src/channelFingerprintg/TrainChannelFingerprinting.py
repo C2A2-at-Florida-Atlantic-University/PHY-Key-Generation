@@ -4,17 +4,13 @@ import tensorflow as tf
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
 from tensorflow.keras.optimizers import RMSprop
 
-from dataset_preparation import ChannelSpectrogram, LoadDatasetChannels
+# from dataset_preparation import ChannelSpectrogram, LoadDatasetChannels
 from deep_learning_models import identity_loss, QuadrupletNet_Channel
+from DatasetHandler import DatasetHandler, ChannelSpectrogram
 
 import time
 
-def train_channel_feature_extractor(
-        #file_path = './dataset/Train/dataset_training_aug.h5', 
-        file_path = './LoRa_RFFI-main/dataset/Train/IQ_Samples_SDR_12345.h5',
-        folder_models = './models/',
-        epochs=1000
-                            ):
+def train_channel_feature_extractor(dataset_name, config_name, repo_name, epochs=1000):
     '''
     train_feature_extractor trains an RFF extractor using triplet loss.
     
@@ -32,10 +28,11 @@ def train_channel_feature_extractor(
         channel-independent spectrograms.
     '''
     
-    LoadDatasetObj = LoadDatasetChannels()
+    dataset_handler = DatasetHandler(dataset_name, config_name, repo_name)
+    dataset_handler.get_dataframe_Info()
     
     # Load preamble IQ samples and labels.
-    data,label = LoadDatasetObj.load_iq_samples(file_path)
+    data,label = dataset_handler.load_data()
     
     # Add additive Gaussian noise to the IQ samples.
     #data = awgn(data, snr_range)
@@ -121,7 +118,7 @@ def train_channel_feature_extractor(
 
     timestamp = time.time()
     
-    savedFile = folder_models+'QExtractor2_'+str(fft_len)+'_alpha'+str(alpha)+'_beta'+str(beta)+'_batch'+str(batch_size)+'_val'+str(validation_size)+'_RMS'+str(LearningRate)+'_DSsin2.4dev1278-'+str(data_length)+'_'+str(timestamp)+'.h5'
+    savedFile = 'QExtractor2_'+str(fft_len)+'_alpha'+str(alpha)+'_beta'+str(beta)+'_batch'+str(batch_size)+'_val'+str(validation_size)+'_RMS'+str(LearningRate)+'_DSsin2.4dev1278-'+str(data_length)+'_'+str(timestamp)+'.h5'
 
     feature_extractor.save(savedFile)
     
@@ -133,13 +130,9 @@ run_for = 'Train Channel Fingerprinting'
 
 if run_for == 'Train Channel Fingerprinting':
 
-    #folder = '/home/siwn/AI/'
-    #folder = "/Users/josea/Research/Models/"
-    folder = "/home/Research/Models/ChannelFingerprint/"
-    #file_path = folder+'Dataset_Channels_sinusoid_dev_1287_freq_2.4e9_sr_1e6_gain_0_60_4800_S.hdf5'
-    #file_path = "/Users/josea/Research/Datasets/Train/Dataset_Channels_Pn_Sequence_1710241173.hdf5"
-    # file_path = "/home/Research/Datasets/ChannelFingerprint/Train/Dataset_Channels_Pn_Sequence_1710241173.hdf5"
-    file_path = "/Users/josea/Workspaces/PowderKeyGen/Dataset_Channels_sinusoid_100_345_1746944796.hdf5"
+    dataset_name = "Key-Generation"
+    config_name = "Sinusoid-Powder-OTA-Dense" #"Sinusoid-Powder-OTA-Lab"
+    repo_name="CAAI-FAU"
     # Train an RFF extractor.
     # Save the trained model.
-    feature_extractor = train_channel_feature_extractor(file_path = file_path, folder_models = folder, epochs=1000)
+    feature_extractor = train_channel_feature_extractor(dataset_name, config_name, repo_name, epochs=1000)

@@ -137,6 +137,7 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
     ids = []
     tx = []
     rx = []
+    timestamp = []
     id = 0
     timeSleep = 0.15
     Alice = nodes[0]
@@ -162,6 +163,7 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
             ids.append(id)
             tx.append(Bob)
             rx.append(Alice)
+            timestamp.append(int(time.time()))
             
             real2, imaginary2 = RecordNodeData(Eve, samples=numberOfSamples)
             # IQ_N3_1 = np.concatenate((imaginary2[0:numberOfSamples], real2[0:numberOfSamples]), axis=None)
@@ -173,6 +175,7 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
             ids.append(id)
             tx.append(Bob)
             rx.append(Eve)
+            timestamp.append(int(time.time()))
             
             if(generatePlots):
                 plotTimeDomain(real1, imaginary1, samples=numberOfSamples, id=Alice)
@@ -204,17 +207,20 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
             ids.append(id)
             tx.append(Alice)
             rx.append(Bob)
+            timestamp.append(int(time.time()))
 
             real2, imaginary2 = RecordNodeData(Eve, samples=numberOfSamples)
             # IQ_N3_2 = np.concatenate((imaginary2[0:numberOfSamples], real2[0:numberOfSamples]), axis=None)
             # IQ_Samples = np.concatenate((IQ_Samples,[IQ_N3_2]), axis=0)
             I.append(real2[0:numberOfSamples])
             Q.append(imaginary2[0:numberOfSamples])
-            channel.append(channel_Labels[2])
+            channel.append(channel_Labels[2]) # Changed from "labels" to "channel"
             instance.append(4)
             ids.append(id)
             tx.append(Alice)
             rx.append(Eve)
+            timestamp.append(int(time.time()))
+
             stopTXNode(Alice)
             
             if(generatePlots):
@@ -223,9 +229,9 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
             time.sleep(timeSleep)
         
         i = i + 1
-    return I, Q, channel, instance, ids, tx, rx
+    return I, Q, channel, instance, ids, tx, rx, timestamp
 
-def create_dataset(filename, I, Q, channel, instance, ids, tx, rx):
+def create_dataset(filename, I, Q, channel, instance, ids, tx, rx, timestamp):
     with h5py.File(filename, "w") as data_file:
         dset = data_file.create_dataset("I", data=I)
         dset = data_file.create_dataset("Q", data=Q)
@@ -234,6 +240,7 @@ def create_dataset(filename, I, Q, channel, instance, ids, tx, rx):
         dset = data_file.create_dataset("channel", data=[channel])
         dset = data_file.create_dataset("tx", data=[tx])
         dset = data_file.create_dataset("rx", data=[rx])
+        dset = data_file.create_dataset("timestamp", data=[timestamp])
     # Save dataset to file
     print("Dataset saved to", filename)
 
@@ -265,8 +272,8 @@ def loadOTADenseConfig():
     # OTA Lab node IPs
     NodeIPs = {
         1:"cnode-moran.emulab.net",
-        2:"nuc2.moran.powderwireless.net",
-        3:"pc07-fort.emulab.net",
+        2:"cnode-ebc.emulab.net",
+        3:"localhost",
         4:"ota-nuc4.emulab.net",
         5:"pc761.emulab.net",
         6:"pc775.emulab.net",
@@ -274,9 +281,9 @@ def loadOTADenseConfig():
         8:"pc761.emulab.net"
     }
     NodeGains = {
-        1:{"tx":85,"rx":75},
-        2:{"tx":85,"rx":75},
-        3:{"tx":31,"rx":31},
+        1:{"tx":89,"rx":76},
+        2:{"tx":89,"rx":76},
+        3:{"tx":89,"rx":76},
         4:{"tx":31,"rx":31},
         5:{"tx":31,"rx":31},
         6:{"tx":31,"rx":31},
@@ -292,11 +299,9 @@ if __name__ == "__main__":
 
     port = {'orch':'5001','radio':'5002','ai':'5003'}
 
-    examples= 500
-    samplesPerExample = 1024
-    samplesPerPacket = 8192
-    freq = 3.55e9
-    samp_rate = 1e6
+    examples= 5
+    freq = 3.558e9
+    samp_rate = 600e3
 
     paramsTx = {
         "x":"tx",
@@ -312,15 +317,14 @@ if __name__ == "__main__":
     }
     params = {"tx":paramsTx,"rx":paramsRx}
 
-    packages = 5
     type = "sinusoid" #pnSequence, MPSK, sinusoid
 
     nodes = [1,2,3]
 
-    I, Q, channel, instance, ids, tx, rx = collect_data_ping_pong_3Nodes(
+    I, Q, channel, instance, ids, tx, rx, timestamp = collect_data_ping_pong_3Nodes(
                                         params, 
                                         nodes, 
-                                        packages, 
+                                        examples, 
                                         type
                                     )
 
@@ -331,6 +335,7 @@ if __name__ == "__main__":
     ids_arr = np.array(ids)
     tx_arr = np.array(tx)
     rx_arr = np.array(rx)
+    timestamp_arr = np.array(timestamp)
 
     print("I shape:",I_arr.shape)
     print("Q shape:",Q_arr.shape)
@@ -339,14 +344,15 @@ if __name__ == "__main__":
     print("ids shape:",ids_arr.shape)   
     ts = int(time.time())
     create_dataset(
-        "Dataset_Channels_"+type+"_"+str(packages)+"_"+"".join(str(node) for node in nodes)+"_"+str(ts)+".hdf5",
+        "Dataset_Channels_"+type+"_"+str(examples)+"_"+"".join(str(node) for node in nodes)+"_"+str(ts)+".hdf5",
         I_arr,
         Q_arr,
         channel_arr, 
         instance_arr, 
         ids_arr,
         tx_arr,
-        rx_arr
+        rx_arr,
+        timestamp_arr
     )
 
 

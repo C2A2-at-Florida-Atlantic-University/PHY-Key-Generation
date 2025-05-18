@@ -7,7 +7,7 @@
 # GNU Radio Python Flow Graph
 # Title: Not titled yet
 # Author: jasv22
-# GNU Radio version: 3.8.1.0
+# GNU Radio version: 3.8.5.0
 
 from distutils.version import StrictVersion
 
@@ -35,6 +35,7 @@ from gnuradio import eng_notation
 from gnuradio import uhd
 import time
 from gnuradio.qtgui import Range, RangeWidget
+
 from gnuradio import qtgui
 
 class testTXRX(gr.top_block, Qt.QWidget):
@@ -73,21 +74,20 @@ class testTXRX(gr.top_block, Qt.QWidget):
         ##################################################
         # Variables
         ##################################################
-        self.samp_rate = samp_rate = 650e3
-        self.gain_TX = gain_TX = 0 # Max gain for TX: 89 (b210), 31 (x310)
-        self.gain_RX = gain_RX = 76 # Max gain for RX: 76 (b210), 31 (x310)
-        self.freq = freq = 3.555e9
-        self.amplitude = 2
+        self.samp_rate = samp_rate = 32000
+        self.gain_TX = gain_TX = 31
+        self.gain_RX = gain_RX = 31
+        self.freq = freq = 3555000000
 
         ##################################################
         # Blocks
         ##################################################
-        self._gain_TX_range = Range(-31, 100, 1, gain_TX, 200)
+        self._gain_TX_range = Range(-31, 89, 1, 31, 200)
         self._gain_TX_win = RangeWidget(self._gain_TX_range, self.set_gain_TX, 'gain_TX', "counter_slider", float)
-        self.top_grid_layout.addWidget(self._gain_TX_win)
-        self._gain_RX_range = Range(-31, 100, 1, gain_RX, 200)
+        self.top_layout.addWidget(self._gain_TX_win)
+        self._gain_RX_range = Range(-31, 76, 1, 31, 200)
         self._gain_RX_win = RangeWidget(self._gain_RX_range, self.set_gain_RX, 'gain_RX', "counter_slider", float)
-        self.top_grid_layout.addWidget(self._gain_RX_win)
+        self.top_layout.addWidget(self._gain_RX_win)
         self.uhd_usrp_source_0 = uhd.usrp_source(
             ",".join(("", "")),
             uhd.stream_args(
@@ -100,12 +100,9 @@ class testTXRX(gr.top_block, Qt.QWidget):
         self.uhd_usrp_source_0.set_gain(gain_RX, 0)
         self.uhd_usrp_source_0.set_antenna('RX2', 0)
         self.uhd_usrp_source_0.set_samp_rate(samp_rate)
-        self.uhd_usrp_source_0.set_gpio_attr("FP0", "CTRL", 0)
-        self.uhd_usrp_source_0.set_gpio_attr("FP0", "DDR",  0x10, 0x10, 0)
-        self.uhd_usrp_source_0.set_gpio_attr("FP0", "OUT",  0x10, 0x10, 0)
         # No synchronization enforced.
         self.uhd_usrp_sink_0 = uhd.usrp_sink(
-            ",".join(("", "")),
+            ",".join(("", "", "master_clock_rate=30.72e6")),
             uhd.stream_args(
                 cpu_format="fc32",
                 args='',
@@ -119,8 +116,6 @@ class testTXRX(gr.top_block, Qt.QWidget):
         self.uhd_usrp_sink_0.set_clock_rate(30.72e6, uhd.ALL_MBOARDS)
         self.uhd_usrp_sink_0.set_samp_rate(samp_rate)
         self.uhd_usrp_sink_0.set_time_unknown_pps(uhd.time_spec())
-        self.uhd_usrp_sink_0.set_gpio_attr("FP0", "DDR", 0x10, 0x10, 0)
-        self.uhd_usrp_sink_0.set_gpio_attr("FP0", "OUT", 0x10, 0x10, 0)
         self.qtgui_time_sink_x_0 = qtgui.time_sink_c(
             1024, #size
             samp_rate, #samp_rate
@@ -170,7 +165,7 @@ class testTXRX(gr.top_block, Qt.QWidget):
             self.qtgui_time_sink_x_0.set_line_alpha(i, alphas[i])
 
         self._qtgui_time_sink_x_0_win = sip.wrapinstance(self.qtgui_time_sink_x_0.pyqwidget(), Qt.QWidget)
-        self.top_grid_layout.addWidget(self._qtgui_time_sink_x_0_win)
+        self.top_layout.addWidget(self._qtgui_time_sink_x_0_win)
         self.qtgui_freq_sink_x_0 = qtgui.freq_sink_c(
             1024, #size
             firdes.WIN_BLACKMAN_hARRIS, #wintype
@@ -210,9 +205,8 @@ class testTXRX(gr.top_block, Qt.QWidget):
             self.qtgui_freq_sink_x_0.set_line_alpha(i, alphas[i])
 
         self._qtgui_freq_sink_x_0_win = sip.wrapinstance(self.qtgui_freq_sink_x_0.pyqwidget(), Qt.QWidget)
-        self.top_grid_layout.addWidget(self._qtgui_freq_sink_x_0_win)
-        self.analog_sig_source_x_0 = analog.sig_source_c(samp_rate, analog.GR_COS_WAVE, 1000, self.amplitude, 0, 0)
-
+        self.top_layout.addWidget(self._qtgui_freq_sink_x_0_win)
+        self.analog_sig_source_x_0 = analog.sig_source_c(samp_rate, analog.GR_COS_WAVE, 1000, 1, 0, 0)
 
 
         ##################################################
@@ -221,6 +215,7 @@ class testTXRX(gr.top_block, Qt.QWidget):
         self.connect((self.analog_sig_source_x_0, 0), (self.uhd_usrp_sink_0, 0))
         self.connect((self.uhd_usrp_source_0, 0), (self.qtgui_freq_sink_x_0, 0))
         self.connect((self.uhd_usrp_source_0, 0), (self.qtgui_time_sink_x_0, 0))
+
 
     def closeEvent(self, event):
         self.settings = Qt.QSettings("GNU Radio", "testTXRX")
@@ -262,6 +257,8 @@ class testTXRX(gr.top_block, Qt.QWidget):
 
 
 
+
+
 def main(top_block_cls=testTXRX, options=None):
 
     if StrictVersion("4.5.0") <= StrictVersion(Qt.qVersion()) < StrictVersion("5.0.0"):
@@ -270,7 +267,9 @@ def main(top_block_cls=testTXRX, options=None):
     qapp = Qt.QApplication(sys.argv)
 
     tb = top_block_cls()
+
     tb.start()
+
     tb.show()
 
     def sig_handler(sig=None, frame=None):
@@ -286,9 +285,9 @@ def main(top_block_cls=testTXRX, options=None):
     def quitting():
         tb.stop()
         tb.wait()
+
     qapp.aboutToQuit.connect(quitting)
     qapp.exec_()
-
 
 if __name__ == '__main__':
     main()
