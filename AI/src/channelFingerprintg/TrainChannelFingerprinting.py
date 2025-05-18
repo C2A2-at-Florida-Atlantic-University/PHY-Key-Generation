@@ -1,10 +1,6 @@
 from sklearn.model_selection import train_test_split
-
-import tensorflow as tf
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
-from tensorflow.keras.optimizers import RMSprop
-
-# from dataset_preparation import ChannelSpectrogram, LoadDatasetChannels
+from tensorflow.keras.optimizers.legacy import RMSprop
 from deep_learning_models import identity_loss, QuadrupletNet_Channel
 from DatasetHandler import DatasetHandler, ChannelSpectrogram
 
@@ -50,7 +46,7 @@ def train_channel_feature_extractor(dataset_name, config_name, repo_name, epochs
     alpha = 0.5
     beta = 0
 
-    batch_size = 64
+    batch_size = 16 # 64
     patience = 20
 
     #NetObj =  TripletNet_Channel()
@@ -90,13 +86,13 @@ def train_channel_feature_extractor(dataset_name, config_name, repo_name, epochs
     
     # Create the trainining generator.
     train_generator = NetObj.create_generator_channel(batch_size, 
-                                                     data_train, 
-                                                     label_train)
+                                                        data_train, 
+                                                        label_train)
     
     # Create the validation generator.
     valid_generator = NetObj.create_generator_channel(batch_size, 
-                                                     data_valid, 
-                                                     label_valid)
+                                                        data_valid, 
+                                                        label_valid)
     
     # Use the RMSprop optimizer for training.
     LearningRate = 1e-3
@@ -107,14 +103,16 @@ def train_channel_feature_extractor(dataset_name, config_name, repo_name, epochs
         #metrics=['accuracy'],
         optimizer = opt)
 
+    print("Training data:", data_train.shape)
+    print("Validation data:", data_valid.shape)
     # Start training.
     history = net.fit(train_generator,
-                              steps_per_epoch = data_train.shape[0]//batch_size,
-                              epochs = epochs,
-                              validation_data = valid_generator,
-                              validation_steps = data_valid.shape[0]//batch_size,
-                              verbose=1, 
-                              callbacks = callbacks)
+                        steps_per_epoch = data_train.shape[0]//batch_size,
+                        epochs = epochs,
+                        validation_data = valid_generator,
+                        validation_steps = data_valid.shape[0]//batch_size,
+                        verbose=1, 
+                        callbacks = callbacks)
 
     timestamp = time.time()
     

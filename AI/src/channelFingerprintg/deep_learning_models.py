@@ -1,50 +1,38 @@
 import numpy as np
-from statistics import mean
 import random
-
 import tensorflow as tf
 from tensorflow.keras import backend as K
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Input, Lambda, ReLU, Add, Dense, Conv2D, Flatten, AveragePooling2D, Dropout, BatchNormalization
 from tensorflow.keras.regularizers import l2
 
-
 def divisible_random(a,b,n):
     if b-a < n:
       raise Exception('{} is too big'.format(n))
+        # return a
     result = random.randint(a, b)
     while result % n != 0:
-      result = random.randint(a, b)
+        result = random.randint(a, b)
     return result
 
-# In[]
 def resblock(x, kernelsize, filters, first_layer = False):
-
     reg = l2(0.001)  # Define L2 regularizer
-
     if first_layer:
         fx = Conv2D(filters, kernelsize, padding='same', kernel_regularizer=reg)(x)
         fx = BatchNormalization()(fx)
         fx = ReLU()(fx)
-
         fx = Conv2D(filters, kernelsize, padding='same', kernel_regularizer=reg)(fx)
         fx = BatchNormalization()(fx)
-        
         x = Conv2D(filters, 1, padding='same', kernel_regularizer=reg)(x)
         fx = BatchNormalization()(fx)
-        
         out = Add()([x,fx])
         out = ReLU()(out)
-
     else:
         fx = Conv2D(filters, kernelsize, padding='same', kernel_regularizer=reg)(x)
         fx = BatchNormalization()(fx)
         fx = ReLU()(fx)
-
         fx = Conv2D(filters, kernelsize, padding='same', kernel_regularizer=reg)(fx)
         fx = BatchNormalization()(fx)
-        
-        
         out = Add()([x,fx])
         out = ReLU()(out)
 
@@ -53,219 +41,61 @@ def resblock(x, kernelsize, filters, first_layer = False):
 def identity_loss(y_true, y_pred):
     return K.mean(y_pred)           
 
-    
-class TripletNet():
-    def __init__(self):
-        pass
-        
-    def create_triplet_net(self, embedding_net, alpha):
-        
-#        embedding_net = encoder()
-        self.alpha = alpha
-        
-        input_1 = Input([self.datashape[1],self.datashape[2],self.datashape[3]])
-        input_2 = Input([self.datashape[1],self.datashape[2],self.datashape[3]])
-        input_3 = Input([self.datashape[1],self.datashape[2],self.datashape[3]])
-        
-        A = embedding_net(input_1)
-        P = embedding_net(input_2)
-        N = embedding_net(input_3)
-   
-        loss = Lambda(self.triplet_loss)([A, P, N]) 
-        model = Model(inputs=[input_1, input_2, input_3], outputs=loss)
-        return model
-      
-    def triplet_loss(self,x):
-    # Triplet Loss function.
-        anchor,positive,negative = x
-#        K.l2_normalize
-    # distance between the anchor and the positive
-        pos_dist = K.sum(K.square(anchor-positive),axis=1)
-    # distance between the anchor and the negative
-        neg_dist = K.sum(K.square(anchor-negative),axis=1)
-
-        basic_loss = pos_dist-neg_dist + self.alpha
-        loss = K.maximum(basic_loss,0.0)
-        return loss   
-    
-    def feature_extractor(self, datashape):
-            
-        self.datashape = datashape
-        
-        inputs = Input(shape=([self.datashape[1],self.datashape[2],self.datashape[3]]))
-        
-        x = Conv2D(32, 7, strides = 2, activation='relu', padding='same')(inputs)
-        
-        x = resblock(x, 3, 32)
-        x = resblock(x, 3, 32)
-
-        x = resblock(x, 3, 64, first_layer = True)
-        x = resblock(x, 3, 64)
-
-        x = AveragePooling2D(pool_size=2)(x)
-        
-        x = Flatten()(x)
-    
-        x = Dense(512)(x)
-  
-        outputs = Lambda(lambda  x: K.l2_normalize(x,axis=1))(x)
-        
-        model = Model(inputs=inputs, outputs=outputs)
-        return model             
-
-    
-    def get_triplet(self):
-        """Choose a triplet (anchor, positive, negative) of images
-        such that anchor and positive have the same label and
-        anchor and negative have different labels."""
-        
-        
-        n = a = self.dev_range[np.random.randint(len(self.dev_range))]
-        
-        while n == a:
-            # keep searching randomly!
-            n = self.dev_range[np.random.randint(len(self.dev_range))]
-        a, p = self.call_sample(a), self.call_sample(a)
-        n = self.call_sample(n)
-        
-        return a, p, n
-
-    def get_triplet_channels(self):
-        """Choose a triplet (anchor, positive, negative) of images
-        such that anchor and positive have the same label and
-        anchor and negative have different labels."""
-        
-        a, p = self.call_sample(a), self.call_sample(a)
-        n = self.call_sample(n)
-        
-        return a, p, n
-
-    def call_sample(self,label_name):
-        """Choose an image from our training or test data with the
-        given label."""
-        num_sample = len(self.label)
-        idx = np.random.randint(num_sample)
-        while self.label[idx] != label_name:
-            # keep searching randomly!
-            idx = np.random.randint(num_sample) 
-        return self.data[idx]
-
-    def create_generator(self, batchsize, dev_range, data, label):
-        """Generate a triplets generator for training."""
-        self.data = data
-        self.label = label
-        self.dev_range = dev_range
-        
-        while True:
-            list_a = []
-            list_p = []
-            list_n = []
-
-            for i in range(batchsize):
-                a, p, n = self.get_triplet()
-                list_a.append(a)
-                list_p.append(p)
-                list_n.append(n)
-            
-            A = np.array(list_a, dtype='float32')
-            P = np.array(list_p, dtype='float32')
-            N = np.array(list_n, dtype='float32')
-            
-            # a "dummy" label which will come in to our identity loss
-            # function below as y_true. We'll ignore it.
-            label = np.ones(batchsize)
-            yield [A, P, N], label  
-            
-
 class TripletNet_Channel():
     def __init__(self):
         pass
         
     def create_triplet_net(self, embedding_net, alpha):
-        
         self.alpha = alpha
-        
         input_1 = Input([self.datashape[1],self.datashape[2],self.datashape[3]])
         input_2 = Input([self.datashape[1],self.datashape[2],self.datashape[3]])
         input_3 = Input([self.datashape[1],self.datashape[2],self.datashape[3]])
-        
         A = embedding_net(input_1)
         P = embedding_net(input_2)
         N = embedding_net(input_3)
-
-        #print(A)
-        #print(P)
-        #print(N)
-
         loss = Lambda(self.triplet_loss)([A, P, N]) 
         model = Model(inputs=[input_1, input_2, input_3], outputs=loss)
         return model
-      
-    def triplet_loss_KDR(self,x):
-    # Triplet Loss function.
-        anchor,positive,negative = x
 
+    def triplet_loss_KDR(self,x):
+        # Triplet Loss function.
+        anchor,positive,negative = x
         anchor = self.quantization_layer(anchor)
         positive = self.quantization_layer(positive)
         negative = self.quantization_layer(negative)
-    # Creating bool feature vectors for logical XOR
+        # Creating bool feature vectors for logical XOR
         zeros = tf.zeros_like(anchor)
         ones = tf.ones_like(anchor)
-
-    #GET BOOLEAN VALUES       
+        #GET BOOLEAN VALUES       
         anchor_bool = tf.greater_equal(anchor,1)
         positive_bool = tf.greater_equal(positive,1)
         negative_bool = tf.greater_equal(negative,1)
-    #XOR(ANCHOR,POSITIVE) , XOR(ANCHOR,NEGATIVE)
+        #XOR(ANCHOR,POSITIVE) , XOR(ANCHOR,NEGATIVE)
         pos_xor_bool = tf.math.logical_xor(anchor_bool,positive_bool)
         pos_xor_not_bool = tf.math.logical_not(pos_xor_bool)
         neg_xor_bool = tf.math.logical_xor(anchor_bool,negative_bool)
         neg_xor_not_bool = tf.math.logical_not(neg_xor_bool)
-    #TRANSFORM BOOLEAN TO BINARY
+        #TRANSFORM BOOLEAN TO BINARY
         pos_xor = tf.where(pos_xor_bool, anchor, zeros)
         pos_xor = tf.where(pos_xor_not_bool, pos_xor, ones)
         neg_xor  = tf.where(neg_xor_bool, anchor, zeros)
         neg_xor = tf.where(neg_xor_not_bool, neg_xor, ones)
-    #GET POSITIVE AND NEGATIVE MEAN (SUM(VALUES)/LENGTH(VALUES))
+        #GET POSITIVE AND NEGATIVE MEAN (SUM(VALUES)/LENGTH(VALUES))
         pos_kdr = K.mean(pos_xor,axis=1)
         neg_kdr = K.mean(neg_xor,axis=1)
-        '''    anchor_mean = K.mean(anchor)
-            anchor_bool = K.greater_equal(anchor,anchor_mean)
-            positive_mean = K.mean(positive)
-            positive_bool = K.greater_equal(positive,positive_mean)
-            negative_mean = K.mean(negative)
-            negative_bool = K.greater_equal(negative,negative_mean)
-        # XOR anchor and positive bool features
-            pos_xor = tf.math.logical_xor(anchor_bool,positive_bool)
-            pos_xor = tf.where(pos_xor, zeros, ones)
-        # XOR anchor and negative bool features
-            neg_xor = tf.math.logical_xor(anchor_bool,negative_bool)
-            neg_xor = tf.where(neg_xor, zeros, ones)
-        # Calculate difference between the anchor and the positive
-            pos_dist = K.mean(pos_xor)
-        # Calculate difference (KDR) between the anchor and the negative
-            neg_dist = K.mean(neg_xor)'''
-    #Calculate Loss
+        #Calculate Loss
         basic_loss = (pos_kdr-neg_kdr+self.alpha)
         loss = K.maximum(basic_loss,0.0)
         return loss
 
     def triplet_loss(self,x):
-    # Triplet Loss function.
+        # Triplet Loss function.
         anchor,positive,negative = x
-
-        '''anchor = K.l2_normalize(anchor,axis=1)
-        positive = K.l2_normalize(positive,axis=1)
-        negative = K.l2_normalize(negative,axis=1)'''
-        '''anchor = self.quantization_layer(anchor)
-        positive = self.quantization_layer(positive)
-        negative = self.quantization_layer(negative)'''
-    # K.l2_normalize
-    # distance between the anchor and the positive
+        # K.l2_normalize
+        # distance between the anchor and the positive
         pos_dist = K.sum(K.square(anchor-positive),axis=1)
-    # distance between the anchor and the negative
+        # distance between the anchor and the negative
         neg_dist = K.sum(K.square(anchor-negative),axis=1)
-
         basic_loss = (pos_dist-neg_dist) + self.alpha
         loss = K.maximum(basic_loss,0.0)
         return loss  
@@ -273,114 +103,36 @@ class TripletNet_Channel():
     def quantization_layer(self,x):
         ones = tf.ones_like(x)
         zeros = tf.zeros_like(x)
-        #zeros = tf.ones_like(x)*-1
         x_mean = K.mean(x)
-        #print("x_mean", x_mean)
         x_less = K.less(x,x_mean)
-        #print("x_less", x_less)
         x_greater = K.greater_equal(x,x_mean)
-        #print("x_greater", x_greater)
-        #a_xor = tf.math.logical_xor(a_less,a_greater)
-        #print("a_greater", a_xor)
         x_q = tf.where(x_greater, x, ones)
         x_q = tf.where(x_less, x_q, zeros)
-        #print("x_q: ", x_q)
         return x_q
     
     def feature_extractor(self, datashape):
-            
         self.datashape = datashape
-        
         inputs = Input(shape=([self.datashape[1],self.datashape[2],self.datashape[3]]))
-        
         x = Conv2D(32, 7, strides = 2, activation='relu', padding='same')(inputs)
         x =  Dropout(0.3)(x)
-
         x = resblock(x, 3, 32)
         x = resblock(x, 3, 32)
         #x = resblock(x, 3, 32)
-
         x = resblock(x, 3, 64, first_layer = True)
         x = resblock(x, 3, 64)
         #x = resblock(x, 3, 64)
-
         x = AveragePooling2D(pool_size=2)(x)
-        
         x = Flatten()(x)
-    
         x = Dense(512)(x)
         #x = Dense(512,kernel_regularizer='l1_l2')(x)
-
         outputs = Lambda(lambda  x: K.l2_normalize(x,axis=1))(x)
-
-        #outputs = Dense(units=512, activation='sigmoid', kernel_initializer="lecun_normal")(x)
-        #outputs = Lambda(lambda  x: K.round(x))(x)
-        #outputs = Lambda(self.quantization_layer)(x)
-
         model = Model(inputs=inputs, outputs=outputs)
         return model             
-
-
-    '''def get_triplet_channels(self):
-        """Choose a triplet (anchor, positive, negative) of images
-        such that anchor and positive have the same label and
-        anchor and negative have different labels."""
-        
-        a, p = self.call_sample(a), self.call_sample(a)
-        n = self.call_sample(n)
-        
-        return a, p, n'''
-          
-    '''def call_sample(self,label_name):
-        """Choose an image from our training or test data with the
-        given label."""
-        num_sample = len(self.label)
-        idx = np.random.randint(num_sample)
-        while self.label[idx] != label_name:
-            # keep searching randomly!
-            idx = np.random.randint(num_sample) 
-        return self.data[idx]'''
-
-    '''def create_generator_channel(self, batchsize, data, label):
-        """Generate a triplets generator for training."""
-        self.data = data
-        self.label = label
-        
-        while True:
-            list_a = []
-            list_p = []
-            list_n = []
-            idx = divisible_random(0,len(data)-batchsize-4,4)
-            batchsize_limit = batchsize+idx-1
-            #print("batchsize_limit",batchsize_limit)
-            #print("idx",idx)
-            while idx < batchsize_limit:
-                a =data[idx]
-                n =data[idx+1]
-                p =data[idx+2]
-                list_a.append(a)
-                list_p.append(p)
-                list_n.append(n)
-                a =data[idx+2]
-                n =data[idx+3]
-                p =data[idx]
-                list_a.append(a)
-                list_p.append(p)
-                list_n.append(n)
-                idx = idx + 4
-            A = np.array(list_a, dtype='float32')
-            P = np.array(list_p, dtype='float32')
-            N = np.array(list_n, dtype='float32')
-            label = np.ones(int(batchsize/2))
-            #print("label",label.shape)
-            #print("A",A.shape)
-            yield [A, P, N], label'''
-            
+    
     def create_generator_channel(self, batchsize, data, label):
         """Generate a triplets generator for training."""
         self.data = data
         self.label = label
-        
         while True:
             list_a = []
             list_p = []
@@ -408,7 +160,6 @@ class TripletNet_Channel():
                     list_n.append(n)
                 idx = divisible_random(0,len(data)-4,4)
                 batch = batch + 1
-
             A = np.array(list_a, dtype='float32')
             P = np.array(list_p, dtype='float32')
             N = np.array(list_n, dtype='float32')
@@ -417,14 +168,13 @@ class TripletNet_Channel():
             #print("A",A.shape)
             yield [A, P, N], label 
 
-
 class QuadrupletNet_Channel():
     def __init__(self):
         pass
         
     def create_quadruplet_net(self, embedding_net, alpha1, alpha2):
         
-#        embedding_net = encoder()
+        # embedding_net = encoder()
         self.alpha = alpha1
         self.beta = alpha2
         
@@ -437,11 +187,7 @@ class QuadrupletNet_Channel():
         P = embedding_net(input_2)
         N1 = embedding_net(input_3)
         N2 = embedding_net(input_4)
-
-        #print(A)
-        #print(P)
-        #print(N)
-
+        
         loss = Lambda(self.quadruplet_loss)([A, P, N1, N2]) 
         model = Model(inputs=[input_1, input_2, input_3, input_4], outputs=loss)
         return model
@@ -486,33 +232,22 @@ class QuadrupletNet_Channel():
         return x_q
     
     def feature_extractor(self, datashape):
-            
         self.datashape = datashape
         reg = l2(0.001)  # Define L2 regularizer
-        
         inputs = Input(shape=([self.datashape[1],self.datashape[2],self.datashape[3]]))
-        
         x = Conv2D(32, 7, strides = 2, activation='relu', padding='same', kernel_regularizer=reg)(inputs)
         x =  Dropout(0.3)(x)
-
         x = resblock(x, 3, 32, first_layer = True)
         for _ in range(3):
             x = resblock(x, 3, 32)
-
         x = resblock(x, 3, 64, first_layer = True)
         for _ in range(3):
             x = resblock(x, 3, 64)
-
         x = AveragePooling2D(pool_size=2)(x)
-        
         x = Flatten()(x)
-    
         x = Dense(512)(x)
-  
         outputs = Lambda(lambda  x: K.l2_normalize(x,axis=1))(x)
-
         outputs = Dense(units=512, activation='sigmoid', kernel_initializer="lecun_normal")(outputs)
-
         model = Model(inputs=inputs, outputs=outputs)
         return model             
             
@@ -520,7 +255,6 @@ class QuadrupletNet_Channel():
         """Generate a triplets generator for training."""
         self.data = data
         self.label = label
-        
         while True:
             list_a = []
             list_p = []
@@ -542,7 +276,6 @@ class QuadrupletNet_Channel():
                 list_n2.append(n2)
                 idx = divisible_random(0,len(data)-4,4)
                 batch = batch + 1
-
             A = np.array(list_a, dtype='float32')
             P = np.array(list_p, dtype='float32')
             N1 = np.array(list_n1, dtype='float32')
