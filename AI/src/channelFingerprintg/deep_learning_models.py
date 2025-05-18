@@ -217,18 +217,11 @@ class QuadrupletNet_Channel():
     def quantization_layer(self,x):
         ones = tf.ones_like(x)
         zeros = tf.zeros_like(x)
-        #zeros = tf.ones_like(x)*-1
         x_mean = K.mean(x)
-        #print("x_mean", x_mean)
         x_less = K.less(x,x_mean)
-        #print("x_less", x_less)
         x_greater = K.greater_equal(x,x_mean)
-        #print("x_greater", x_greater)
-        #a_xor = tf.math.logical_xor(a_less,a_greater)
-        #print("a_greater", a_xor)
         x_q = tf.where(x_greater, x, ones)
         x_q = tf.where(x_less, x_q, zeros)
-        #print("x_q: ", x_q)
         return x_q
     
     def feature_extractor(self, datashape):

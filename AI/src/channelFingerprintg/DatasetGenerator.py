@@ -1,16 +1,8 @@
-# Load HDF5 file
 import h5py
 import matplotlib.pyplot as plt
 import pandas as pd
-import numpy as np
 from datasets import Dataset
-import datasets
 import huggingface_hub as hf
-import seaborn as sns
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-import sys 
-import math
 
 class DatasetGenerator():
     def __init__(self, fileName):
@@ -86,7 +78,7 @@ class DatasetGenerator():
     
 if __name__ == "__main__":
     # Example usage
-    saveDataFrame = True
+    saveDataFrame = False
     names = ['Alice', 'Bob', 'Eve']
     nodeIDs = [3,4,5]
     timestamp = 1746944796

@@ -46,7 +46,7 @@ def train_channel_feature_extractor(dataset_name, config_name, repo_name, epochs
     alpha = 0.5
     beta = 0
 
-    batch_size = 16 # 64
+    batch_size = 5 # 64
     patience = 20
 
     #NetObj =  TripletNet_Channel()
@@ -64,16 +64,16 @@ def train_channel_feature_extractor(dataset_name, config_name, repo_name, epochs
     # Create callbacks during training. The training stops when validation loss 
     # does not decrease for 30 epochs.
     early_stop = EarlyStopping('val_loss', 
-                               min_delta = 0, 
-                               patience = 
-                               patience)
+                                min_delta = 0, 
+                                patience = 
+                                patience)
     
     reduce_lr = ReduceLROnPlateau(monitor='val_loss', 
-                                  min_delta = 0, 
-                                  factor = 0.1, 
-                                  patience = 10, 
-                                  verbose=1
-                                  )
+                                    min_delta = 0, 
+                                    factor = 0.1, 
+                                    patience = 10, 
+                                    verbose=1
+                                    )
     callbacks = [early_stop, reduce_lr]
 
     validation_size=0.1
@@ -129,7 +129,7 @@ run_for = 'Train Channel Fingerprinting'
 if run_for == 'Train Channel Fingerprinting':
 
     dataset_name = "Key-Generation"
-    config_name = "Sinusoid-Powder-OTA-Dense" #"Sinusoid-Powder-OTA-Lab"
+    config_name = "Sinusoid-Powder-OTA-Lab" #"Sinusoid-Powder-OTA-Lab" "Sinusoid-Powder-OTA-Dense" 
     repo_name="CAAI-FAU"
     # Train an RFF extractor.
     # Save the trained model.

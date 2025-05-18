@@ -40,15 +40,26 @@ class DatasetHandler():
         print("DataFrame Description:")
         print(self.dataFrame.describe())
         
+    def separate_iq_samples(self, data):
+        '''Separate the IQ samples into I and Q components.'''
+        # I is the second half of the samples
+        I = data[len(data)//2:]
+        # Q is the first half of the samples
+        Q = data[:len(data)//2]
+        return I, Q
+    
     def convert_to_complex(self):
         '''Convert the loaded data to complex IQ samples.'''
         I = self.dataFrame["I"].to_numpy()
         Q = self.dataFrame["Q"].to_numpy()
+        # data = self.dataFrame["data"]
+        # I, Q = self.separate_iq_samples(data)
         data_complex = I + 1j*Q
         return data_complex
     
     def load_data(self):
-        label = self.dataFrame["channel"]
+        # label = self.dataFrame["channel"]
+        label = self.dataFrame["label"]
         label = label.astype(int)
         label = np.transpose(label)
         data = self.convert_to_complex()
