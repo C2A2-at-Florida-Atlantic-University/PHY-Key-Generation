@@ -286,7 +286,7 @@ def loadOTALabConfig(
 def loadOTADenseConfig(
         gainConfigs={
             "x310":{"tx":31,"rx":31},
-            "b210":{"tx":90,"rx":76}
+            "b210":{"tx":80,"rx":70}
             }
     ):
     # OTA Lab node IPs
