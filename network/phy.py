@@ -118,9 +118,9 @@ class PHY:
         self.receiver.set_rx_data()
 
     def set_receive_IQ(self):
+        self.receiver.set_rx_IQ()
         if self.mode["rx"] != "IQ":
             self.mode["rx"] = "IQ"
-            self.receiver.set_rx_IQ()
             return "Setting mode: "+self.mode["rx"]
         else:
             return "Omitting setting mode: "+self.mode["rx"]
