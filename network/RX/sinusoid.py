@@ -124,7 +124,7 @@ class Sinusoid(gr.top_block):
         super().start()
 
     def stop(self):
-        self.usrp_source.set_gpio_attr("FP0", "CTRL", 0x10)
+        self.usrp_source.set_gpio_attr("FP0", "CTRL", 0xFFFFFFFF, 0xFFFFFFFF, 0)
         self.usrp_source.set_gpio_attr("FP0", "DDR",  0x10, 0x00, 0)
         self.usrp_source.set_gpio_attr("FP0", "OUT",  0x10, 0x00, 0)
         self.usrp_source.close()
