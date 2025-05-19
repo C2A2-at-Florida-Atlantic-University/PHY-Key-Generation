@@ -121,9 +121,14 @@ class Sinusoid(gr.top_block):
         self.SDR_ID=SDR_ID
         
     def start(self):
-        super().start()
         self.usrp_sink.set_gpio_attr("FP0", "DDR", 0x10, 0x10, 0)
         self.usrp_sink.set_gpio_attr("FP0", "OUT", 0x10, 0x10, 0)
+        super().start()
+        
+    def stop(self):
+        self.usrp_sink.clear_gpio_attr("FP0", "OUT", 0)
+        self.usrp_sink.clear_gpio_attr("FP0", "DDR", 0)
+        super().stop()
 
 def main(top_block_cls=Sinusoid, options=None):
     tb = top_block_cls()

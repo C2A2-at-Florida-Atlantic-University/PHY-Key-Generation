@@ -112,16 +112,22 @@ class Sinusoid(gr.top_block):
     
     def get_bandwidth(self):
         return self.bandwidth
-    
+
     def set_bandwidth(self, bandwidth):
         self.bandwidth=bandwidth
         # self.iio_pluto_source_0.set_params(self.freq, self.samp_rate, self.bandwidth, True, True, True, 'manual', self.gain, '', True)
     
     def start(self):
-        super().start()
         self.usrp_source.set_gpio_attr("FP0", "CTRL", 0)
         self.usrp_source.set_gpio_attr("FP0", "DDR",  0x10, 0x10, 0)
         self.usrp_source.set_gpio_attr("FP0", "OUT",  0x10, 0x10, 0)
+        super().start()
+
+    def stop(self):
+        self.usrp_source.clear_gpio_attr("FP0", "CTRL", 0)
+        self.usrp_source.clear_gpio_attr("FP0", "OUT", 0)
+        self.usrp_source.clear_gpio_attr("FP0", "DDR", 0)
+        super().stop()
 
 def main(top_block_cls=Sinusoid):
     
