@@ -18,7 +18,7 @@ def recordIQ(nodeID,port,samples):
     # response_rx = requests.get(APILink(NodeIPs[nodeID],port,path))
     # print("Response:",response)
     response_json = response.json()
-    # print("Response JSON:",response_json)
+    print("Response JSON:",response_json)
     imag = response_json["imag"]
     real = response_json["real"]
     return real,imag
