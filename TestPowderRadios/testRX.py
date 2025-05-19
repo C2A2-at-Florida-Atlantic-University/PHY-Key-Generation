@@ -94,13 +94,9 @@ class testRX(gr.top_block, Qt.QWidget):
         self.uhd_usrp_source_0.set_gain(gain, 0)
         self.uhd_usrp_source_0.set_antenna('RX2', 0)
         self.uhd_usrp_source_0.set_samp_rate(samp_rate)
-        #get_gpio_attr	(	const std::string & 	bank,
-            # const std::string & 	attr,
-            # const size_t 	mboard = 0 
-            # )
-        print("GPIO FP0 CTRL default config:", self.uhd_usrp_source_0.get_gpio_attr("FP0", "CTRL",0))
-        print("GPIO FP0 DDR default config:", self.uhd_usrp_source_0.get_gpio_attr("FP0", "DDR",0))
-        print("GPIO FP0 OUT default config:", self.uhd_usrp_source_0.get_gpio_attr("FP0", "OUT",0))
+        # print("GPIO FP0 CTRL default config:", self.uhd_usrp_source_0.get_gpio_attr("FP0", "CTRL",0))
+        # print("GPIO FP0 DDR default config:", self.uhd_usrp_source_0.get_gpio_attr("FP0", "DDR",0))
+        # print("GPIO FP0 OUT default config:", self.uhd_usrp_source_0.get_gpio_attr("FP0", "OUT",0))
         self.uhd_usrp_source_0.set_gpio_attr("FP0", "CTRL", 0x00)
         self.uhd_usrp_source_0.set_gpio_attr("FP0", "DDR",  0x10, 0x10, 0)
         self.uhd_usrp_source_0.set_gpio_attr("FP0", "OUT",  0x10, 0x10, 0)
