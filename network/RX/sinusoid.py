@@ -71,6 +71,9 @@ class Sinusoid(gr.top_block):
         self.usrp_source.set_gain(self.gain, 0)
         self.usrp_source.set_antenna("RX2", 0)
         self.usrp_source.set_max_output_buffer(self.max_buf)
+        self.usrp_source.set_gpio_attr("FP0", "CTRL", 0)
+        self.usrp_source.set_gpio_attr("FP0", "DDR",  0x10, 0x10, 0)
+        self.usrp_source.set_gpio_attr("FP0", "OUT",  0x10, 0x10, 0)
         ##################################################
         # Connections
         ##################################################

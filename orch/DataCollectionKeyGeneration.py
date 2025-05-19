@@ -281,19 +281,33 @@ def loadOTALabConfig(
         7:gainConfigs["x310"],
         8:gainConfigs["x310"]
     }
-    return NodeIPs, NodeGains
+    NodeConfigs = [
+        # [1,2,3],  # b210, b210, b210
+        # [2,4,3],  # b210, b210, b210
+        # [4,2,8],  # b210, b210, x310
+        # [4,2,5],  # b210, b210, x310
+        # [1,4,5],  # b210, b210, x310
+        # [1,4,8],  # b210, b210, x310
+        [5,7,8],  # x310, x310, x310
+        [5,8,7],  # x310, x310, x310
+        [8,5,4],  # x310, x310, b210
+        [8,5,1],  # x310, x310, b210
+        [8,4,1],  # x310, b210, b210
+        [4,8,5]   # b210, x310, x310
+    ]
+    return NodeIPs, NodeGains, NodeConfigs
 
 def loadOTADenseConfig(
         gainConfigs={
             "x310":{"tx":31,"rx":31},
-            "b210":{"tx":80,"rx":70}
+            "b210":{"tx":90,"rx":76}
             }
     ):
     # OTA Lab node IPs
     NodeIPs = {
-        1:"cnode-moran.emulab.net",     # Moran dense node with b210
-        2:"cnode-ebc.emulab.net",       # EBC dense node with b210
-        3:"cnode-guesthouse.emulab.net",# Guesthouse dense node with b210
+        1:"cnode-ebc.emulab.net",       # EBC dense node with b210
+        2:"cnode-guesthouse.emulab.net",# Guesthouse dense node with b210
+        3:"cnode-moran.emulab.net",     # Moran dense node with b210
         4:"cnode-ustar.emulab.net",     # Ustar dense node with b210
         5:"localhost",                  # Local computer with b210
         6:"162.168.10.101",             # Jetson nano 1 with b210
@@ -308,12 +322,20 @@ def loadOTADenseConfig(
         6:gainConfigs["b210"],
         7:gainConfigs["b210"]
     }
-    return NodeIPs, NodeGains
+    NodeConfigs = [
+        [1,2,3],  # EBC, Guesthouse, Moran
+        [2,3,1],  # Guesthouse, Moran, EBC
+        [1,3,2],  # EBC, Moran, Guesthouse
+        # [4,3,1],  # Ustar, Moran, EBC
+        # [4,3,2],  # Ustar, Moran, Guesthouse
+        # [4,1,3],  # Ustar, EBC, Moran
+    ]
+    return NodeIPs, NodeGains, NodeConfigs
 
 if __name__ == "__main__":
 
-    NodeIPs, NodeGains = loadOTALabConfig()
-    # NodeIPs, NodeGains = loadOTADenseConfig()
+    # NodeIPs, NodeGains, nodeConfigs = loadOTALabConfig()
+    NodeIPs, NodeGains, nodeConfigs = loadOTADenseConfig()
 
     port = {'orch':'5001','radio':'5002','ai':'5003'}
 
@@ -336,22 +358,7 @@ if __name__ == "__main__":
     params = {"tx":paramsTx,"rx":paramsRx}
 
     type = "sinusoid" #pnSequence, MPSK, sinusoid
-
-    nodeConfigs = [
-        # [1,2,3],  # b210, b210, b210
-        # [2,4,3],  # b210, b210, b210
-        # [4,2,8],  # b210, b210, x310
-        # [4,2,5],  # b210, b210, x310
-        [1,4,5],  # b210, b210, x310
-        [1,4,8],  # b210, b210, x310
-        # [5,7,8],  # x310, x310, x310
-        # [5,8,7],  # x310, x310, x310
-        # [8,5,4],  # x310, x310, b210
-        # [8,5,1],  # x310, x310, b210
-        # [8,4,1],  # x310, b210, b210
-        # [4,8,5]   # b210, x310, x310
-    ]
-    
+        
     for nodes in nodeConfigs:
         print(f"Collecting data for node config: Alice={nodes[0]}, Bob={nodes[1]}, Eve={nodes[2]}")
         I, Q, channel, instance, ids, tx, rx, timestamp = collect_data_ping_pong_3Nodes(

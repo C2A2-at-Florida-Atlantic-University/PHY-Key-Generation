@@ -64,7 +64,11 @@ class Sinusoid(gr.top_block):
         self.usrp_sink.set_gain(self.gain, 0)
         # choose TX port on B200-series / X300-series
         self.usrp_sink.set_antenna("TX/RX", 0)
+        self.usrp_sink.set_clock_rate(30.72e6, uhd.ALL_MBOARDS)
         self.usrp_sink.set_max_output_buffer(self.max_buf)
+        self.usrp_sink.set_time_unknown_pps(uhd.time_spec())
+        self.usrp_sink.set_gpio_attr("FP0", "DDR", 0x10, 0x10, 0)
+        self.usrp_sink.set_gpio_attr("FP0", "OUT", 0x10, 0x10, 0)
         self.analog_sig_source_x_0=analog.sig_source_c(samp_rate, analog.GR_SIN_WAVE, 1000, 1, 0, 0)
         ##################################################
         # Connections
