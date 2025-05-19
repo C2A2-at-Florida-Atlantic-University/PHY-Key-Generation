@@ -16,8 +16,9 @@ def recordIQ(nodeID,port,samples):
     headers = {'Content-Type': 'application/json'}
     response = requests.post(APILink(NodeIPs[nodeID],port,path), data=json.dumps(data), headers=headers)
     # response_rx = requests.get(APILink(NodeIPs[nodeID],port,path))
-    print("Response:",response)
+    # print("Response:",response)
     response_json = response.json()
+    # print("Response JSON:",response_json)
     imag = response_json["imag"]
     real = response_json["real"]
     return real,imag
@@ -144,15 +145,19 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
     Bob = nodes[1]
     Eve = nodes[2]
     numberOfSamples = 8192
+    print("Setting RX Node: ", Eve)
     setRXNode(params,Eve)
     generatePlots = True
     while i<packages*2+1:
         print(i)
         if i%2 == 0:
+            print("Setting TX Node: ", Bob)
             setTXNode(params,type,Bob,metadata)
-            setRXNode(params,Alice)
+            print("Setting RX Node: ", Alice)
+            setRXNode(params, Alice)
             time.sleep(timeSleep)
             
+            print("Recording RX Node: ", Alice)
             real1, imaginary1 = RecordNodeData(Alice, samples=numberOfSamples)
             # IQ_N1 = np.concatenate((imaginary1[0:numberOfSamples], real1[0:numberOfSamples]), axis=None)
             # IQ_Samples = np.concatenate((IQ_Samples,[IQ_N1]), axis=0)
@@ -165,6 +170,7 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
             rx.append(Alice)
             timestamp.append(int(time.time()))
             
+            print("Recording RX Node: ", Eve)
             real2, imaginary2 = RecordNodeData(Eve, samples=numberOfSamples)
             # IQ_N3_1 = np.concatenate((imaginary2[0:numberOfSamples], real2[0:numberOfSamples]), axis=None)
             # IQ_Samples = np.concatenate((IQ_Samples,[IQ_N3_1]), axis=0)
@@ -190,10 +196,13 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
 
         else:
             id = id + 1
+            print(("Setting TX Node: ", Alice))
             setTXNode(params,type,Alice,metadata)
+            print("Setting RX Node: ", Bob)
             setRXNode(params,Bob)
             time.sleep(timeSleep)
             
+            print("Recording RX Node: ", Bob)
             real1, imaginary1 = RecordNodeData(Bob, samples=numberOfSamples)
             # IQ_N2 = np.concatenate((imaginary1[0:numberOfSamples], real1[0:numberOfSamples]), axis=None)
             # if(i == 1):
@@ -209,6 +218,7 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
             rx.append(Bob)
             timestamp.append(int(time.time()))
 
+            print("Recording RX Node: ", Eve)
             real2, imaginary2 = RecordNodeData(Eve, samples=numberOfSamples)
             # IQ_N3_2 = np.concatenate((imaginary2[0:numberOfSamples], real2[0:numberOfSamples]), axis=None)
             # IQ_Samples = np.concatenate((IQ_Samples,[IQ_N3_2]), axis=0)
@@ -244,7 +254,12 @@ def create_dataset(filename, I, Q, channel, instance, ids, tx, rx, timestamp):
     # Save dataset to file
     print("Dataset saved to", filename)
 
-def loadOTALabConfig():
+def loadOTALabConfig(
+        gainConfigs={
+            "x310":{"tx":31,"rx":31},
+            "b210":{"tx":80,"rx":70}
+            }
+    ):
     # OTA Lab node IPs
     NodeIPs = {
         1:"ota-nuc1.emulab.net",    # b210 nuc node 1
@@ -257,38 +272,41 @@ def loadOTALabConfig():
         8:"pc781.emulab.net"        # x310 radio node 4
     }
     NodeGains = {
-        1:{"tx":80,"rx":70},
-        2:{"tx":80,"rx":70},
-        3:{"tx":80,"rx":70},
-        4:{"tx":80,"rx":70},
-        5:{"tx":31,"rx":31},
-        6:{"tx":31,"rx":31},
-        7:{"tx":31,"rx":31},
-        8:{"tx":31,"rx":31}
+        1:gainConfigs["b210"],
+        2:gainConfigs["b210"],
+        3:gainConfigs["b210"],
+        4:gainConfigs["b210"],
+        5:gainConfigs["x310"],
+        6:gainConfigs["x310"],
+        7:gainConfigs["x310"],
+        8:gainConfigs["x310"]
     }
     return NodeIPs, NodeGains
 
-def loadOTADenseConfig():
+def loadOTADenseConfig(
+        gainConfigs={
+            "x310":{"tx":31,"rx":31},
+            "b210":{"tx":80,"rx":70}
+            }
+    ):
     # OTA Lab node IPs
     NodeIPs = {
-        1:"cnode-moran.emulab.net",
-        2:"cnode-ebc.emulab.net",
-        3:"localhost",
-        4:"ota-nuc4.emulab.net",
-        5:"pc761.emulab.net",
-        6:"pc775.emulab.net",
-        7:"pc761.emulab.net",
-        8:"pc761.emulab.net"
+        1:"cnode-moran.emulab.net",     # Moran dense node with b210
+        2:"cnode-ebc.emulab.net",       # EBC dense node with b210
+        3:"cnode-guesthouse.emulab.net",# Guesthouse dense node with b210
+        4:"cnode-ustar.emulab.net",     # Ustar dense node with b210
+        5:"localhost",                  # Local computer with b210
+        6:"162.168.10.101",             # Jetson nano 1 with b210
+        7:"162.168.10.102"              # Jetson nano 2 with b210
     }
     NodeGains = {
-        1:{"tx":89,"rx":76},
-        2:{"tx":89,"rx":76},
-        3:{"tx":89,"rx":76},
-        4:{"tx":31,"rx":31},
-        5:{"tx":31,"rx":31},
-        6:{"tx":31,"rx":31},
-        7:{"tx":31,"rx":31},
-        8:{"tx":31,"rx":31}
+        1:gainConfigs["b210"],
+        2:gainConfigs["b210"],
+        3:gainConfigs["b210"],
+        4:gainConfigs["b210"],
+        5:gainConfigs["b210"],
+        6:gainConfigs["b210"],
+        7:gainConfigs["b210"]
     }
     return NodeIPs, NodeGains
 
@@ -320,14 +338,18 @@ if __name__ == "__main__":
     type = "sinusoid" #pnSequence, MPSK, sinusoid
 
     nodeConfigs = [
-        [1,2,3],
-        [2,4,3],
-        [4,2,8],
-        [4,2,5],
-        [5,6,7],
-        [5,7,6],
-        [5,8,1],
-        [5,8,3]
+        # [1,2,3],  # b210, b210, b210
+        # [2,4,3],  # b210, b210, b210
+        # [4,2,8],  # b210, b210, x310
+        # [4,2,5],  # b210, b210, x310
+        [1,4,5],  # b210, b210, x310
+        [1,4,8],  # b210, b210, x310
+        # [5,7,8],  # x310, x310, x310
+        # [5,8,7],  # x310, x310, x310
+        # [8,5,4],  # x310, x310, b210
+        # [8,5,1],  # x310, x310, b210
+        # [8,4,1],  # x310, b210, b210
+        # [4,8,5]   # b210, x310, x310
     ]
     
     for nodes in nodeConfigs:

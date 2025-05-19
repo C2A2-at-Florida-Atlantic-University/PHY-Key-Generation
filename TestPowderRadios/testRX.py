@@ -74,7 +74,7 @@ class testRX(gr.top_block, Qt.QWidget):
         ##################################################
         self.samp_rate = samp_rate = 600e3
         self.gain = gain = 31
-        self.freq = freq = 3555000000
+        self.freq = freq = 3.45e9
 
         ##################################################
         # Blocks

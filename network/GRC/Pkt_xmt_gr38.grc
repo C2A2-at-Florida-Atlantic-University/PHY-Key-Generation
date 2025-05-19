@@ -280,28 +280,6 @@ blocks:
     coordinate: [312, 156.0]
     rotation: 0
     state: enabled
-- name: iio_pluto_sink_0
-  id: iio_pluto_sink
-  parameters:
-    affinity: ''
-    alias: ''
-    attenuation1: gain
-    auto_filter: 'True'
-    bandwidth: bandwidth
-    buffer_size: buffer_size
-    comment: ''
-    cyclic: 'True'
-    filter: ''
-    frequency: freq
-    samplerate: samp_rate
-    uri: SDR_ID
-  states:
-    bus_sink: false
-    bus_source: false
-    bus_structure: null
-    coordinate: [944, 252.0]
-    rotation: 0
-    state: true
 - name: import_0
   id: import
   parameters:
@@ -433,7 +411,6 @@ connections:
 - [blocks_throttle_0, '0', blocks_multiply_const_vxx_0, '0']
 - [digital_constellation_modulator_0, '0', virtual_sink_0, '0']
 - [digital_crc32_async_bb_1, out, packet_format_gr38, PDU_in]
-- [mmse_resampler_xx_0, '0', iio_pluto_sink_0, '0']
 - [mmse_resampler_xx_0, '0', qtgui_sink_x_0, '0']
 - [packet_format_gr38, PDU_out0, blocks_pdu_to_tagged_stream_0, pdus]
 - [virtual_source_0, '0', blocks_throttle_0, '0']

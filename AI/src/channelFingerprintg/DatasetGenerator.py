@@ -80,20 +80,50 @@ if __name__ == "__main__":
     # Example usage
     saveDataFrame = False
     names = ['Alice', 'Bob', 'Eve']
-    nodeIDs = [3,4,5]
-    timestamp = 1746944796
+    nodeConfigs = {
+        "IDs":[
+            [1,2,3],
+            [2,4,3],
+            [4,2,8],
+            [4,2,5],
+            [5,6,7],
+            # [5,7,6],
+            # [5,8,1],
+            # [5,8,3]
+        ],
+        "Timestamps":[
+            1747672681,
+            1747673451,
+            1747674226,
+            1747675004,
+            1747670000,
+            # 1747670000,
+            # 1747670000,
+            # 1747670000,
+        ]
+    }
+    # nodeIDs = [3,4,5]
+    # timestamp = 1746944796
     numProbes = 100
     signalType = "sinusoid"
     folder = "/Users/josea/Workspaces/PowderKeyGen/"
-    file = folder + "Dataset_Channels_"+signalType+"_"+str(numProbes)+"_"+"".join(str(node) for node in nodeIDs)+"_"+str(timestamp)+".hdf5"
-    dataset = DatasetGenerator(file)
-    # dataset.plot_quadruplet_samples(100)
+    for nodeIDs, timestamp in zip(nodeConfigs["IDs"], nodeConfigs["Timestamps"]):
+        file = folder + "Dataset_Channels_"+signalType+"_"+str(numProbes)+"_"+"".join(str(node) for node in nodeIDs)+"_"+str(timestamp)+".hdf5"
+        print("Reading file: ", file)
+        # Read the hdf5 file
+        dataset = DatasetGenerator(file)
+        # Print the dataframe info
+        # dataset.get_dataframe_Info()
+        # Plot the IQ samples
+        # dataset.plot_iq_samples(0, 1)
+        # Plot the quadruplet samples
+        # dataset.plot_quadruplet_samples(0)
+        if saveDataFrame:
+            dataset_name = "Key-Generation"
+            config_name = "Sinusoid-Powder-OTA-Lab-"+"".join(str(node) for node in nodeIDs)  #"Sinusoid-Powder-OTA-Lab" 
+            repo_name="CAAI-FAU"
+            dataset.saveDataFrame(dataset_name, config_name, repo_name)
     
-    if saveDataFrame:
-        dataset_name = "Key-Generation"
-        config_name = "Sinusoid-Powder-OTA-Dense"  #"Sinusoid-Powder-OTA-Lab" 
-        repo_name="CAAI-FAU"
-        dataset.saveDataFrame(dataset_name, config_name, repo_name)
     
     # Use dataframe to plot power of the signal
     
