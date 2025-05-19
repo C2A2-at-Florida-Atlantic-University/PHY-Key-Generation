@@ -118,16 +118,15 @@ class Sinusoid(gr.top_block):
         # self.iio_pluto_source_0.set_params(self.freq, self.samp_rate, self.bandwidth, True, True, True, 'manual', self.gain, '', True)
     
     def start(self):
-        self.usrp_source.set_gpio_attr("FP0", "CTRL", 0x00)
+        self.usrp_source.set_gpio_attr("FP0", "CTRL", 0x0)
         self.usrp_source.set_gpio_attr("FP0", "DDR",  0x10, 0x10, 0)
         self.usrp_source.set_gpio_attr("FP0", "OUT",  0x10, 0x10, 0)
         super().start()
 
     def stop(self):
-        self.usrp_source.set_gpio_attr("FP0", "CTRL", 0xFFFFFFFF, 0xFFFFFFFF, 0)
-        self.usrp_source.set_gpio_attr("FP0", "DDR",  0x10, 0x00, 0)
-        self.usrp_source.set_gpio_attr("FP0", "OUT",  0x10, 0x00, 0)
-        self.usrp_source.close()
+        self.usrp_source.set_gpio_attr("FP0", "CTRL", 0x10, 0x10, 0)
+        self.usrp_source.set_gpio_attr("FP0", "DDR",  0xFFFFFFFF, 0x0, 0)
+        self.usrp_source.set_gpio_attr("FP0", "OUT",  0xFFFFFFFF, 0x0, 0)
         return super().stop()
 
 def main(top_block_cls=Sinusoid):
