@@ -95,13 +95,6 @@ class Transmitter():
     def set_tx_sinusoid(self):
         self.type = "sinusoid"
         del self.tx
-        print("Setting sinusoid transmitter")
-        print("Gain: "+str(self.gain))
-        print("Sampling Rate: "+str(self.samp_rate))
-        print("Frequency: "+str(self.freq))
-        print("Bandwidth: "+str(self.bandwidth))
-        print("Buffer Size: "+str(self.buffer_size))
-        print("SDR ADDR: "+str(self.SDR_ADDR))
         self.tx=Sinusoid(
             samp_rate=self.samp_rate,
             gain=self.gain,

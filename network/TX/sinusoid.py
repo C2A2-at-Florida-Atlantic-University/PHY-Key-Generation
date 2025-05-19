@@ -62,7 +62,6 @@ class Sinusoid(gr.top_block):
         self.usrp_sink.set_samp_rate(self.samp_rate)
         self.usrp_sink.set_center_freq(self.freq, 0)
         self.usrp_sink.set_gain(self.gain, 0)
-        # choose TX port on B200-series / X300-series
         self.usrp_sink.set_antenna("TX/RX", 0)
         self.usrp_sink.set_clock_rate(30.72e6, uhd.ALL_MBOARDS)
         self.usrp_sink.set_max_output_buffer(self.max_buf)
@@ -120,6 +119,11 @@ class Sinusoid(gr.top_block):
 
     def set_SDR_ID(self, SDR_ID):
         self.SDR_ID=SDR_ID
+        
+    def start(self):
+        super().start()
+        self.usrp_sink.set_gpio_attr("FP0", "DDR", 0x10, 0x10, 0)
+        self.usrp_sink.set_gpio_attr("FP0", "OUT", 0x10, 0x10, 0)
 
 def main(top_block_cls=Sinusoid, options=None):
     tb = top_block_cls()
