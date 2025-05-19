@@ -247,14 +247,14 @@ def create_dataset(filename, I, Q, channel, instance, ids, tx, rx, timestamp):
 def loadOTALabConfig():
     # OTA Lab node IPs
     NodeIPs = {
-        1:"ota-nuc1.emulab.net",
-        2:"ota-nuc2.emulab.net",
-        3:"ota-nuc3.emulab.net",
-        4:"ota-nuc4.emulab.net",
-        5:"pc761.emulab.net",
-        6:"pc775.emulab.net",
-        7:"pc761.emulab.net",
-        8:"pc761.emulab.net"
+        1:"ota-nuc1.emulab.net",    # b210 nuc node 1
+        2:"ota-nuc2.emulab.net",    # b210 nuc node 2
+        3:"ota-nuc3.emulab.net",    # b210 nuc node 3
+        4:"ota-nuc4.emulab.net",    # b210 nuc node 4
+        5:"pc783.emulab.net",       # x310 radio node 1
+        6:"pc792.emulab.net",       # x310 radio node 2
+        7:"pc796.emulab.net",       # x310 radio node 3
+        8:"pc781.emulab.net"        # x310 radio node 4
     }
     NodeGains = {
         1:{"tx":80,"rx":70},
@@ -294,13 +294,13 @@ def loadOTADenseConfig():
 
 if __name__ == "__main__":
 
-    # NodeIPs, NodeGains = loadOTALabConfig()
-    NodeIPs, NodeGains = loadOTADenseConfig()
+    NodeIPs, NodeGains = loadOTALabConfig()
+    # NodeIPs, NodeGains = loadOTADenseConfig()
 
     port = {'orch':'5001','radio':'5002','ai':'5003'}
 
-    examples= 5
-    freq = 3.558e9
+    examples= 100
+    freq = 3.450e9
     samp_rate = 600e3
 
     paramsTx = {
@@ -319,58 +319,45 @@ if __name__ == "__main__":
 
     type = "sinusoid" #pnSequence, MPSK, sinusoid
 
-    nodes = [1,2,3]
-
-    I, Q, channel, instance, ids, tx, rx, timestamp = collect_data_ping_pong_3Nodes(
-                                        params, 
-                                        nodes, 
-                                        examples, 
-                                        type
-                                    )
-
-    I_arr = np.array(I)
-    Q_arr = np.array(Q)
-    channel_arr = np.array(channel)
-    instance_arr = np.array(instance)
-    ids_arr = np.array(ids)
-    tx_arr = np.array(tx)
-    rx_arr = np.array(rx)
-    timestamp_arr = np.array(timestamp)
-
-    print("I shape:",I_arr.shape)
-    print("Q shape:",Q_arr.shape)
-    print("channel shape:",channel_arr.shape)
-    print("instance shape:",instance_arr.shape)
-    print("ids shape:",ids_arr.shape)   
-    ts = int(time.time())
-    create_dataset(
-        "Dataset_Channels_"+type+"_"+str(examples)+"_"+"".join(str(node) for node in nodes)+"_"+str(ts)+".hdf5",
-        I_arr,
-        Q_arr,
-        channel_arr, 
-        instance_arr, 
-        ids_arr,
-        tx_arr,
-        rx_arr,
-        timestamp_arr
-    )
-
-
-
-
-    # IQ_Samples, labels, instance, ids = collect_data_ping_pong_3Nodes(params, [nodes[2],nodes[0],nodes[1]], packages, type)
-
-    # IQ_Samples_arr = np.concatenate((IQ_Samples_arr,np.array(IQ_Samples)),axis=0)
-    # labels_arr = np.concatenate((labels_arr,np.array(labels)),axis=0)
-    # instance_arr = np.concatenate((instance_arr,np.array(instance)),axis=0)
-    # ids_arr = np.concatenate((ids_arr,np.array(ids)),axis=0)
-
-    # IQ_Samples, labels, instance, ids = collect_data_ping_pong_3Nodes(params, [nodes[1],nodes[2],nodes[2]], packages, type)
-
-    # IQ_Samples_arr = np.concatenate((IQ_Samples_arr,np.array(IQ_Samples)),axis=0)
-    # labels_arr = np.concatenate((labels_arr,np.array(labels)),axis=0)
-    # instance_arr = np.concatenate((instance_arr,np.array(instance)),axis=0)
-    # ids_arr = np.concatenate((ids_arr,np.array(ids)),axis=0)
+    nodeConfigs = [
+        [1,2,3],
+        [2,4,3],
+        [4,2,8],
+        [4,2,5],
+        [5,6,7],
+        [5,7,6],
+        [5,8,1],
+        [5,8,3]
+    ]
+    
+    for nodes in nodeConfigs:
+        print(f"Collecting data for node config: Alice={nodes[0]}, Bob={nodes[1]}, Eve={nodes[2]}")
+        I, Q, channel, instance, ids, tx, rx, timestamp = collect_data_ping_pong_3Nodes(
+                                            params, 
+                                            nodes, 
+                                            examples, 
+                                            type
+                                        )
+        I_arr = np.array(I)
+        Q_arr = np.array(Q)
+        channel_arr = np.array(channel)
+        instance_arr = np.array(instance)
+        ids_arr = np.array(ids)
+        tx_arr = np.array(tx)
+        rx_arr = np.array(rx)
+        timestamp_arr = np.array(timestamp)
+        ts = int(time.time())
+        create_dataset(
+            "Dataset_Channels_"+type+"_"+str(examples)+"_"+"".join(str(node) for node in nodes)+"_"+str(ts)+".hdf5",
+            I_arr,
+            Q_arr,
+            channel_arr, 
+            instance_arr, 
+            ids_arr,
+            tx_arr,
+            rx_arr,
+            timestamp_arr
+        )
 
     # ###############
 
