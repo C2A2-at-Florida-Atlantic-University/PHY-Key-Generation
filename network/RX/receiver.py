@@ -67,6 +67,7 @@ class Receiver():
         
     def set_rx_data(self):
         sps = 2 #symbols per sample
+        del self.rx
         self.rx=packetReceive(
             samp_rate=self.samp_rate,
             sps=sps,
@@ -79,6 +80,7 @@ class Receiver():
         )
         
     def set_rx_MPSK(self,M):
+        del self.rx
         self.rx=MPSK(
             samp_rate=self.samp_rate,
             sps=4,
@@ -92,6 +94,7 @@ class Receiver():
         )
         
     def set_rx_IQ(self):
+        del self.rx
         self.rx=Sinusoid(
             samp_rate=self.samp_rate,
             gain=self.gain,

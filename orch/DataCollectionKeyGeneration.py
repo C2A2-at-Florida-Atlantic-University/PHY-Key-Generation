@@ -153,14 +153,13 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
         if i%2 == 0:
             print("Setting TX Node: ", Bob)
             setTXNode(params,type,Bob,metadata)
+            
             print("Setting RX Node: ", Alice)
             setRXNode(params, Alice)
             time.sleep(timeSleep)
             
             print("Recording RX Node: ", Alice)
             real1, imaginary1 = RecordNodeData(Alice, samples=numberOfSamples)
-            # IQ_N1 = np.concatenate((imaginary1[0:numberOfSamples], real1[0:numberOfSamples]), axis=None)
-            # IQ_Samples = np.concatenate((IQ_Samples,[IQ_N1]), axis=0)
             I.append(real1[0:numberOfSamples])
             Q.append(imaginary1[0:numberOfSamples])
             channel.append(channel_Labels[0])
@@ -172,8 +171,6 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
             
             print("Recording RX Node: ", Eve)
             real2, imaginary2 = RecordNodeData(Eve, samples=numberOfSamples)
-            # IQ_N3_1 = np.concatenate((imaginary2[0:numberOfSamples], real2[0:numberOfSamples]), axis=None)
-            # IQ_Samples = np.concatenate((IQ_Samples,[IQ_N3_1]), axis=0)
             I.append(real2[0:numberOfSamples])
             Q.append(imaginary2[0:numberOfSamples])
             channel.append(channel_Labels[1])  
@@ -187,10 +184,6 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
                 plotTimeDomain(real1, imaginary1, samples=numberOfSamples, id=Alice)
                 plotTimeDomain(real2, imaginary2, samples=numberOfSamples, id=Eve)
             
-            # plot_spectrogram("Spectrogram Bob TX & Alice RX",real1[0:numberOfSamples],imaginary1[0:numberOfSamples])
-            # plot_waveform("Waveform Bob TX & Alice RX",real1[0:numberOfSamples],imaginary1[0:numberOfSamples])
-            # plot_spectrogram("Spectrogram Bob TX & Eve RX",real2[0:numberOfSamples],imaginary2[0:numberOfSamples])
-            # plot_waveform("Waveform Bob TX & Eve RX",real2[0:numberOfSamples],imaginary2[0:numberOfSamples])
             stopTXNode(Bob)
             time.sleep(timeSleep)
 
@@ -204,11 +197,6 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
             
             print("Recording RX Node: ", Bob)
             real1, imaginary1 = RecordNodeData(Bob, samples=numberOfSamples)
-            # IQ_N2 = np.concatenate((imaginary1[0:numberOfSamples], real1[0:numberOfSamples]), axis=None)
-            # if(i == 1):
-            #     IQ_Samples = np.array([IQ_N2])
-            # else:
-            #     IQ_Samples = np.concatenate((IQ_Samples,[IQ_N2]), axis=0)
             I.append(real1[0:numberOfSamples])
             Q.append(imaginary1[0:numberOfSamples])
             channel.append(channel_Labels[0])
@@ -220,8 +208,6 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
 
             print("Recording RX Node: ", Eve)
             real2, imaginary2 = RecordNodeData(Eve, samples=numberOfSamples)
-            # IQ_N3_2 = np.concatenate((imaginary2[0:numberOfSamples], real2[0:numberOfSamples]), axis=None)
-            # IQ_Samples = np.concatenate((IQ_Samples,[IQ_N3_2]), axis=0)
             I.append(real2[0:numberOfSamples])
             Q.append(imaginary2[0:numberOfSamples])
             channel.append(channel_Labels[2]) # Changed from "labels" to "channel"
