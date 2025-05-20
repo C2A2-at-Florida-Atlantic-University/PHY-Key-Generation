@@ -18,7 +18,7 @@ def recordIQ(nodeID,port,samples):
     # response_rx = requests.get(APILink(NodeIPs[nodeID],port,path))
     # print("Response:",response)
     response_json = response.json()
-    print("Response JSON:",response_json)
+    # print("Response JSON:",response_json)
     imag = response_json["imag"]
     real = response_json["real"]
     return real,imag
@@ -268,12 +268,12 @@ def loadOTALabConfig(
         8:gainConfigs["x310"]
     }
     NodeConfigs = [
-        # [1,2,3],  # b210, b210, b210
-        # [2,4,3],  # b210, b210, b210
-        # [4,2,8],  # b210, b210, x310
-        # [4,2,5],  # b210, b210, x310
-        # [1,4,5],  # b210, b210, x310
-        # [1,4,8],  # b210, b210, x310
+        [1,2,3],  # b210, b210, b210
+        [2,4,3],  # b210, b210, b210
+        [4,2,8],  # b210, b210, x310
+        [4,2,5],  # b210, b210, x310
+        [1,4,5],  # b210, b210, x310
+        [1,4,8],  # b210, b210, x310
         [5,7,8],  # x310, x310, x310
         [5,8,7],  # x310, x310, x310
         [8,5,4],  # x310, x310, b210
@@ -309,19 +309,19 @@ def loadOTADenseConfig(
         7:gainConfigs["b210"]
     }
     NodeConfigs = [
-        [1,2,3],  # EBC, Guesthouse, Moran
-        [2,3,1],  # Guesthouse, Moran, EBC
-        [1,3,2],  # EBC, Moran, Guesthouse
-        # [4,3,1],  # Ustar, Moran, EBC
-        # [4,3,2],  # Ustar, Moran, Guesthouse
-        # [4,1,3],  # Ustar, EBC, Moran
+        # [1,2,3],  # EBC, Guesthouse, Moran
+        # [2,3,1],  # Guesthouse, Moran, EBC
+        # [1,3,2],  # EBC, Moran, Guesthouse
+        [4,3,1],  # Ustar, Moran, EBC
+        [4,3,2],  # Ustar, Moran, Guesthouse
+        [4,1,3],  # Ustar, EBC, Moran
     ]
     return NodeIPs, NodeGains, NodeConfigs
 
 if __name__ == "__main__":
 
-    # NodeIPs, NodeGains, nodeConfigs = loadOTALabConfig()
-    NodeIPs, NodeGains, nodeConfigs = loadOTADenseConfig()
+    NodeIPs, NodeGains, nodeConfigs = loadOTALabConfig()
+    # NodeIPs, NodeGains, nodeConfigs = loadOTADenseConfig()
 
     port = {'orch':'5001','radio':'5002','ai':'5003'}
 

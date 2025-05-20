@@ -83,7 +83,12 @@ class packetTransmit(gr.top_block):
         self.usrp_sink.set_gain(self.gain, 0)
         # choose TX port on B200-series / X300-series
         self.usrp_sink.set_antenna("TX/RX", 0)
+        self.usrp_sink.set_clock_rate(30.72e6, uhd.ALL_MBOARDS)
         self.usrp_sink.set_max_output_buffer(self.max_buf)
+        self.usrp_sink.set_time_unknown_pps(uhd.time_spec())
+        self.usrp_sink.set_gpio_attr("FP0", "DDR", 0x10, 0x10, 0)
+        self.usrp_sink.set_gpio_attr("FP0", "OUT", 0x10, 0x10, 0)
+        
         self.digital_crc32_async_bb_1=digital.crc32_async_bb(False)
         self.digital_constellation_modulator_0=digital.generic_mod(
             constellation=bpsk,
@@ -193,6 +198,16 @@ class packetTransmit(gr.top_block):
     def set_SDR_ID(self, SDR_ID):
         self.SDR_ID=SDR_ID
 
+    def start(self):
+        self.usrp_sink.set_gpio_attr("FP0", "DDR", 0x10, 0x10, 0)
+        self.usrp_sink.set_gpio_attr("FP0", "OUT", 0x10, 0x10, 0)
+        super().start()
+        
+    def stop(self):
+        self.usrp_sink.set_gpio_attr("FP0", "DDR", 0xFFFFFFFF, 0x0, 0)
+        self.usrp_sink.set_gpio_attr("FP0", "OUT", 0xFFFFFFFF, 0x0, 0)
+        return super().stop()
+    
 def main(top_block_cls=packetTransmit):
 
     tb = top_block_cls()
