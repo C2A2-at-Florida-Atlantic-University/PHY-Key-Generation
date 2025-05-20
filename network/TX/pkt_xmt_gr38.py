@@ -20,6 +20,7 @@ if __name__ == '__main__':
         except:
             print("Warning: failed to XInitThreads()")
 
+import time
 from gnuradio import blocks, digital, filter, gr, uhd
 # from gnuradio.pdu import pdu_to_tagged_stream
 
@@ -114,7 +115,7 @@ class packetTransmit(gr.top_block):
         self.connect((self.blocks_throttle_0, 0), (self.blocks_multiply_const_vxx_0, 0))
         self.connect((self.digital_constellation_modulator_0, 0), (self.blocks_throttle_0, 0))
         self.connect((self.mmse_resampler_xx_0, 0), (self.usrp_sink, 0))
-
+    
     def closeEvent(self, event):
         self.settings.setValue("geometry", self.saveGeometry())
         event.accept()
@@ -207,13 +208,33 @@ class packetTransmit(gr.top_block):
         self.usrp_sink.set_gpio_attr("FP0", "DDR", 0xFFFFFFFF, 0x0, 0)
         self.usrp_sink.set_gpio_attr("FP0", "OUT", 0xFFFFFFFF, 0x0, 0)
         return super().stop()
+
+def str_to_length_and_decimals(text):
+    if isinstance(text, bytes):
+        values=[c for c in text]
+    else:
+        values=[ord(c) for c in text]
+    length=len(values)
+    return length, values
     
 def main(top_block_cls=packetTransmit):
 
-    tb = top_block_cls()
+    input = b'Hello World'
+    length, values = str_to_length_and_decimals(input)
+    tb = top_block_cls(
+        input=values,
+        input_len=length,
+        samp_rate=600e3,
+        sps=2,
+        gain=10,
+        freq=3.450e9,
+        buffer_size=32768,
+        bandwidth=20000000,
+        SDR_ADDR="",
+    )
 
     tb.start()
-
+    time.sleep(20)
     tb.stop()
     tb.wait()
 

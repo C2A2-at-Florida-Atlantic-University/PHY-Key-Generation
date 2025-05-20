@@ -10,6 +10,7 @@
 # Description: packet receive (for GNURadio 3.8)
 # GNU Radio version: v3.8.5.0-6-g57bd109d
 
+import time
 from gnuradio import blocks, digital, filter, gr, uhd
 
 class packetReceive(gr.top_block):
@@ -217,10 +218,19 @@ class packetReceive(gr.top_block):
     
 def main(top_block_cls=packetReceive):
 
-    tb = top_block_cls()
+    tb = top_block_cls(
+        samp_rate=600e3,
+        sps=2,
+        gain=60,
+        freq=3.450e9,
+        buffer_size=32768,
+        bandwidth=20000000,
+        SDR_ADDR="",
+        UDP_port=40860
+    )
 
     tb.start()
-
+    time.sleep(20)
     tb.stop()
     tb.wait()
 
