@@ -312,16 +312,17 @@ def loadOTADenseConfig(
         # [1,2,3],  # EBC, Guesthouse, Moran
         # [2,3,1],  # Guesthouse, Moran, EBC
         # [1,3,2],  # EBC, Moran, Guesthouse
-        [4,3,1],  # Ustar, Moran, EBC
-        [4,3,2],  # Ustar, Moran, Guesthouse
-        [4,1,3],  # Ustar, EBC, Moran
+        # [4,3,1],  # Ustar, Moran, EBC
+        # [4,3,2],  # Ustar, Moran, Guesthouse
+        # [4,1,3],  # Ustar, EBC, Moran
+        [4, 3, 5],  # Ustar, Moran, Local
     ]
     return NodeIPs, NodeGains, NodeConfigs
 
 if __name__ == "__main__":
 
-    NodeIPs, NodeGains, nodeConfigs = loadOTALabConfig()
-    # NodeIPs, NodeGains, nodeConfigs = loadOTADenseConfig()
+    # NodeIPs, NodeGains, nodeConfigs = loadOTALabConfig()
+    NodeIPs, NodeGains, nodeConfigs = loadOTADenseConfig()
 
     port = {'orch':'5001','radio':'5002','ai':'5003'}
 

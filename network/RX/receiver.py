@@ -160,6 +160,7 @@ class Receiver():
         return data
 
     def start(self):
+        self.clear_UDP_socket()
         self.rx.start()
 
     def stop(self):

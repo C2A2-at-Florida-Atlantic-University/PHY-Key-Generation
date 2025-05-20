@@ -119,6 +119,24 @@ blocks:
     bus_structure: null
     coordinate: [184, 463]
     rotation: 0
+    state: enabled
+- name: blocks_file_sink_0
+  id: blocks_file_sink
+  parameters:
+    affinity: ''
+    alias: ''
+    append: 'False'
+    comment: ''
+    file: test.iq
+    type: complex
+    unbuffered: 'False'
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [480, 220.0]
+    rotation: 0
     state: true
 - name: qtgui_freq_sink_x_0
   id: qtgui_freq_sink_x
@@ -199,7 +217,7 @@ blocks:
     bus_structure: null
     coordinate: [642, 269]
     rotation: 0
-    state: true
+    state: disabled
 - name: qtgui_time_sink_x_0
   id: qtgui_time_sink_x
   parameters:
@@ -296,7 +314,7 @@ blocks:
     bus_structure: null
     coordinate: [605, 125]
     rotation: 0
-    state: true
+    state: disabled
 - name: uhd_usrp_sink_0
   id: uhd_usrp_sink
   parameters:
@@ -554,6 +572,7 @@ blocks:
     sd_spec6: ''
     sd_spec7: ''
     show_lo_controls: 'False'
+    start_time: '-1.0'
     stream_args: ''
     stream_chans: '[]'
     sync: sync
@@ -572,7 +591,7 @@ blocks:
     bus_structure: null
     coordinate: [615, 439]
     rotation: 0
-    state: true
+    state: enabled
 - name: uhd_usrp_source_0
   id: uhd_usrp_source
   parameters:
@@ -925,6 +944,7 @@ blocks:
     sd_spec6: ''
     sd_spec7: ''
     show_lo_controls: 'False'
+    start_time: '-1.0'
     stream_args: ''
     stream_chans: '[]'
     sync: none
@@ -943,10 +963,11 @@ blocks:
     bus_structure: null
     coordinate: [166, 219]
     rotation: 0
-    state: true
+    state: enabled
 
 connections:
 - [analog_sig_source_x_0, '0', uhd_usrp_sink_0, '0']
+- [uhd_usrp_source_0, '0', blocks_file_sink_0, '0']
 - [uhd_usrp_source_0, '0', qtgui_freq_sink_x_0, '0']
 - [uhd_usrp_source_0, '0', qtgui_time_sink_x_0, '0']
 
