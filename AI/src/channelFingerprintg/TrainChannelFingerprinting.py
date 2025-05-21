@@ -6,7 +6,7 @@ from DatasetHandler import DatasetHandler, ChannelSpectrogram
 
 import time
 
-def train_channel_feature_extractor(dataset_name, config_name, repo_name, epochs=1000):
+def train_channel_feature_extractor(dataset, epochs=1000):
     '''
     train_feature_extractor trains an RFF extractor using triplet loss.
     
@@ -24,11 +24,8 @@ def train_channel_feature_extractor(dataset_name, config_name, repo_name, epochs
         channel-independent spectrograms.
     '''
     
-    dataset_handler = DatasetHandler(dataset_name, config_name, repo_name)
-    dataset_handler.get_dataframe_Info()
-    
     # Load preamble IQ samples and labels.
-    data,label = dataset_handler.load_data()
+    data,label = dataset
     
     # Add additive Gaussian noise to the IQ samples.
     #data = awgn(data, snr_range)
@@ -46,7 +43,7 @@ def train_channel_feature_extractor(dataset_name, config_name, repo_name, epochs
     alpha = 0.5
     beta = 0
 
-    batch_size = 5 # 64
+    batch_size = 64
     patience = 20
 
     #NetObj =  TripletNet_Channel()
@@ -95,7 +92,7 @@ def train_channel_feature_extractor(dataset_name, config_name, repo_name, epochs
                                                         label_valid)
     
     # Use the RMSprop optimizer for training.
-    LearningRate = 1e-3
+    LearningRate = 0.1
     opt = RMSprop(learning_rate=LearningRate)
 
     net.compile(
@@ -127,10 +124,52 @@ def train_channel_feature_extractor(dataset_name, config_name, repo_name, epochs
 run_for = 'Train Channel Fingerprinting'
 
 if run_for == 'Train Channel Fingerprinting':
-
-    dataset_name = "Key-Generation"
-    config_name = "Sinusoid-Powder-OTA-Lab" #"Sinusoid-Powder-OTA-Lab" "Sinusoid-Powder-OTA-Dense" 
-    repo_name="CAAI-FAU"
+    node_configurations = {
+        'OTA-lab': {
+            'dataset_name': 'Key-Generation',
+            'config_name': 'Sinusoid-Powder-OTA-Lab-Nodes',
+            'repo_name': 'CAAI-FAU',
+            'node_Ids': [
+                [1,2,3],
+                [1,4,5],
+                [1,4,8],
+                [2,4,3],
+                [4,2,5],
+                [4,2,8],
+                # [4,8,5],
+                # [5,7,8],
+                # [5,8,7],
+                # [8,4,1],
+                # [8,5,1],
+                # [8,5,4]
+            ]
+        },
+        'OTA-Dense': {
+            'dataset_name': 'Key-Generation',
+            'config_name': 'Sinusoid-Powder-OTA-Dense-Nodes',
+            'repo_name': 'CAAI-FAU',
+            'node_Ids': [
+                [1,2,3],
+                [1,2,5],
+                # [1,3,2],
+                # [4,3,5]
+            ]
+        }
+    }
+    configuration = node_configurations['OTA-Dense']
+    
+    dataset_name = configuration['dataset_name']
+    repo_name = configuration['repo_name']
+    node_Ids = configuration['node_Ids']
+    # Load the dataset first and feed that to the model
+    for idx, node_ids in enumerate(node_Ids):
+        config_name = configuration['config_name']+"-"+"".join(str(node) for node in node_ids)
+        print("Config name: ", config_name)
+        if idx == 0:
+            dataset = DatasetHandler(dataset_name, config_name, repo_name)
+        else:
+            dataset.add_dataset(dataset_name, config_name, repo_name)
+    dataset.get_dataframe_Info()
     # Train an RFF extractor.
     # Save the trained model.
-    feature_extractor = train_channel_feature_extractor(dataset_name, config_name, repo_name, epochs=1000)
+    feature_extractor = train_channel_feature_extractor(dataset.load_data(), epochs=1000)

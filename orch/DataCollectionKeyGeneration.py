@@ -140,13 +140,13 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
     rx = []
     timestamp = []
     id = 0
-    timeSleep = 0.15
+    timeSleep = 0.3
     Alice = nodes[0]
     Bob = nodes[1]
     Eve = nodes[2]
     numberOfSamples = 8192
     print("Setting RX Node: ", Eve)
-    setRXNode(params,Eve)
+    
     generatePlots = True
     while i<packages*2+1:
         print(i)
@@ -156,12 +156,14 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
             
             print("Setting RX Node: ", Alice)
             setRXNode(params, Alice)
+            setRXNode(params,Eve)
             time.sleep(timeSleep)
             
             print("Recording RX Node: ", Alice)
             real1, imaginary1 = RecordNodeData(Alice, samples=numberOfSamples)
-            I.append(real1[0:numberOfSamples])
-            Q.append(imaginary1[0:numberOfSamples])
+            idxStart1 = len(real1)-numberOfSamples
+            I.append(real1[idxStart1:])
+            Q.append(imaginary1[idxStart1:])
             channel.append(channel_Labels[0])
             instance.append(1)
             ids.append(id)
@@ -171,8 +173,9 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
             
             print("Recording RX Node: ", Eve)
             real2, imaginary2 = RecordNodeData(Eve, samples=numberOfSamples)
-            I.append(real2[0:numberOfSamples])
-            Q.append(imaginary2[0:numberOfSamples])
+            idxStart2 = len(real2)-numberOfSamples
+            I.append(real2[idxStart2:])
+            Q.append(imaginary2[idxStart2:])
             channel.append(channel_Labels[1])  
             instance.append(2)   
             ids.append(id)
@@ -181,8 +184,15 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
             timestamp.append(int(time.time()))
             
             if(generatePlots):
-                plotTimeDomain(real1, imaginary1, samples=numberOfSamples, id=Alice)
-                plotTimeDomain(real2, imaginary2, samples=numberOfSamples, id=Eve)
+                plotTimeDomain(
+                    real1[idxStart1:], 
+                    imaginary1[idxStart1:], 
+                    samples=numberOfSamples, id=Alice)
+                plotTimeDomain(
+                    real2[idxStart2:], 
+                    imaginary2[idxStart2:], 
+                    samples=numberOfSamples, id=Eve
+                )
             
             stopTXNode(Bob)
             time.sleep(timeSleep)
@@ -193,12 +203,14 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
             setTXNode(params,type,Alice,metadata)
             print("Setting RX Node: ", Bob)
             setRXNode(params,Bob)
+            setRXNode(params,Eve)
             time.sleep(timeSleep)
             
             print("Recording RX Node: ", Bob)
             real1, imaginary1 = RecordNodeData(Bob, samples=numberOfSamples)
-            I.append(real1[0:numberOfSamples])
-            Q.append(imaginary1[0:numberOfSamples])
+            idxStart1 = len(real1)-numberOfSamples
+            I.append(real1[idxStart1:])
+            Q.append(imaginary1[idxStart1:])
             channel.append(channel_Labels[0])
             instance.append(3)
             ids.append(id)
@@ -208,8 +220,9 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
 
             print("Recording RX Node: ", Eve)
             real2, imaginary2 = RecordNodeData(Eve, samples=numberOfSamples)
-            I.append(real2[0:numberOfSamples])
-            Q.append(imaginary2[0:numberOfSamples])
+            idxStart2 = len(real2)-numberOfSamples
+            I.append(real2[idxStart2:])
+            Q.append(imaginary2[idxStart2:])
             channel.append(channel_Labels[2]) # Changed from "labels" to "channel"
             instance.append(4)
             ids.append(id)
@@ -220,8 +233,15 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
             stopTXNode(Alice)
             
             if(generatePlots):
-                plotTimeDomain(real1, imaginary1, samples=numberOfSamples, id=Bob)
-                plotTimeDomain(real2, imaginary2, samples=numberOfSamples, id=Eve)
+                plotTimeDomain(
+                    real1[idxStart1:], 
+                    imaginary1[idxStart1:], 
+                    samples=numberOfSamples, id=Bob)
+                plotTimeDomain(
+                    real2[idxStart2:], 
+                    imaginary2[idxStart2:], 
+                    samples=numberOfSamples, id=Eve
+                )
             time.sleep(timeSleep)
         
         i = i + 1
@@ -315,7 +335,45 @@ def loadOTADenseConfig(
         # [4,3,1],  # Ustar, Moran, EBC
         # [4,3,2],  # Ustar, Moran, Guesthouse
         # [4,1,3],  # Ustar, EBC, Moran
-        [4, 3, 5],  # Ustar, Moran, Local
+        # [4, 3, 5],  # Ustar, Moran, Local
+        [1,2,5]
+    ]
+    return NodeIPs, NodeGains, NodeConfigs
+
+def loadOTARooftopConfig(
+        gainConfigs={
+            "x310":{"tx":31,"rx":31},
+            "b210":{"tx":80,"rx":70}
+            }
+    ):
+    # OTA Lab node IPs
+    NodeIPs = {
+        1:"cnode-ebc.emulab.net",       # EBC dense node with b210
+        2:"cnode-guesthouse.emulab.net",# Guesthouse dense node with b210
+        3:"cnode-moran.emulab.net",     # Moran dense node with b210
+        4:"cnode-ustar.emulab.net",     # Ustar dense node with b210
+        5:"localhost",                  # Local computer with b210
+        6:"162.168.10.101",             # Jetson nano 1 with b210
+        7:"162.168.10.102"              # Jetson nano 2 with b210
+    }
+    NodeGains = {
+        1:gainConfigs["x310"],
+        2:gainConfigs["x310"],
+        3:gainConfigs["x310"],
+        4:gainConfigs["x310"],
+        5:gainConfigs["x310"],
+        6:gainConfigs["x310"],
+        7:gainConfigs["x310"]
+    }
+    NodeConfigs = [
+        # [1,2,3],  # EBC, Guesthouse, Moran
+        # [2,3,1],  # Guesthouse, Moran, EBC
+        # [1,3,2],  # EBC, Moran, Guesthouse
+        # [4,3,1],  # Ustar, Moran, EBC
+        # [4,3,2],  # Ustar, Moran, Guesthouse
+        # [4,1,3],  # Ustar, EBC, Moran
+        # [4, 3, 5],  # Ustar, Moran, Local
+        [1,2,5]
     ]
     return NodeIPs, NodeGains, NodeConfigs
 
@@ -364,7 +422,7 @@ if __name__ == "__main__":
         timestamp_arr = np.array(timestamp)
         ts = int(time.time())
         create_dataset(
-            "Dataset_Channels_"+type+"_"+str(examples)+"_"+"".join(str(node) for node in nodes)+"_"+str(ts)+".hdf5",
+            "Dataset_OTADense_Channels_"+type+"_"+str(examples)+"_"+"".join(str(node) for node in nodes)+"_"+str(ts)+".hdf5",
             I_arr,
             Q_arr,
             channel_arr, 

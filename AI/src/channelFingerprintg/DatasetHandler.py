@@ -1,14 +1,10 @@
 import numpy as np
-from datasets import Dataset, DatasetDict
+from datasets import Dataset, DatasetDict, DownloadMode
 import datasets
 import pandas as pd
-import huggingface_hub as hf
-import seaborn as sns
 import matplotlib.pyplot as plt
 from DatasetGenerator import DatasetGenerator
 import numpy as np
-from numpy import sum,sqrt
-from numpy.random import standard_normal, uniform
 
 from scipy import signal
 
@@ -21,7 +17,14 @@ class DatasetHandler():
         self.load_dataset()
         
     def load_dataset(self):
-        self.dataFrame = datasets.load_dataset(self.repo_name+"/"+self.dataset_name, self.config_name)
+        path = self.repo_name+"/"+self.dataset_name
+        print("Path: ", path)
+        print("Config name: ", self.config_name)
+        self.dataFrame = datasets.load_dataset(
+            path,
+            self.config_name,
+            download_mode=DownloadMode.FORCE_REDOWNLOAD
+        )
         # self.get_dataframe_Info()
         if isinstance(self.dataFrame, DatasetDict):
             self.dataFrame = pd.concat([self.dataFrame[key].to_pandas() for key in self.dataFrame.keys()])
@@ -29,6 +32,17 @@ class DatasetHandler():
         elif isinstance(self.dataFrame, Dataset):
             # convert to pandas dataframe
             self.dataFrame = self.dataFrame.to_pandas()
+            
+    def add_dataset(self, dataset_name, config_name, repo_name="CAAI-FAU"):
+        '''Add a new dataset to the existing dataset.'''
+        new_dataset = datasets.load_dataset(repo_name+"/"+dataset_name, config_name)
+        if isinstance(new_dataset, DatasetDict):
+            new_dataset = pd.concat([new_dataset[key].to_pandas() for key in new_dataset.keys()])
+        # Check if dataframe is a dataset
+        elif isinstance(new_dataset, Dataset):
+            # convert to pandas dataframe
+            new_dataset = new_dataset.to_pandas()
+        self.dataFrame = pd.concat([self.dataFrame, new_dataset], ignore_index=True)
         
     def get_dataframe_Info(self):
         print("DataFrame Info:")
@@ -58,8 +72,8 @@ class DatasetHandler():
         return data_complex
     
     def load_data(self):
-        # label = self.dataFrame["channel"]
-        label = self.dataFrame["label"]
+        label = self.dataFrame["channel"]
+        # label = self.dataFrame["label"]
         label = label.astype(int)
         label = np.transpose(label)
         data = self.convert_to_complex()
@@ -167,7 +181,7 @@ def plot_channel_spectrogram(data_channel_spec):
 if __name__ == "__main__":
     # Example usage
     dataset_name = "Key-Generation"
-    config_name = "Sinusoid-Powder-OTA-Dense" #"Sinusoid-Powder-OTA-Lab"
+    config_name = "Sinusoid-Powder-OTA-Dense-Nodes-123" #"Sinusoid-Powder-OTA-Lab"
     repo_name="CAAI-FAU"
     dataset_handler = DatasetHandler(dataset_name, config_name, repo_name)
     dataset_handler.get_dataframe_Info()
