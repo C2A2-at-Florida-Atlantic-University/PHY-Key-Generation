@@ -8,7 +8,7 @@ from tensorflow.keras.regularizers import l2
 
 def divisible_random(a,b,n):
     if b-a < n:
-      raise Exception('{} is too big'.format(n))
+        raise Exception('{} is too big'.format(n))
         # return a
     result = random.randint(a, b)
     while result % n != 0:
@@ -172,11 +172,12 @@ class QuadrupletNet_Channel():
     def __init__(self):
         pass
         
-    def create_quadruplet_net(self, embedding_net, alpha1, alpha2):
+    def create_quadruplet_net(self, embedding_net, alpha, beta, gamma):
         
         # embedding_net = encoder()
-        self.alpha = alpha1
-        self.beta = alpha2
+        self.alpha = alpha
+        self.beta = beta
+        self.gamma = gamma
         
         input_1 = Input([self.datashape[1],self.datashape[2],self.datashape[3]])
         input_2 = Input([self.datashape[1],self.datashape[2],self.datashape[3]])
@@ -204,14 +205,7 @@ class QuadrupletNet_Channel():
         D3 = K.sum(K.square(positive-negative2),axis=1)
         # distance between the negative 1 and negative 2 features (Alice-Eve & Bob-Eve)
         D4 = K.sum(K.square(negative1-negative2),axis=1)
-        # Minimize distance between anchor and positive by maximizing distance between anchor and negative 1 with alpha defining threshold
-        D1_D2 = D1 - D2 + self.alpha
-        # Minimize distance between anchor and positive by maximizing distance between positive and negative 2 with alpha defining threshold
-        D1_D3 = D1 - D3 + self.alpha
-        # Minimize distance between anchor and positive by maximizing distance between negative 1 and negative 2 with beta defining threshold
-        D1_D4 = D1 - D4 + self.beta
-        # Compute loss
-        loss = K.maximum(D1_D2 + D1_D3 + D1_D4,0.0)
+        loss = K.maximum(D1 - D2 + self.alpha,0.0) + K.maximum(D1 - D3 + self.beta,0.0) + K.maximum(D1 - D4 + self.gamma,0.0)
         return loss  
 
     def quantization_layer(self,x):

@@ -52,8 +52,9 @@ def train_channel_feature_extractor(
     print("shape: ", data.shape)
 
     data_length = len(data)
-    alpha1 = 0.5
-    alpha2 = 0.2
+    alpha = 0.5
+    beta = 0.5
+    gamma = 0.2
 
     batch_size = 40
     patience = 20
@@ -68,7 +69,7 @@ def train_channel_feature_extractor(
     
     # Create the quadruplet net using the RFF extractor.
     #net = NetObj.create_triplet_net(feature_extractor, alpha1)
-    net = NetObj.create_quadruplet_net(feature_extractor, alpha1, alpha2)
+    net = NetObj.create_quadruplet_net(feature_extractor, alpha, beta, gamma)
 
     # Create callbacks during training. The training stops when validation loss 
     # does not decrease for 30 epochs.
@@ -133,7 +134,7 @@ def train_channel_feature_extractor(
 
     timestamp = time.time()
 
-    feature_extractor.save(folder_models+'QExtractor2_'+str(fft_len)+'_alpha'+str(alpha1)+'_batch'+str(batch_size)+'_val'+str(validation_size)+'_RMS'+str(LearningRate)+'_DSsin2.4dev1278-'+str(data_length)+'_'+str(timestamp)+'.h5')
+    feature_extractor.save(folder_models+'QExtractor2_'+str(fft_len)+'_alpha'+str(alpha)+'_batch'+str(batch_size)+'_val'+str(validation_size)+'_RMS'+str(LearningRate)+'_DSsin2.4dev1278-'+str(data_length)+'_'+str(timestamp)+'.h5')
     return feature_extractor
 
 if __name__ == '__main__':

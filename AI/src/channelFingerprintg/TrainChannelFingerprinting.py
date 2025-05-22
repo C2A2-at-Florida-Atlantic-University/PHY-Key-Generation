@@ -41,7 +41,8 @@ def train_channel_feature_extractor(dataset, epochs=1000):
 
     data_length = len(data)
     alpha = 0.5
-    beta = 0
+    beta = 0.5
+    gamma = 0.2
 
     batch_size = 64
     patience = 20
@@ -56,7 +57,7 @@ def train_channel_feature_extractor(dataset, epochs=1000):
     
     # Create the quadruplet net using the RFF extractor.
     #net = NetObj.create_triplet_net(feature_extractor, alpha1)
-    net = NetObj.create_quadruplet_net(feature_extractor, alpha, beta)
+    net = NetObj.create_quadruplet_net(feature_extractor, alpha, beta, gamma)
 
     # Create callbacks during training. The training stops when validation loss 
     # does not decrease for 30 epochs.
@@ -68,7 +69,7 @@ def train_channel_feature_extractor(dataset, epochs=1000):
     reduce_lr = ReduceLROnPlateau(monitor='val_loss', 
                                     min_delta = 0, 
                                     factor = 0.1, 
-                                    patience = 10, 
+                                    patience = 20, 
                                     verbose=1
                                     )
     callbacks = [early_stop, reduce_lr]
@@ -121,9 +122,7 @@ def train_channel_feature_extractor(dataset, epochs=1000):
     
     return feature_extractor
 
-run_for = 'Train Channel Fingerprinting'
-
-if run_for == 'Train Channel Fingerprinting':
+if __name__ == "__main__":
     node_configurations = {
         'OTA-lab': {
             'dataset_name': 'Key-Generation',
@@ -149,14 +148,14 @@ if run_for == 'Train Channel Fingerprinting':
             'config_name': 'Sinusoid-Powder-OTA-Dense-Nodes',
             'repo_name': 'CAAI-FAU',
             'node_Ids': [
-                [1,2,3],
+                # [1,2,3],
                 [1,2,5],
                 # [1,3,2],
                 # [4,3,5]
             ]
         }
     }
-    configuration = node_configurations['OTA-Dense']
+    configuration = node_configurations['OTA-lab']
     
     dataset_name = configuration['dataset_name']
     repo_name = configuration['repo_name']
