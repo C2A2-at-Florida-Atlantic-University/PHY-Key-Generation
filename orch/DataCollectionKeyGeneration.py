@@ -288,6 +288,7 @@ def loadOTALabConfig(
         8:gainConfigs["x310"]
     }
     NodeConfigs = [
+        # Create every triplet combination for nodes 1,2,3,4,5,6,7,8
         [1,2,3],  # b210, b210, b210
         [2,4,3],  # b210, b210, b210
         [4,2,8],  # b210, b210, x310
