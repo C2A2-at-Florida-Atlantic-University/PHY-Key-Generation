@@ -36,11 +36,11 @@ class DatasetHandler():
     def add_dataset(self, dataset_name, config_name, repo_name="CAAI-FAU"):
         '''Add a new dataset to the existing dataset.'''
         new_dataset = datasets.load_dataset(repo_name+"/"+dataset_name, config_name)
+        max_id = self.dataFrame["ids"].max() # Get the maximum ids number in the current dataset
+        new_dataset = new_dataset.map(lambda x: {"ids": x["ids"] + max_id}) # Add the maximum ids number to the ids number of the new dataset
         if isinstance(new_dataset, DatasetDict):
             new_dataset = pd.concat([new_dataset[key].to_pandas() for key in new_dataset.keys()])
-        # Check if dataframe is a dataset
         elif isinstance(new_dataset, Dataset):
-            # convert to pandas dataframe
             new_dataset = new_dataset.to_pandas()
         self.dataFrame = pd.concat([self.dataFrame, new_dataset], ignore_index=True)
         

@@ -1,37 +1,16 @@
 import tensorflow as tf
-
-tf.keras.backend.clear_session()
-
-gpus = tf.config.experimental.list_physical_devices('GPU')
-if gpus:
-    try:
-        # Allow memory growth for GPU
-        for gpu in gpus:
-            print(gpu)
-            tf.config.experimental.set_memory_growth(gpu, True)
-    except RuntimeError as e:
-        print(e)
-        
-
 from statistics import mean
 import numpy as np
-import h5py
 import unireedsolomon as rs
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 from nistrng import *
 import hashlib
-import binascii
 import time
-import tensorflow as tf
-from tensorflow.keras import backend as K
 from tensorflow.keras.models import load_model
 from tensorflow.keras.utils import plot_model
-from sklearn.neighbors import KNeighborsClassifier
 from deep_learning_models import QuadrupletNet_Channel
-# from deep_learning_models import TripletNet, TripletNet_Channel, identity_loss
 from DatasetHandler import DatasetHandler, ChannelSpectrogram
-
 
 def feature_quantization(features):
     mean_features = mean(features)
@@ -164,7 +143,7 @@ def KDR(A,B):
     kdr = kdr/len(A)
     return kdr
     
-def KDR_data(data):
+def BDR_data(data):
     j = 0
     KDR_AB = []
     KDR_AC = []
@@ -176,115 +155,22 @@ def KDR_data(data):
         KDR_BC.append(KDR(data[j+2],data[j+3]))
         j = j + 4
         pbar.update(1)
-    return KDR_AB, KDR_AC, KDR_BC
+    return [KDR_AB, KDR_AC, KDR_BC]
 
-if __name__ == "__main__":
-    node_configurations = {
-        'OTA-lab': {
-            'dataset_name': 'Key-Generation',
-            'config_name': 'Sinusoid-Powder-OTA-Lab-Nodes',
-            'repo_name': 'CAAI-FAU',
-            'node_Ids': [
-                # [1,2,3],
-                # [1,4,5],
-                # [1,4,8],
-                # [2,4,3],
-                # [4,2,5],
-                # [4,2,8],
-                [4,8,5],
-                [5,7,8],
-                [5,8,7],
-                [8,4,1],
-                [8,5,1],
-                [8,5,4]
-            ]
-        },
-        'OTA-Dense': {
-            'dataset_name': 'Key-Generation',
-            'config_name': 'Sinusoid-Powder-OTA-Dense-Nodes',
-            'repo_name': 'CAAI-FAU',
-            'node_Ids': [
-                # [1,2,3],
-                # [1,2,5],
-                # [1,3,2],
-                [4,3,5]
-            ]
-        }
-    }
-    
-    feature_extractor_name = "QExtractor2_256_alpha0.5_beta0_batch64_val0.1_RMS0.1_DSsin2.4dev1278-800_1747880103.773288.h5"
-    with tf.device('/CPU:0'):
-        print("loading model")
-        feature_extractor = load_model(feature_extractor_name)
-    #feature_extractor.summary()
-    #plot_model(feature_extractor, to_file='featureExtractor.png', show_shapes=True, show_layer_names=True)
-
-    configuration = node_configurations['OTA-Dense']
-    dataset_name = configuration['dataset_name']
-    repo_name = configuration['repo_name']
-    node_Ids = configuration['node_Ids']
+def load_data(dataset_name, config_name, repo_name, node_Ids):
     # Load the dataset first and feed that to the model
     for idx, node_ids in enumerate(node_Ids):
-        config_name = configuration['config_name']+"-"+"".join(str(node) for node in node_ids)
-        print("Config name: ", config_name)
+        node_config_name = config_name+"-"+"".join(str(node) for node in node_ids)
+        print("Config name: ", node_config_name)
         if idx == 0:
-            dataset = DatasetHandler(dataset_name, config_name, repo_name)
+            dataset = DatasetHandler(dataset_name, node_config_name, repo_name)
         else:
-            dataset.add_dataset(dataset_name, config_name, repo_name)
+            dataset.add_dataset(dataset_name, node_config_name, repo_name)
     dataset.get_dataframe_Info()
     data, labels = dataset.load_data()
-    
-    ChannelSpectrogramObj = ChannelSpectrogram()
-    # Load the classification dataset. (IQ samples and labels)
-    raw_data = data
+    return data, labels
 
-    print(data[0])
-    # Convert IQ samples to channel independent spectrograms. (classification data)
-    t_start = time.time()
-    print("converting IQ to spectrograms")
-    data = ChannelSpectrogramObj.channel_spectrogram(np.array(data),256)
-    t_end = time.time()
-    print("Time for signal processing: ", t_end-t_start)
-
-    print(data.shape)
-    t_start = time.time()
-    # Extract RFFs from channel independent spectrograms.
-    print("extracting features")
-    features = feature_extractor.predict(data)
-    t_end = time.time()
-    print("Time for fingerprinting: ", t_end-t_start)
-    #print(features)
-    del data
-    #print(features[0])
-
-    # Separate real and imaginary parts
-    real_parts = np.real(raw_data)
-    imaginary_parts = np.imag(raw_data)
-    print(real_parts[0])
-    print(imaginary_parts[0])
-    plt.plot(real_parts[0], color='red')
-    plt.plot(imaginary_parts[0], color='blue')
-    plt.xlabel('Real Part')
-    plt.ylabel('Imaginary Part')
-    plt.title('Complex Data Plot')
-    plt.show()
-
-    #feature quantization
-    quantized_data = []
-    t_start = time.time()
-    for i in features:
-        features_quatized = feature_quantization(i)
-        quantized_data.append(features_quatized)
-
-    quantized_data = np.array(quantized_data)
-    t_end = time.time()
-    print("Time for quantization: ", t_end-t_start)
-    print(len(quantized_data[0]))
-    print(len(quantized_data))
-
-    #Bit Dissagreement Ratio
-
-    def groupAverage(arr, n):
+def groupAverage(arr, n):
         result = []
         i=0
         while i <len(arr):
@@ -296,60 +182,37 @@ if __name__ == "__main__":
             result.append(sum_n/n)
             i = i + n
         return result
-
-    quantized_data = quantized_data[0:400]
-
-    KDR_AB, KDR_AC, KDR_BC = KDR_data(quantized_data)
-    KDR_AB_average = np.sum(KDR_AB)/(len(KDR_AB))
-    print("Average KDR Alice-Bob:", KDR_AB_average)
-    KDR_AC_average = np.sum(KDR_AC)/(len(KDR_AC))
-    print("Average KDR Alice-Eve:", KDR_AC_average)
-    KDR_BC_average = np.sum(KDR_BC)/(len(KDR_BC))
-    print("Average KDR Bob-Eve:", KDR_BC_average)
+    
+def plot_BDR(KDR):
+    KDR_average = [np.sum(kdr)/(len(kdr)) for kdr in KDR]
+    print("Average KDR Alice-Bob:", KDR_average[0])
+    print("Average KDR Alice-Eve:", KDR_average[1])
+    print("Average KDR Bob-Eve:", KDR_average[2])
 
     batch_size = 2
-    KDR_AB_average_batch = groupAverage(KDR_AB, batch_size)
-    KDR_AC_average_batch = groupAverage(KDR_AC, batch_size)
-    KDR_BC_average_batch = groupAverage(KDR_BC, batch_size)
-
-
+    KDR_average_batch = [groupAverage(kdr,batch_size) for kdr in KDR]
+    
     plt.figure(figsize=[15,3])
-
-    plt.subplot(1, 3,1)
-    plt.plot(KDR_AB)
-    # naming the x axis
-    plt.xlabel('N Key Generated')
-    # naming the y axis
-    plt.ylabel('KDR')
-    plt.ylim(-0.05, 1)
-    plt.title("KDR Alice Bob")
-
-    plt.subplot(1, 3,2)
-    plt.plot(KDR_AC)
-    # naming the x axis
-    plt.xlabel('N Key Generated')
-    # naming the y axis
-    plt.ylabel('KDR')
-    plt.ylim(-0.05, 1)
-    plt.title("KDR Alice Eve")
-
-    plt.subplot(1, 3,3)
-    plt.plot(KDR_BC)
-    # naming the x axis
-    plt.xlabel('N Key Generated')
-    # naming the y axis
-    plt.ylabel('KDR')
-    plt.ylim(-0.05, 1)
-    plt.title("KDR Bob Eve")
+    
+    plot_titles = ["KDR Alice-Bob", "KDR Alice-Eve", "KDR Bob-Eve"]
+    for i in range(len(KDR)):
+        plt.subplot(1, 3,i+1)
+        plt.plot(KDR[i])
+        # naming the x axis
+        plt.xlabel('N Key Generated')
+        # naming the y axis
+        plt.ylabel('KDR')
+        plt.ylim(-0.05, 1)
+        plt.title(plot_titles[i])
 
     # KDR Bar
     barWidth = 0.25
     fig = plt.subplots(figsize =(12, 8))
     
     # set height of bar
-    AB = KDR_AB_average_batch
-    AE = KDR_AC_average_batch
-    BE = KDR_BC_average_batch
+    AB = KDR_average_batch[0]
+    AE = KDR_average_batch[1]
+    BE = KDR_average_batch[2]
     
     # Set position of bar on X axis
     br1 = np.arange(len(AB))
@@ -370,14 +233,47 @@ if __name__ == "__main__":
     plt.xticks([r + barWidth for r in range(len(AB))],
         np.arange(1, len(AB)+1)*batch_size)
 
-    plt.title("Bit Dissagreement Ratio Scenario 1")
+    plt.title("Bit Dissagreement Ratio Scenario")
     plt.legend()
-    plt.show()
+    # plt.show()
+    # Save the plot
+    plt.savefig('BDR.png')
+    
+def test_model(feature_extractor_name, configuration):
+    
+    feature_extractor = load_model(feature_extractor_name)
+    #feature_extractor.summary()
+    #plot_model(feature_extractor, to_file='featureExtractor.png', show_shapes=True, show_layer_names=True)
+    
+    data, _ = load_data(
+        configuration['dataset_name'], 
+        configuration['config_name'], 
+        configuration['repo_name'], 
+        configuration['node_Ids']
+    )
+    
+    ChannelSpectrogramObj = ChannelSpectrogram()
+    data = ChannelSpectrogramObj.channel_spectrogram(np.array(data),512)
+    features = feature_extractor.predict(data)
+    del data
+    
+    #feature quantization
+    quantized_data = []
+    for i in features:
+        features_quatized = feature_quantization(i)
+        quantized_data.append(features_quatized)
+    quantized_data = np.array(quantized_data)
 
+    #Bit Dissagreement Ratio
+    # quantized_data = quantized_data[:]
+    BDR = BDR_data(quantized_data)
+    
+    plot_BDR(BDR)
+    
     #Reconciliation
     k = int(len(quantized_data[0])/4)
-
-    n1 = int(k+(k/1)-1)
+    # k_i = 8
+    n1 = int(k+(k/(2))-1)
     print(n1)
     s1 = int(n1-k)
     t_start = time.time()
@@ -386,7 +282,7 @@ if __name__ == "__main__":
     print("Time for reconciliation (Alice,Bob,Eve): ", t_end-t_start)
     #print(reconciliation11)
 
-    n2 = int(k+(k/2)-1)
+    n2 = int(k+(k/(4))-1)
     print(n2)
     s2 = int(n2-k)
     t_start = time.time()
@@ -395,7 +291,7 @@ if __name__ == "__main__":
     print("Time for reconciliation (Alice,Bob,Eve): ", t_end-t_start)
     #print(reconciliation12)
 
-    n3 = int(k+(k/3)-1)
+    n3 = int(k+(k/(6))-1)
     print(n3)
     s3 = int(n3-k)
     t_start = time.time()
@@ -437,21 +333,7 @@ if __name__ == "__main__":
     print("Average reconciliation rate Alice-Eve:", rec_rate_AC_average1)
     rec_rate_BC_average1 = np.sum(rec_rate_data31)/(len(rec_rate_data31))
     print("Average reconciliation rate Bob-Eve:", rec_rate_BC_average1)
-
-    rec_rate_AB_average2 = np.sum(rec_rate_data12)/(len(rec_rate_data12))
-    print("Average reconciliation rate Alice-Bob:", rec_rate_AB_average2)
-    rec_rate_AC_average2 = np.sum(rec_rate_data22)/(len(rec_rate_data22))
-    print("Average reconciliation rate Alice-Eve:", rec_rate_AC_average2)
-    rec_rate_BC_average2 = np.sum(rec_rate_data32)/(len(rec_rate_data32))
-    print("Average reconciliation rate Bob-Eve:", rec_rate_BC_average2)
-
-    rec_rate_AB_average3 = np.sum(rec_rate_data13)/(len(rec_rate_data13))
-    print("Average reconciliation rate Alice-Bob:", rec_rate_AB_average3)
-    rec_rate_AC_average3 = np.sum(rec_rate_data23)/(len(rec_rate_data23))
-    print("Average reconciliation rate Alice-Eve:", rec_rate_AC_average3)
-    rec_rate_BC_average3 = np.sum(rec_rate_data33)/(len(rec_rate_data33))
-    print("Average reconciliation rate Bob-Eve:", rec_rate_BC_average3)
-
+    
     plt.figure(figsize=[15,3])
     plt.subplot(1, 3,1)
     plt.plot(rec_rate_data11)
@@ -461,7 +343,7 @@ if __name__ == "__main__":
     plt.ylabel('Reconciliation Rate')
     plt.ylim(-0.05, 1.05)
     plt.title("Reconciliation Rate Alice Bob for RS("+str(n1)+","+str(k)+")")
-
+    
     plt.subplot(1, 3,2)
     plt.plot(rec_rate_data21)
     # naming the x axis
@@ -480,6 +362,13 @@ if __name__ == "__main__":
     plt.ylim(-0.05, 1.05)
     plt.title("Reconciliation Rate Bob Eve for RS("+str(n1)+","+str(k)+")")
 
+    rec_rate_AB_average2 = np.sum(rec_rate_data12)/(len(rec_rate_data12))
+    print("Average reconciliation rate Alice-Bob:", rec_rate_AB_average2)
+    rec_rate_AC_average2 = np.sum(rec_rate_data22)/(len(rec_rate_data22))
+    print("Average reconciliation rate Alice-Eve:", rec_rate_AC_average2)
+    rec_rate_BC_average2 = np.sum(rec_rate_data32)/(len(rec_rate_data32))
+    print("Average reconciliation rate Bob-Eve:", rec_rate_BC_average2)
+    
     plt.figure(figsize=[15,3])
     plt.subplot(1, 3,1)
     plt.plot(rec_rate_data12)
@@ -508,6 +397,13 @@ if __name__ == "__main__":
     plt.ylim(-0.05, 1.05)
     plt.title("Reconciliation Rate Bob Eve for RS("+str(n2)+","+str(k)+")")
 
+    rec_rate_AB_average3 = np.sum(rec_rate_data13)/(len(rec_rate_data13))
+    print("Average reconciliation rate Alice-Bob:", rec_rate_AB_average3)
+    rec_rate_AC_average3 = np.sum(rec_rate_data23)/(len(rec_rate_data23))
+    print("Average reconciliation rate Alice-Eve:", rec_rate_AC_average3)
+    rec_rate_BC_average3 = np.sum(rec_rate_data33)/(len(rec_rate_data33))
+    print("Average reconciliation rate Bob-Eve:", rec_rate_BC_average3)
+    
     plt.figure(figsize=[15,3])
     plt.subplot(1, 3,1)
     plt.plot(rec_rate_data13)
@@ -535,7 +431,7 @@ if __name__ == "__main__":
     plt.ylabel('Reconciliation Rate')
     plt.ylim(-0.05, 1.05)
     plt.title("Reconciliation Rate Bob Eve for RS("+str(n3)+","+str(k)+")")
-
+    
     # set width of bar
     barWidth = 0.25
     fig = plt.subplots(figsize =(12, 8))
@@ -564,14 +460,16 @@ if __name__ == "__main__":
     plt.xticks([r + barWidth for r in range(len(AB))],
             ["RS("+str(n1)+","+str(k)+")", "RS("+str(n2)+","+str(k)+")", "RS("+str(n3)+","+str(k)+")"])
 
-    plt.title("Average Reconciliation Success Rate with variations on RS(N,K) - Scenario 3", fontsize = 15)
+    plt.title("Average Reconciliation Success Rate with variations on RS(N,K)", fontsize = 15)
     plt.legend()
-    plt.show()
+    # plt.show()
+    plt.savefig('Reconciliation.png')
 
     # Reconciliation Bar 1
     barWidth = 0.25
     fig = plt.subplots(figsize =(12, 8))
 
+    batch_size = 2
     # set height of bar
     AB = groupAverage(rec_rate_data11,batch_size)
     AE = groupAverage(rec_rate_data21,batch_size)
@@ -597,9 +495,10 @@ if __name__ == "__main__":
         np.arange(1, len(AB)+1)*batch_size)
     plt.yticks([0,1],["Unsuccessful", "Successful"]) 
 
-    plt.title("Reconciliation Success Rate Scenario 1 - RS("+str(n1)+","+str(k)+")")
+    plt.title("Reconciliation Success Rate - RS("+str(n1)+","+str(k)+")")
     plt.legend()
-    plt.show()
+    # plt.show()
+    plt.savefig('Reconciliation_Success_Rate_RS_'+str(n1)+'_'+str(k)+'.png')
 
     # Reconciliation Bar 2
     barWidth = 0.25
@@ -632,9 +531,9 @@ if __name__ == "__main__":
 
     plt.title("Reconciliation Success Rate Scenario 1 - RS("+str(n2)+","+str(k)+")")
     plt.legend()
-    plt.show()
-
-
+    # plt.show()
+    plt.savefig('Reconciliation_Success_Rate_RS_'+str(n2)+'_'+str(k)+'.png')
+    
     # Reconciliation Bar 3
     barWidth = 0.25
     fig = plt.subplots(figsize =(12, 8))
@@ -661,12 +560,13 @@ if __name__ == "__main__":
     plt.xlabel('Probe Number', fontweight ='bold', fontsize = 15)
     plt.ylabel('Reconciliation Success', fontweight ='bold', fontsize = 15)
     plt.xticks([r + barWidth for r in range(len(AB))],
-        np.arange(1, len(AB)+1)*batch_size)
+        np.arange(1, len(AB)+1)*32)
     plt.yticks([0,1],["Unsuccessful", "Successful"]) 
 
     plt.title("Reconciliation Success Rate Scenario 1 - RS("+str(n3)+","+str(k)+")")
     plt.legend()
-    plt.show()
+    # plt.show()
+    plt.savefig('Reconciliation_Success_Rate_RS_'+str(n3)+'_'+str(k)+'.png')
 
     #Privacy Amplification
     priv_amp_data = []
@@ -691,3 +591,39 @@ if __name__ == "__main__":
     print(priv_amp_bin_data[0])
 
     NIST_RNG_test(priv_amp_bin_data)
+    
+if __name__ == "__main__":
+    node_configurations = {
+        'OTA-Lab': {
+            'dataset_name': 'Key-Generation',
+            'config_name': 'Sinusoid-Powder-OTA-Lab-Nodes',
+            'repo_name': 'CAAI-FAU',
+            'node_Ids': [
+                [4,8,5],
+                [5,7,8],
+                [5,8,7],
+                [8,4,1],
+                [8,5,1],
+                [8,5,4]
+            ]
+        },
+        'OTA-Dense': {
+            'dataset_name': 'Key-Generation',
+            'config_name': 'Sinusoid-Powder-OTA-Dense-Nodes',
+            'repo_name': 'CAAI-FAU',
+            'node_Ids': [
+                # [1,2,3],
+                [1,2,5],
+                # [1,3,2],
+                [4,3,5]
+            ]
+        }
+    }
+    
+    # model_name = "QExtractor2_256_alpha0.5_beta0.5_batch64_val0.1_RMS0.1_DSsin2.4dev1278-2400_1747933802.2071776.h5"
+    # model_name = "/home/Research/PowderKeyGen/AI/src/channelFingerprintg/QExtractor2_256_alpha0.5_beta0.5_batch32_val0.1_RMS0.1_Sinusoid-Powder-OTA-Dense-Nodes_1747937776.2942712.h5"
+    # model_name = "QExtractor2_256_alpha0.4_beta0.4_batch32_val0.1_RMS0.1_Sinusoid-Powder-OTA-Dense-Nodes_1747939544.h5"
+    # model_name = "QExtractor2_256_alpha0.5_beta0.5_batch64_val0.2_RMS0.1_Sinusoid-Powder-OTA-Lab-Nodes_1747942988.h5"
+    model_name = "FeatureExtractor_512_alpha0.4_beta0.4_SGD_lr0.5_Sinusoid-Powder-OTA-Lab-Nodes_1747971547.h5"
+    configuration = node_configurations['OTA-Dense'] #'OTA-Lab' # 'OTA-Dense'
+    test_model(model_name, configuration)
