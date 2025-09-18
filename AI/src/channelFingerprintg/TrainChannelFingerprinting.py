@@ -134,12 +134,6 @@ if __name__ == "__main__":
                 [8,4,1],
                 [8,5,1],
                 [8,5,4]
-                [4,8,5],
-                [5,7,8],
-                [5,8,7],
-                [8,4,1],
-                [8,5,1],
-                [8,5,4]
             ]
         },
         'OTA-Dense': {
@@ -165,9 +159,9 @@ if __name__ == "__main__":
     optimizer = "SGD" # "RMSprop", "SGD", "Adam"
     train_configurations = {
         "QuadrupletNet": {
-            "alpha": 0.5,
-            "beta": 0.5,
-            "gamma": 0.1,
+            "alpha": 0.2,
+            "beta": 0.2,
+            "gamma": 0.5,
             "fft_len": fft_len,
             "batch_size": batch_size,
             "validation_size": val_size,
@@ -231,12 +225,12 @@ if __name__ == "__main__":
                 'config_name': 'Sinusoid-Powder-OTA-Lab-Nodes',
                 'repo_name': 'CAAI-FAU',
                 'node_Ids': [
-                    # [1,2,3],
-                    # [1,4,5],
-                    # [1,4,8],
-                    # [2,4,3],
-                    # [4,2,5],
-                    # [4,2,8],
+                    [1,2,3],
+                    [1,4,5],
+                    [1,4,8],
+                    [2,4,3],
+                    [4,2,5],
+                    [4,2,8],
                     [4,8,5],
                     [5,7,8],
                     [5,8,7],

@@ -183,51 +183,17 @@ def get_latest_results_file(results_directory, results_file):
     results_files.sort(key=lambda x: os.path.getmtime(os.path.join(results_directory, x)))
     return results_files[-1]
 
-if __name__ == "__main__":
-    node_configurations = {
-        'OTA-lab': {
-            'dataset_name': 'Key-Generation',
-            'config_name': 'Sinusoid-Powder-OTA-Lab-Nodes',
-            'repo_name': 'CAAI-FAU',
-            'node_Ids': [
-                # [1,2,3],
-                # [1,4,5],
-                # [1,4,8],
-                # [2,4,3],
-                # [4,2,5],
-                # [4,2,8],
-                [4,8,5],
-                [5,7,8],
-                [5,8,7],
-                [8,4,1],
-                [8,5,1],
-                [8,5,4]
-            ]
-        },
-        'OTA-Dense': {
-            'dataset_name': 'Key-Generation',
-            'config_name': 'Sinusoid-Powder-OTA-Dense-Nodes',
-            'repo_name': 'CAAI-FAU',
-            'node_Ids': [
-                # [1,2,3],
-                # [1,2,5],
-                # [1,3,2],
-                [4,3,5]
-            ]
-        }
-    }
-    home = "/Users/josea/Workspaces/Powder/"
-    models_directory = home+"Models/"
-    feature_extractor_name = "QExtractor2_256_alpha0.5_beta0_batch64_val0.1_RMS0.1_DSsin2.4dev1278-800"
-    
+def test_model(feature_extractor_name, node_configurations, home="/home/Research/POWDER/", generate_results=True):
     configuration = node_configurations['OTA-Dense']
     dataset_name = configuration['dataset_name']
     repo_name = configuration['repo_name']
     node_Ids = configuration['node_Ids']
-        
-    node_config_name = repo_name+"_"+dataset_name+"_"+str(node_Ids)+"_"+feature_extractor_name
+    config_name = configuration['config_name']
+
+    extractor_name = feature_extractor_name.split("/")[-1]
+    test_configs_name = repo_name+"_"+dataset_name+"_"+str(node_Ids)+"_"+extractor_name
     results_directory = home+"Results/"
-    results_file = "Results_"+node_config_name
+    results_file = "Results_"+test_configs_name
 
     # Load the dataset first and feed that to the model
     for idx, node_ids in enumerate(node_Ids):
@@ -240,11 +206,10 @@ if __name__ == "__main__":
     dataset.get_dataframe_Info()
     data, labels = dataset.load_data()
     
-    generate_results = False
     if generate_results:
         with tf.device('/CPU:0'):
             print("loading model")
-            feature_extractor = load_model(models_directory+feature_extractor_name+".h5")
+            feature_extractor = load_model(feature_extractor_name)
         #feature_extractor.summary()
         #plot_model(feature_extractor, to_file='featureExtractor.png', show_shapes=True, show_layer_names=True)
         
