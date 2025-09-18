@@ -1,8 +1,8 @@
 import h5py
 import numpy as np
 
-
-directory_results = "/home/Research/models/ChannelFingerprinting/results/"
+home = "/Users/josea/Workspaces/Powder/"
+directory_results = home+"Results/"
 #file_results = "QExtractor_results_Dataset_Channels_sinusoid_dev_871_400_freq_2.4e9_sr_1e6_gain_0_60_512_batch256_val0.1_RMS_DSsin2.4dev1287-4800.h5"
 #file_results = "QExtractor_results_Dataset_Channels_sinusoid_dev_128_400_freq_2.4e9_sr_1e6_gain_0_60_512_batch256_val0.1_RMS_DSsin2.4dev1287-4800.h5"
 file_results = "QExtractor_results_Dataset_Channels_sinusoid_dev_5109_400_freq_2.4e9_sr_1e6_gain_0_60_512_batch256_val0.1_RMS_DSsin2.4dev1287-4800.h5"

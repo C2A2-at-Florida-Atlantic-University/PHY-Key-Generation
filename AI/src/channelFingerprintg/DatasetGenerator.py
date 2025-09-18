@@ -133,7 +133,7 @@ def load_OTA_dense_config():
 
 if __name__ == "__main__":
     # Example usage
-    saveDataFrame = True
+    saveDataFrame = False
     names = ['Alice', 'Bob', 'Eve']
     
     site = "Powder-OTA-Lab" # "Powder-OTA-Lab" or "Powder-OTA-Dense"

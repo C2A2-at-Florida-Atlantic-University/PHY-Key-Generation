@@ -1,4 +1,18 @@
 import tensorflow as tf
+
+tf.keras.backend.clear_session()
+
+gpus = tf.config.experimental.list_physical_devices('GPU')
+if gpus:
+    try:
+        # Allow memory growth for GPU
+        for gpu in gpus:
+            print(gpu)
+            tf.config.experimental.set_memory_growth(gpu, True)
+    except RuntimeError as e:
+        print(e)
+        
+from datetime import datetime
 from statistics import mean
 import numpy as np
 import unireedsolomon as rs
@@ -11,6 +25,9 @@ from tensorflow.keras.models import load_model
 from tensorflow.keras.utils import plot_model
 from deep_learning_models import QuadrupletNet_Channel
 from DatasetHandler import DatasetHandler, ChannelSpectrogram
+import os
+# Import scipy
+from scipy.stats import entropy
 
 def feature_quantization(features):
     mean_features = mean(features)
@@ -102,7 +119,8 @@ def NIST_RNG_test(data):
                      "Approximate Entropy" : [],"Cumulative Sums" : [],"Random Excursion" : [],
                      "Random Excursion Variant" : []}
     data_results = []
-    for i in range(0,len(data)):
+    
+    for i in range(0,num_packets):
         eligible_battery: dict = check_eligibility_all_battery(np.array(data[i]), SP800_22R1A_BATTERY)
         results = run_all_battery(np.array(data[i]), eligible_battery, False)
         data_results.append(results)
@@ -115,27 +133,15 @@ def NIST_RNG_test(data):
             else:
                 passed = 0
             results_passed[name].append(passed)
-            
+    
     for i in results_score:
         passing_score = sum(results_passed[i])/num_packets
         if round(passing_score) == 1:
             print("- PASSED ("+str(passing_score)+") - score: " + str(np.round(sum(results_score[i])/num_packets, 3)) + " - " + i)
         else:
             print("- FAILED ("+str(passing_score)+") - score: " + str(np.round(sum(results_score[i])/num_packets, 3)) + " - " + i)
-
-    ith = 0
-    plt.figure(figsize=[20,20])
-    for i in results_passed:
-        #print(results_passed[i])
-        ith = ith + 1
-        plt.subplot(4, 3,ith)
-        plt.plot(results_passed[i])
-        # naming the x axis
-        plt.xlabel('N Key Generated')
-        # naming the y axis
-        plt.ylabel('Passed')
-        plt.ylim(-0.05, 1.05)
-        plt.title(i)
+            
+    return results_score, results_passed
         
 def KDR(A,B):
     kdr = np.bitwise_xor(A,B)
@@ -155,9 +161,74 @@ def BDR_data(data):
         KDR_BC.append(KDR(data[j+2],data[j+3]))
         j = j + 4
         pbar.update(1)
-    return [KDR_AB, KDR_AC, KDR_BC]
+    return KDR_AB, KDR_AC, KDR_BC
 
-def load_data(dataset_name, config_name, repo_name, node_Ids):
+def groupAverage(arr, n):
+    result = []
+    i=0
+    while i <len(arr):
+        sum_n = 0
+        j = 0
+        while j < n:
+            sum_n = sum_n + arr[i]
+            j = j + 1
+        result.append(sum_n/n)
+        i = i + n
+    return result
+
+def get_latest_results_file(results_directory, results_file):
+    # The results file begins with the results_file name
+    # Get the latest results file
+    results_files = [f for f in os.listdir(results_directory) if f.endswith('.h5') and f.startswith(results_file)]
+    results_files.sort(key=lambda x: os.path.getmtime(os.path.join(results_directory, x)))
+    return results_files[-1]
+
+if __name__ == "__main__":
+    node_configurations = {
+        'OTA-lab': {
+            'dataset_name': 'Key-Generation',
+            'config_name': 'Sinusoid-Powder-OTA-Lab-Nodes',
+            'repo_name': 'CAAI-FAU',
+            'node_Ids': [
+                # [1,2,3],
+                # [1,4,5],
+                # [1,4,8],
+                # [2,4,3],
+                # [4,2,5],
+                # [4,2,8],
+                [4,8,5],
+                [5,7,8],
+                [5,8,7],
+                [8,4,1],
+                [8,5,1],
+                [8,5,4]
+            ]
+        },
+        'OTA-Dense': {
+            'dataset_name': 'Key-Generation',
+            'config_name': 'Sinusoid-Powder-OTA-Dense-Nodes',
+            'repo_name': 'CAAI-FAU',
+            'node_Ids': [
+                # [1,2,3],
+                # [1,2,5],
+                # [1,3,2],
+                [4,3,5]
+            ]
+        }
+    }
+    home = "/Users/josea/Workspaces/Powder/"
+    models_directory = home+"Models/"
+    feature_extractor_name = "QExtractor2_256_alpha0.5_beta0_batch64_val0.1_RMS0.1_DSsin2.4dev1278-800"
+    
+    configuration = node_configurations['OTA-Dense']
+    dataset_name = configuration['dataset_name']
+    repo_name = configuration['repo_name']
+    node_Ids = configuration['node_Ids']
+        
+    node_config_name = repo_name+"_"+dataset_name+"_"+str(node_Ids)+"_"+feature_extractor_name
+    results_directory = home+"Results/"
+    results_file = "Results_"+node_config_name
+
     # Load the dataset first and feed that to the model
     for idx, node_ids in enumerate(node_Ids):
         node_config_name = config_name+"-"+"".join(str(node) for node in node_ids)
@@ -168,30 +239,159 @@ def load_data(dataset_name, config_name, repo_name, node_Ids):
             dataset.add_dataset(dataset_name, node_config_name, repo_name)
     dataset.get_dataframe_Info()
     data, labels = dataset.load_data()
-    return data, labels
-
-def groupAverage(arr, n):
-        result = []
-        i=0
-        while i <len(arr):
-            sum_n = 0
-            j = 0
-            while j < n:
-                sum_n = sum_n + arr[i]
-                j = j + 1
-            result.append(sum_n/n)
-            i = i + n
-        return result
     
-def plot_BDR(KDR):
-    KDR_average = [np.sum(kdr)/(len(kdr)) for kdr in KDR]
-    print("Average KDR Alice-Bob:", KDR_average[0])
-    print("Average KDR Alice-Eve:", KDR_average[1])
-    print("Average KDR Bob-Eve:", KDR_average[2])
-
+    generate_results = False
+    if generate_results:
+        with tf.device('/CPU:0'):
+            print("loading model")
+            feature_extractor = load_model(models_directory+feature_extractor_name+".h5")
+        #feature_extractor.summary()
+        #plot_model(feature_extractor, to_file='featureExtractor.png', show_shapes=True, show_layer_names=True)
+        
+        ChannelSpectrogramObj = ChannelSpectrogram()
+        # Load the classification dataset. (IQ samples and labels)
+        # print(data[0])
+        # Convert IQ samples to channel independent spectrograms. (classification data)
+        t_start = time.time()
+        print("converting IQ to spectrograms")
+        data_spectrogram = ChannelSpectrogramObj.channel_spectrogram(np.array(data),256)
+        t_end = time.time()
+        print("Time for signal processing: ", t_end-t_start)
+        # print(data_spectrogram.shape)
+        t_start = time.time()
+        # Extract RFFs from channel independent spectrograms.
+        print("extracting features")
+        features = feature_extractor.predict(data_spectrogram)
+        t_end = time.time()
+        print("Time for fingerprinting: ", t_end-t_start)
+        del data_spectrogram
+        #feature quantization
+        quantized_data = []
+        t_start = time.time()
+        for i in features:
+            features_quatized = feature_quantization(i)
+            quantized_data.append(features_quatized)
+        
+        quantized_data = np.array(quantized_data)
+        t_end = time.time()
+        print("Time for quantization: ", t_end-t_start)
+        
+        #Bit Dissagreement Ratio
+        
+        quantized_data = quantized_data[:]
+        
+        KDR_AB, KDR_AC, KDR_BC = KDR_data(quantized_data)
+        KDR_AB_average = np.sum(KDR_AB)/(len(KDR_AB))
+        print("Average KDR Alice-Bob:", KDR_AB_average)
+        KDR_AC_average = np.sum(KDR_AC)/(len(KDR_AC))
+        print("Average KDR Alice-Eve:", KDR_AC_average)
+        KDR_BC_average = np.sum(KDR_BC)/(len(KDR_BC))
+        print("Average KDR Bob-Eve:", KDR_BC_average)
+        
+        #Reconciliation
+        k = int(512/4)
+        n1 = int(k+(k/1)-1)
+        s1 = int(n1-k)
+        t_start = time.time()
+        reconciliation11,reconciliation21,reconciliation31=reconciliation_rate(quantized_data,n1,k)
+        t_end = time.time()
+        print("Time for reconciliation (Alice,Bob,Eve): ", t_end-t_start)
+        
+        n2 = int(k+(k/2)-1)
+        s2 = int(n2-k)
+        t_start = time.time()
+        reconciliation12,reconciliation22,reconciliation32=reconciliation_rate(quantized_data,n2,k)
+        t_end = time.time()
+        print("Time for reconciliation (Alice,Bob,Eve): ", t_end-t_start)
+        
+        n3 = int(k+(k/3)-1)
+        s3 = int(n3-k)
+        t_start = time.time()
+        reconciliation13,reconciliation23,reconciliation33=reconciliation_rate(quantized_data,n3,k)
+        t_end = time.time()
+        print("Time for reconciliation (Alice,Bob,Eve): ", t_end-t_start)
+        
+        #Privacy Amplification
+        priv_amp_data = []
+        i = 0
+        rec_data1 = np.array(reconciliation11)
+        t_start = time.time()
+        while i < rec_data1.shape[0]:
+            priv_amp = privacyAmplification(rec_data1[i][1])
+            priv_amp_data.append(priv_amp)
+            i = i+1
+        t_end = time.time()
+        print("Time for privacy amplification: ", t_end-t_start)
+                
+        time_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        with h5py.File(results_directory+results_file+"_"+time_stamp+".h5", "w") as f:
+            f.create_dataset("features", data=features)
+            f.create_dataset("quantized_data", data=quantized_data)
+            f.create_dataset("KDR_AB", data=KDR_AB)
+            f.create_dataset("KDR_AC", data=KDR_AC)
+            f.create_dataset("KDR_BC", data=KDR_BC)
+            f.create_dataset("reconciliation11", data=[reconciliation11[i][0] for i in range(len(reconciliation11))])
+            f.create_dataset("reconciliation12", data=[reconciliation12[i][0] for i in range(len(reconciliation12))])
+            f.create_dataset("reconciliation13", data=[reconciliation13[i][0] for i in range(len(reconciliation13))])
+            f.create_dataset("reconciliation21", data=[reconciliation21[i][0] for i in range(len(reconciliation21))])
+            f.create_dataset("reconciliation22", data=[reconciliation22[i][0] for i in range(len(reconciliation22))])
+            f.create_dataset("reconciliation23", data=[reconciliation23[i][0] for i in range(len(reconciliation23))])
+            f.create_dataset("reconciliation31", data=[reconciliation31[i][0] for i in range(len(reconciliation31))])
+            f.create_dataset("reconciliation32", data=[reconciliation32[i][0] for i in range(len(reconciliation32))])
+            f.create_dataset("reconciliation33", data=[reconciliation33[i][0] for i in range(len(reconciliation33))])
+            f.create_dataset("priv_amp_data", data=priv_amp_data)
+            # f.create_dataset("priv_amp_bin_data", data=priv_amp_bin_data)
+            f.close()
+            
+    results_file = get_latest_results_file(results_directory, results_file)
+    with h5py.File(results_directory+results_file, "r") as f:
+        features = f["features"][:]
+        quantized_data = f["quantized_data"][:]
+        KDR_AB = f["KDR_AB"][:]
+        KDR_AC = f["KDR_AC"][:]
+        KDR_BC = f["KDR_BC"][:]
+        reconciliation11 = f["reconciliation11"][:]
+        reconciliation12 = f["reconciliation12"][:]
+        reconciliation13 = f["reconciliation13"][:]
+        reconciliation21 = f["reconciliation21"][:]
+        reconciliation22 = f["reconciliation22"][:]
+        reconciliation23 = f["reconciliation23"][:]
+        reconciliation31 = f["reconciliation31"][:]
+        reconciliation32 = f["reconciliation32"][:]
+        reconciliation33 = f["reconciliation33"][:]
+        priv_amp_data = f["priv_amp_data"][:]
+        f.close()
+    
+    # Separate real and imaginary parts
+    t = np.arange(len(data[0]))
+    real_parts = np.real(data[0])
+    imaginary_parts = np.imag(data[0])
+        
+    # Plot results
+    plt.plot(t, real_parts, 'r', t, imaginary_parts, 'b')
+    plt.xlabel('Time')
+    plt.ylabel('Amplitude')
+    plt.title('Complex Data Plot')
+    plt.legend(['Real Part', 'Imaginary Part'])
+    plt.show()
+    
+    # Make an analysis of the samples
+    
+    # Plot the entropy of the data
+    entropy_data = []
+    for i in features:
+        entropy_data.append(entropy(i))
+    plt.plot(entropy_data)
+    plt.xlabel('Time')
+    plt.ylabel('Entropy')
+    plt.title('Entropy of the Data')
+    plt.show()
+    
     batch_size = 2
-    KDR_average_batch = [groupAverage(kdr,batch_size) for kdr in KDR]
-    
+    KDR_AB_average_batch = groupAverage(KDR_AB, batch_size)
+    KDR_AC_average_batch = groupAverage(KDR_AC, batch_size)
+    KDR_BC_average_batch = groupAverage(KDR_BC, batch_size)
+
     plt.figure(figsize=[15,3])
     
     plot_titles = ["KDR Alice-Bob", "KDR Alice-Eve", "KDR Bob-Eve"]
@@ -235,71 +435,20 @@ def plot_BDR(KDR):
 
     plt.title("Bit Dissagreement Ratio Scenario")
     plt.legend()
-    # plt.show()
-    # Save the plot
-    plt.savefig('BDR.png')
+    plt.show()
     
-def test_model(feature_extractor_name, configuration):
+    # Reconciliation Rate Plots
     
-    feature_extractor = load_model(feature_extractor_name)
-    #feature_extractor.summary()
-    #plot_model(feature_extractor, to_file='featureExtractor.png', show_shapes=True, show_layer_names=True)
-    
-    data, _ = load_data(
-        configuration['dataset_name'], 
-        configuration['config_name'], 
-        configuration['repo_name'], 
-        configuration['node_Ids']
-    )
-    
-    ChannelSpectrogramObj = ChannelSpectrogram()
-    data = ChannelSpectrogramObj.channel_spectrogram(np.array(data),512)
-    features = feature_extractor.predict(data)
-    del data
-    
-    #feature quantization
-    quantized_data = []
-    for i in features:
-        features_quatized = feature_quantization(i)
-        quantized_data.append(features_quatized)
-    quantized_data = np.array(quantized_data)
-
-    #Bit Dissagreement Ratio
-    # quantized_data = quantized_data[:]
-    BDR = BDR_data(quantized_data)
-    
-    plot_BDR(BDR)
-    
-    #Reconciliation
-    k = int(len(quantized_data[0])/4)
-    # k_i = 8
-    n1 = int(k+(k/(2))-1)
-    print(n1)
+    k = int(512/4)
+    n1 = int(k+(k/1)-1)
     s1 = int(n1-k)
-    t_start = time.time()
-    reconciliation11,reconciliation21,reconciliation31=reconciliation_rate(quantized_data,n1,k)
-    t_end = time.time()
-    print("Time for reconciliation (Alice,Bob,Eve): ", t_end-t_start)
-    #print(reconciliation11)
-
-    n2 = int(k+(k/(4))-1)
-    print(n2)
+    
+    n2 = int(k+(k/2)-1)
     s2 = int(n2-k)
-    t_start = time.time()
-    reconciliation12,reconciliation22,reconciliation32=reconciliation_rate(quantized_data,n2,k)
-    t_end = time.time()
-    print("Time for reconciliation (Alice,Bob,Eve): ", t_end-t_start)
-    #print(reconciliation12)
-
-    n3 = int(k+(k/(6))-1)
-    print(n3)
+    
+    n3 = int(k+(k/3)-1)
     s3 = int(n3-k)
-    t_start = time.time()
-    reconciliation13,reconciliation23,reconciliation33=reconciliation_rate(quantized_data,n3,k)
-    t_end = time.time()
-    print("Time for reconciliation (Alice,Bob,Eve): ", t_end-t_start)
-    #print(reconciliation13)
-
+    
     rec_rate_data11 = []
     rec_rate_data21 = []
     rec_rate_data31 = []
@@ -314,17 +463,17 @@ def test_model(feature_extractor_name, configuration):
 
     i = 0
     while i < len(reconciliation11):
-        rec_rate_data11.append(reconciliation11[i][0])
-        rec_rate_data21.append(reconciliation21[i][0])
-        rec_rate_data31.append(reconciliation31[i][0])
+        rec_rate_data11.append(reconciliation11[i])
+        rec_rate_data21.append(reconciliation21[i])
+        rec_rate_data31.append(reconciliation31[i])
         
-        rec_rate_data12.append(reconciliation12[i][0])
-        rec_rate_data22.append(reconciliation22[i][0])
-        rec_rate_data32.append(reconciliation32[i][0])
+        rec_rate_data12.append(reconciliation12[i])
+        rec_rate_data22.append(reconciliation22[i])
+        rec_rate_data32.append(reconciliation32[i])
         
-        rec_rate_data13.append(reconciliation13[i][0])
-        rec_rate_data23.append(reconciliation23[i][0])
-        rec_rate_data33.append(reconciliation33[i][0])
+        rec_rate_data13.append(reconciliation13[i])
+        rec_rate_data23.append(reconciliation23[i])
+        rec_rate_data33.append(reconciliation33[i])
         i = i+1
 
     rec_rate_AB_average1 = np.sum(rec_rate_data11)/(len(rec_rate_data11))
@@ -565,65 +714,14 @@ def test_model(feature_extractor_name, configuration):
 
     plt.title("Reconciliation Success Rate Scenario 1 - RS("+str(n3)+","+str(k)+")")
     plt.legend()
-    # plt.show()
-    plt.savefig('Reconciliation_Success_Rate_RS_'+str(n3)+'_'+str(k)+'.png')
-
-    #Privacy Amplification
-    priv_amp_data = []
-    i = 0
-    rec_data1 = np.array(reconciliation11)
-    t_start = time.time()
-    while i < rec_data1.shape[0]:
-        priv_amp = privacyAmplification(rec_data1[i][1])
-        priv_amp_data.append(priv_amp)
-        i = i+1
-    t_end = time.time()
-    print("Time for privacy amplification: ", t_end-t_start)
-    #print(priv_amp_data)
-
+    plt.show()
+    
+    
     #NIST Test Suite for Random and Pseudorandom Number Generators for Cryptographic Applications
     priv_amp_bin_data = []
-
     for P_A_data in priv_amp_data:
         priv_amp_bin = str2arr(P_A_data)
         priv_amp_bin_data.append(priv_amp_bin)
+    # print(priv_amp_bin_data[0])
 
-    print(priv_amp_bin_data[0])
-
-    NIST_RNG_test(priv_amp_bin_data)
-    
-if __name__ == "__main__":
-    node_configurations = {
-        'OTA-Lab': {
-            'dataset_name': 'Key-Generation',
-            'config_name': 'Sinusoid-Powder-OTA-Lab-Nodes',
-            'repo_name': 'CAAI-FAU',
-            'node_Ids': [
-                [4,8,5],
-                [5,7,8],
-                [5,8,7],
-                [8,4,1],
-                [8,5,1],
-                [8,5,4]
-            ]
-        },
-        'OTA-Dense': {
-            'dataset_name': 'Key-Generation',
-            'config_name': 'Sinusoid-Powder-OTA-Dense-Nodes',
-            'repo_name': 'CAAI-FAU',
-            'node_Ids': [
-                # [1,2,3],
-                [1,2,5],
-                # [1,3,2],
-                [4,3,5]
-            ]
-        }
-    }
-    
-    # model_name = "QExtractor2_256_alpha0.5_beta0.5_batch64_val0.1_RMS0.1_DSsin2.4dev1278-2400_1747933802.2071776.h5"
-    # model_name = "/home/Research/PowderKeyGen/AI/src/channelFingerprintg/QExtractor2_256_alpha0.5_beta0.5_batch32_val0.1_RMS0.1_Sinusoid-Powder-OTA-Dense-Nodes_1747937776.2942712.h5"
-    # model_name = "QExtractor2_256_alpha0.4_beta0.4_batch32_val0.1_RMS0.1_Sinusoid-Powder-OTA-Dense-Nodes_1747939544.h5"
-    # model_name = "QExtractor2_256_alpha0.5_beta0.5_batch64_val0.2_RMS0.1_Sinusoid-Powder-OTA-Lab-Nodes_1747942988.h5"
-    model_name = "FeatureExtractor_512_alpha0.4_beta0.4_SGD_lr0.5_Sinusoid-Powder-OTA-Lab-Nodes_1747971547.h5"
-    configuration = node_configurations['OTA-Dense'] #'OTA-Lab' # 'OTA-Dense'
-    test_model(model_name, configuration)
+    results_score, results_passed = NIST_RNG_test(priv_amp_bin_data)
