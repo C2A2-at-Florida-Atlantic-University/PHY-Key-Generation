@@ -15,29 +15,6 @@ def divisible_random(a,b,n):
         result = random.randint(a, b)
     return result
 
-def resblock(x, kernelsize, filters, first_layer = False):
-    reg = l2(0.001)  # Define L2 regularizer
-    if first_layer:
-        fx = Conv2D(filters, kernelsize, padding='same', kernel_regularizer=reg)(x)
-        fx = BatchNormalization()(fx)
-        fx = ReLU()(fx)
-        fx = Conv2D(filters, kernelsize, padding='same', kernel_regularizer=reg)(fx)
-        fx = BatchNormalization()(fx)
-        x = Conv2D(filters, 1, padding='same', kernel_regularizer=reg)(x)
-        fx = BatchNormalization()(fx)
-        out = Add()([x,fx])
-        out = ReLU()(out)
-    else:
-        fx = Conv2D(filters, kernelsize, padding='same', kernel_regularizer=reg)(x)
-        fx = BatchNormalization()(fx)
-        fx = ReLU()(fx)
-        fx = Conv2D(filters, kernelsize, padding='same', kernel_regularizer=reg)(fx)
-        fx = BatchNormalization()(fx)
-        out = Add()([x,fx])
-        out = ReLU()(out)
-
-    return out 
-
 def identity_loss(y_true, y_pred):
     return K.mean(y_pred)           
 
@@ -110,16 +87,39 @@ class TripletNet_Channel():
         x_q = tf.where(x_less, x_q, zeros)
         return x_q
     
+    def resblock(self, x, kernelsize, filters, first_layer = False):
+        reg = l2(0.001)  # Define L2 regularizer
+        if first_layer:
+            fx = Conv2D(filters, kernelsize, padding='same', kernel_regularizer=reg)(x)
+            fx = BatchNormalization()(fx)
+            fx = ReLU()(fx)
+            fx = Conv2D(filters, kernelsize, padding='same', kernel_regularizer=reg)(fx)
+            fx = BatchNormalization()(fx)
+            x = Conv2D(filters, 1, padding='same', kernel_regularizer=reg)(x)
+            fx = BatchNormalization()(fx)
+            out = Add()([x,fx])
+            out = ReLU()(out)
+        else:
+            fx = Conv2D(filters, kernelsize, padding='same', kernel_regularizer=reg)(x)
+            fx = BatchNormalization()(fx)
+            fx = ReLU()(fx)
+            fx = Conv2D(filters, kernelsize, padding='same', kernel_regularizer=reg)(fx)
+            fx = BatchNormalization()(fx)
+            out = Add()([x,fx])
+            out = ReLU()(out)
+
+        return out 
+    
     def feature_extractor(self, datashape):
         self.datashape = datashape
         inputs = Input(shape=([self.datashape[1],self.datashape[2],self.datashape[3]]))
         x = Conv2D(32, 7, strides = 2, activation='relu', padding='same')(inputs)
         x =  Dropout(0.3)(x)
-        x = resblock(x, 3, 32)
-        x = resblock(x, 3, 32)
+        x = self.resblock(x, 3, 32)
+        x = self.resblock(x, 3, 32)
         #x = resblock(x, 3, 32)
-        x = resblock(x, 3, 64, first_layer = True)
-        x = resblock(x, 3, 64)
+        x = self.resblock(x, 3, 64, first_layer = True)
+        x = self.resblock(x, 3, 64)
         #x = resblock(x, 3, 64)
         x = AveragePooling2D(pool_size=2)(x)
         x = Flatten()(x)
@@ -168,7 +168,7 @@ class TripletNet_Channel():
             #print("A",A.shape)
             yield [A, P, N], label 
 
-class QuadrupletNet_Channel():
+class QuadrupletNet():
     def __init__(self):
         pass
         
@@ -190,8 +190,7 @@ class QuadrupletNet_Channel():
         N2 = embedding_net(input_4)
         
         loss = Lambda(self.quadruplet_loss)([A, P, N1, N2]) 
-        model = Model(inputs=[input_1, input_2, input_3, input_4], outputs=loss)
-        return model
+        return Model(inputs=[input_1, input_2, input_3, input_4], outputs=loss)
 
     # Quadruplet Loss function.
     def quadruplet_loss(self,x):
@@ -216,30 +215,10 @@ class QuadrupletNet_Channel():
         x_greater = K.greater_equal(x,x_mean)
         x_q = tf.where(x_greater, x, ones)
         x_q = tf.where(x_less, x_q, zeros)
-        return x_q
-    
-    def feature_extractor(self, datashape):
-        self.datashape = datashape
-        reg = l2(0.001)  # Define L2 regularizer
-        inputs = Input(shape=([self.datashape[1],self.datashape[2],self.datashape[3]]))
-        x = Conv2D(32, 7, strides = 2, activation='relu', padding='same', kernel_regularizer=reg)(inputs)
-        x =  Dropout(0.3)(x)
-        x = resblock(x, 3, 32, first_layer = True)
-        for _ in range(3):
-            x = resblock(x, 3, 32)
-        x = resblock(x, 3, 64, first_layer = True)
-        for _ in range(3):
-            x = resblock(x, 3, 64)
-        x = AveragePooling2D(pool_size=2)(x)
-        x = Flatten()(x)
-        x = Dense(512)(x)
-        outputs = Lambda(lambda  x: K.l2_normalize(x,axis=1))(x)
-        outputs = Dense(units=512, activation='sigmoid', kernel_initializer="lecun_normal")(outputs)
-        model = Model(inputs=inputs, outputs=outputs)
-        return model             
+        return x_q           
             
     def create_generator_channel(self, batchsize, data, label):
-        """Generate a triplets generator for training."""
+        """Generate a quadruplets generator for training."""
         self.data = data
         self.label = label
         while True:
@@ -271,3 +250,288 @@ class QuadrupletNet_Channel():
             #print("label",label.shape)
             #print("A",A.shape)
             yield [A, P, N1, N2], label 
+
+class ResNet_QuadrupletNet_Channel(QuadrupletNet):
+    def __init__(self):
+        pass
+    
+    def resblock(self, x, kernelsize, filters, first_layer = False):
+        reg = l2(0.001)  # Define L2 regularizer
+        if first_layer:
+            fx = Conv2D(filters, kernelsize, padding='same', kernel_regularizer=reg)(x)
+            fx = BatchNormalization()(fx)
+            fx = ReLU()(fx)
+            fx = Conv2D(filters, kernelsize, padding='same', kernel_regularizer=reg)(fx)
+            fx = BatchNormalization()(fx)
+            x = Conv2D(filters, 1, padding='same', kernel_regularizer=reg)(x)
+            fx = BatchNormalization()(fx)
+            out = Add()([x,fx])
+            out = ReLU()(out)
+        else:
+            fx = Conv2D(filters, kernelsize, padding='same', kernel_regularizer=reg)(x)
+            fx = BatchNormalization()(fx)
+            fx = ReLU()(fx)
+            fx = Conv2D(filters, kernelsize, padding='same', kernel_regularizer=reg)(fx)
+            fx = BatchNormalization()(fx)
+            out = Add()([x,fx])
+            out = ReLU()(out)
+
+        return out 
+
+    def feature_extractor(self, datashape):
+        self.datashape = datashape
+        reg = l2(0.001)  # Define L2 regularizer
+        inputs = Input(shape=([self.datashape[1],self.datashape[2],self.datashape[3]]))
+        x = Conv2D(32, 7, strides = 2, activation='relu', padding='same', kernel_regularizer=reg)(inputs)
+        x =  Dropout(0.3)(x)
+        x = self.resblock(x, 3, 32, first_layer = True)
+        for _ in range(3):
+            x = self.resblock(x, 3, 32)
+        x = self.resblock(x, 3, 64, first_layer = True)
+        for _ in range(3):
+            x = self.resblock(x, 3, 64)
+        x = AveragePooling2D(pool_size=2)(x)
+        x = Flatten()(x)
+        x = Dense(512)(x)
+        outputs = Lambda(lambda  x: K.l2_normalize(x,axis=1))(x)
+        outputs = Dense(units=512, activation='sigmoid', kernel_initializer="lecun_normal")(outputs)
+        model = Model(inputs=inputs, outputs=outputs)
+        return model  
+    
+class FeedForward_QuadrupletNet_Channel(QuadrupletNet):
+    def __init__(self, embed_dim=512, width=[2048, 1024], dropout=0.4, l2_w=1e-3):
+        self.embed_dim = embed_dim
+        self.width = width
+        self.dropout = dropout
+        self.l2_w = l2_w
+    
+    def feature_extractor(self, datashape):
+        self.datashape = datashape
+        reg = l2(self.l2_w)
+
+        inputs = Input(shape=(datashape[1], datashape[2], datashape[3]))
+        x = Flatten()(inputs)
+        for units in self.width:
+            x = Dense(units, activation='relu', kernel_regularizer=reg)(x)
+            x = BatchNormalization()(x)
+            x = Dropout(self.dropout)(x)
+
+        x = Dense(self.embed_dim, kernel_regularizer=reg)(x)
+        x = BatchNormalization()(x)
+        x = Lambda(lambda t: K.l2_normalize(t, axis=1))(x)  # unit-norm embeddings
+        # (Optional) If you want to mirror your ResNet head exactly:
+        # x = Dense(self.embed_dim, activation='sigmoid', kernel_initializer="lecun_normal")(x)
+
+        return Model(inputs, x, name="MLP_Encoder")
+
+# Recurrent Neural Network (RNN) model
+class RNN_QuadrupletNet_Channel(QuadrupletNet):
+    """
+    GRU over time axis:
+      - Treat spectrogram time (W) as sequence; features per step = F*C
+      - Bi-GRU -> pooling -> 512-D embedding.
+    """
+    def __init__(self, embed_dim=512, gru_units=256, td_width=256, dropout=0.3, l2_w=1e-3, bidirectional=True):
+        self.embed_dim = embed_dim
+        self.gru_units = gru_units
+        self.td_width = td_width
+        self.dropout = dropout
+        self.l2_w = l2_w
+        self.bidirectional = bidirectional
+
+    def feature_extractor(self, datashape):
+        self.datashape = datashape
+        F, T, C = datashape[1], datashape[2], datashape[3]
+        reg = l2(self.l2_w)
+
+        inputs = Input(shape=(F, T, C))
+        # Reorder to (batch, T, F*C)  -> time-major sequence
+        x = Permute((2,1,3))(inputs)                      # (T, F, C)
+        x = Reshape((T, F*C))(x)                          # (T, F*C)
+        x = Dense(self.td_width, activation='relu', kernel_regularizer=reg)(x)
+        x = Dropout(self.dropout)(x)
+        x = BatchNormalization()(x)
+
+        if self.bidirectional:
+            x = Bidirectional(GRU(self.gru_units, return_sequences=True))(x)
+        else:
+            x = GRU(self.gru_units, return_sequences=True)(x)
+
+        x = Dropout(self.dropout)(x)
+        x = BatchNormalization()(x)
+        x = GlobalAveragePooling1D()(x)                   # mean over time
+        x = Dense(self.embed_dim, kernel_regularizer=reg)(x)
+        x = BatchNormalization()(x)
+        x = Lambda(lambda t: K.l2_normalize(t, axis=1))(x)
+
+        return Model(inputs, x, name="GRU_Encoder")
+    
+# Transformer model
+class Transformer_QuadrupletNet_Channel(QuadrupletNet):
+    """
+    Tiny Transformer encoder over time tokens:
+      - Tokens = time steps (W); features per token = F*C projected to d_model
+      - 2 encoder blocks -> pooled -> 512-D embedding
+    """
+    def __init__(self, embed_dim=512, d_model=256, n_heads=4, mlp_dim=512, depth=2, dropout=0.1, l2_w=1e-3, max_len=2048):
+        self.embed_dim = embed_dim
+        self.d_model = d_model
+        self.n_heads = n_heads
+        self.mlp_dim = mlp_dim
+        self.depth = depth
+        self.dropout = dropout
+        self.l2_w = l2_w
+        self.max_len = max_len  # for learned positional embeddings
+
+    def _encoder_block(self, x):
+        # Multi-Head Self-Attention
+        attn = MultiHeadAttention(num_heads=self.n_heads, key_dim=self.d_model//self.n_heads, dropout=self.dropout)(x, x)
+        x = Add()([x, Dropout(self.dropout)(attn)])
+        x = LayerNormalization(epsilon=1e-5)(x)
+
+        # Feed-forward
+        ff = Dense(self.mlp_dim, activation='relu')(x)
+        ff = Dropout(self.dropout)(ff)
+        ff = Dense(self.d_model)(ff)
+        x = Add()([x, Dropout(self.dropout)(ff)])
+        x = LayerNormalization(epsilon=1e-5)(x)
+        return x
+
+    def feature_extractor(self, datashape):
+        self.datashape = datashape
+        F, T, C = datashape[1], datashape[2], datashape[3]
+        reg = l2(self.l2_w)
+
+        inputs = Input(shape=(F, T, C))
+        # Tokens = time steps; features = F*C
+        x = Permute((2,1,3))(inputs)             # (T, F, C)
+        x = Reshape((T, F*C))(x)                 # (T, F*C)
+
+        # Linear projection to d_model
+        x = Dense(self.d_model, activation=None, kernel_regularizer=reg)(x)
+
+        # Learnable positional embeddings (length up to max_len)
+        # Build positions [0..T-1] -> (batch, T)
+        pos_idx = Lambda(lambda t: tf.tile(tf.expand_dims(tf.range(tf.shape(t)[1]), axis=0),
+                                           [tf.shape(t)[0], 1]))(x)
+        pos_embed = tf.keras.layers.Embedding(input_dim=self.max_len, output_dim=self.d_model)(pos_idx)
+        x = Add()([x, pos_embed])
+
+        # Stacked encoder blocks
+        for _ in range(self.depth):
+            x = self._encoder_block(x)
+
+        # Pool tokens
+        x = GlobalAveragePooling1D()(x)
+        x = Dense(self.embed_dim, kernel_regularizer=reg)(x)
+        x = BatchNormalization()(x)
+        x = Lambda(lambda t: K.l2_normalize(t, axis=1))(x)
+
+        return Model(inputs, x, name="Transformer_Encoder")
+    
+class AE_QuadrupletNet_Channel(QuadrupletNet):
+    """
+    Convolutional Autoencoder (CAE):
+      - Encoder: 2D conv downsamples spectrogram to a compact embedding (default 512-D, L2-normalized)
+      - Decoder: symmetric deconvs for reconstruction pretraining (optional)
+      - Use encoder output for quadruplet training with your [A, P, N1, N2] dataset.
+    """
+    def __init__(self,
+                 embed_dim=512,
+                 chans=(32, 64, 128),
+                 dropout=0.2,
+                 l2_w=1e-3,
+                 recon_activation='linear'  # 'sigmoid' if inputs scaled to [0,1]
+                 ):
+        self.embed_dim = embed_dim
+        self.chans = chans
+        self.dropout = dropout
+        self.l2_w = l2_w
+        self.recon_activation = recon_activation
+
+    # --- small conv block helper
+    def _conv_block(self, x, filters, stride=2, reg=None):
+        x = Conv2D(filters, 3, strides=stride, padding='same', kernel_regularizer=reg)(x)
+        x = BatchNormalization()(x); x = ReLU()(x)
+        return x
+
+    # --- decoder block helper
+    def _deconv_block(self, x, filters, stride=2, reg=None):
+        x = Conv2DTranspose(filters, 3, strides=stride, padding='same', kernel_regularizer=reg)(x)
+        x = BatchNormalization()(x); x = ReLU()(x)
+        return x
+
+    # ------------------- Encoder only (for quadruplet training) ----------------
+    def feature_extractor(self, datashape):
+        self.datashape = datashape
+        reg = l2(self.l2_w)
+
+        inputs = Input(shape=(datashape[1], datashape[2], datashape[3]))
+        x = inputs
+        # (Optionally) denoising during training—keep mild for small data
+        x = Dropout(self.dropout)(x)
+
+        # Downsampling conv tower
+        shapes = []  # keep shapes only if you later want to attach skip connections
+        for f in self.chans:
+            x = self._conv_block(x, f, stride=2, reg=reg)
+            shapes.append(tf.shape(x))  # not used but left as doc
+
+        # Bottleneck
+        x = Conv2D(self.chans[-1], 3, padding='same', kernel_regularizer=reg)(x)
+        x = BatchNormalization()(x); x = ReLU()(x)
+
+        # Projection to embedding
+        x = Flatten()(x)
+        x = Dense(self.embed_dim, kernel_regularizer=reg)(x)
+        x = BatchNormalization()(x)
+        x = Lambda(lambda t: K.l2_normalize(t, axis=1))(x)  # 512-D unit-norm
+
+        return Model(inputs, x, name="CAE_Encoder")
+
+    # --------------- Full AE for (optional) reconstruction pretraining --------
+    def build_autoencoder_pretrain(self, datashape):
+        """Returns (encoder, autoencoder). Train AE with MSE (or SSIM) before quadruplet."""
+        self.datashape = datashape
+        reg = l2(self.l2_w)
+
+        # Encoder
+        enc_in = Input(shape=(datashape[1], datashape[2], datashape[3]))
+        x = Dropout(self.dropout)(enc_in)
+        conv_shapes = []  # store spatial dims for decoder
+        for f in self.chans:
+            x = self._conv_block(x, f, stride=2, reg=reg)
+            conv_shapes.append(x.shape[1:3])  # (H, W)
+
+        x = Conv2D(self.chans[-1], 3, padding='same', kernel_regularizer=reg)(x)
+        x = BatchNormalization()(x); x = ReLU()(x)
+        # Save spatial size & channels for decoder seed
+        h_last, w_last = x.shape[1], x.shape[2]
+        c_last = x.shape[-1]
+
+        flat = Flatten()(x)
+        emb  = Dense(self.embed_dim, kernel_regularizer=reg)(flat)
+        emb  = BatchNormalization()(emb)
+        emb_n= Lambda(lambda t: K.l2_normalize(t, axis=1), name="embedding")(emb)
+
+        encoder = Model(enc_in, emb_n, name="CAE_Encoder")
+
+        # Decoder (mirror)
+        dec_in = Input(shape=(self.embed_dim,))
+        x = Dense(int(h_last)*int(w_last)*int(c_last), kernel_regularizer=reg)(dec_in)
+        x = BatchNormalization()(x); x = ReLU()(x)
+        x = Reshape((int(h_last), int(w_last), int(c_last)))(x)
+
+        # Reverse conv stack
+        for f in reversed(self.chans):
+            x = self._deconv_block(x, f, stride=2, reg=reg)
+
+        # Final reconstruction to input channels
+        recon = Conv2D(datashape[3], 3, padding='same', activation=self.recon_activation)(x)
+        decoder = Model(dec_in, recon, name="CAE_Decoder")
+
+        # Wire encoder+decoder into pretrain model
+        ae_out = decoder(emb_n)
+        autoencoder = Model(enc_in, ae_out, name="CAE_Pretrain")
+
+        return encoder, autoencoder

@@ -7,6 +7,10 @@ from DatasetHandler import DatasetHandler, ChannelSpectrogram
 
 import time
 from TestChannelFingerprinting import test_model
+import h5py
+from collections import Counter
+import numpy as np
+import os
 
 def train_channel_feature_extractor(data, labels, train_configurations, model_type):
     '''
@@ -60,7 +64,7 @@ def train_channel_feature_extractor(data, labels, train_configurations, model_ty
                                 )
     
     reduce_lr = ReduceLROnPlateau(monitor='val_loss', 
-                                    min_delta = 0, 
+                                    min_delta = 0.0001, 
                                     factor = train_configurations[model_type]['factor'], 
                                     patience = int(math.ceil(patience/2)), 
                                     verbose=1
@@ -68,6 +72,7 @@ def train_channel_feature_extractor(data, labels, train_configurations, model_ty
     callbacks = [early_stop, reduce_lr]
 
     validation_size= train_configurations[model_type]['validation_size']
+
     # Split the dasetset into validation and training sets.
     data_train, data_valid, label_train, label_valid = train_test_split(data, 
                                                                         labels, 
@@ -112,10 +117,10 @@ def train_channel_feature_extractor(data, labels, train_configurations, model_ty
                         verbose=1, 
                         callbacks = callbacks)
     
-    return feature_extractor
+    return feature_extractor, history
 
 if __name__ == "__main__":
-    
+    homeDir = "/home/Research/POWDER/"
     node_configurations = {
         'OTA-Lab': {
             'dataset_name': 'Key-Generation',
@@ -144,44 +149,8 @@ if __name__ == "__main__":
                 [1,2,3],
                 [1,2,5],
                 [1,3,2],
-                # [4,3,5]
+                [4,3,5]
             ]
-        }
-    }
-    
-    batch_size = 64
-    fft_len = 512
-    patience = 30
-    maxEpochs = 1000
-    lr = 0.5
-    val_size = 0.15
-    factor = 0.5
-    optimizer = "SGD" # "RMSprop", "SGD", "Adam"
-    train_configurations = {
-        "QuadrupletNet": {
-            "alpha": 0.2,
-            "beta": 0.2,
-            "gamma": 0.5,
-            "fft_len": fft_len,
-            "batch_size": batch_size,
-            "validation_size": val_size,
-            "LearningRate": lr,
-            "epochs": maxEpochs,
-            "patience": patience,
-            "factor": factor,
-            "optimizer": optimizer
-        },
-        "TripletNet": {
-            "alpha": 0.5,
-            "beta": 0.5,
-            "fft_len": fft_len,
-            "batch_size": batch_size,
-            "validation_size": val_size,
-            "LearningRate": lr,
-            "epochs": maxEpochs,
-            "patience": patience,
-            "factor": factor,
-            "optimizer": optimizer
         }
     }
     
@@ -197,58 +166,100 @@ if __name__ == "__main__":
             dataset = DatasetHandler(dataset_name, config_name, repo_name)
         else:
             dataset.add_dataset(dataset_name, config_name, repo_name)
-    dataset.get_dataframe_Info()
-    data, labels = dataset.load_data()
+        dataset.get_dataframe_Info()
+    data, labels = dataset.load_data(shuffle=True)
     
-    model_type = "QuadrupletNet"
-    feature_extractor = train_channel_feature_extractor(data, labels, train_configurations, model_type)
+    batch_size = 128
+    fft_len = 256
+    patience = 50
+    maxEpochs = 1000
+    lr = 0.1
+    val_size = 0.15
+    factor = 0.5
+    optimizer = "SGD" # "RMSprop", "SGD", "Adam"
+
+    alphas = [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]
+    betas = [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]
+    gammas = [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]
+    optimizers = ["SGD"]
     
-    timestamp = int(time.time())
-    filename = 'FeatureExtractor_'+str(train_configurations[model_type]["fft_len"]) \
-                +'_alpha'+str(train_configurations[model_type]["alpha"]) \
-                +'_beta'+str(train_configurations[model_type]["beta"]) \
-                +'_'+train_configurations[model_type]['optimizer'] \
-                +'_lr'+str(train_configurations[model_type]["LearningRate"]) \
-                +'_'+configuration["config_name"] \
-                +'_'+str(timestamp) \
-                +'.h5'
-    
-    feature_extractor.save(filename)
-    print("Saving file: ", filename)
-    
-    # TESTING
-    test = True
-    if test:
-        test_node_configurations = {
-            'OTA-Lab': {
-                'dataset_name': 'Key-Generation',
-                'config_name': 'Sinusoid-Powder-OTA-Lab-Nodes',
-                'repo_name': 'CAAI-FAU',
-                'node_Ids': [
-                    [1,2,3],
-                    [1,4,5],
-                    [1,4,8],
-                    [2,4,3],
-                    [4,2,5],
-                    [4,2,8],
-                    [4,8,5],
-                    [5,7,8],
-                    [5,8,7],
-                    [8,4,1],
-                    [8,5,1],
-                    [8,5,4]
-                ]
-            },
-            'OTA-Dense': {
-                'dataset_name': 'Key-Generation',
-                'config_name': 'Sinusoid-Powder-OTA-Dense-Nodes',
-                'repo_name': 'CAAI-FAU',
-                'node_Ids': [
-                    [1,2,3],
-                    [1,2,5],
-                    [1,3,2],
-                    [4,3,5]
-                ]
-            }
-        }
-        test_model(filename, test_node_configurations['OTA-Dense'])
+    for a in alphas:
+        for b in betas:
+            for g in gammas:
+                for o in optimizers:
+                    print("Alpha: ", a, "Beta: ", b, "Gamma: ", g, "Optimizer: ", o)
+                    train_configurations = {
+                        "QuadrupletNet": {
+                            "alpha": a,
+                            "beta": b,
+                            "gamma": g,
+                            "fft_len": fft_len,
+                            "batch_size": batch_size,
+                            "validation_size": val_size,
+                            "LearningRate": lr,
+                            "epochs": maxEpochs,
+                            "patience": patience,
+                            "factor": factor,
+                            "optimizer": o
+                        },
+                        "TripletNet": {
+                            "alpha": a,
+                            "beta": b,
+                            "fft_len": fft_len,
+                            "batch_size": batch_size,
+                            "validation_size": val_size,
+                            "LearningRate": lr,
+                            "epochs": maxEpochs,
+                            "patience": patience,
+                            "factor": factor,
+                            "optimizer": o
+                        }
+                    }
+                    model_type = "QuadrupletNet"
+                    
+                    filename_start = 'FeatureExtractor_'+str(train_configurations[model_type]["fft_len"]) \
+                            +'_alpha'+str(train_configurations[model_type]["alpha"]) \
+                            +'_beta'+str(train_configurations[model_type]["beta"]) \
+                            +('_gamma'+str(train_configurations[model_type]["gamma"]) if "gamma" in train_configurations[model_type] else "") \
+                            +'_'+train_configurations[model_type]['optimizer'] \
+                            +'_lr'+str(train_configurations[model_type]["LearningRate"]) \
+                            +'_'+configuration["config_name"]
+                    
+                    ModelsDir = homeDir+"Models/"
+                    
+                    # Check if there is a file that starts with the same name
+                    model_exisits = False
+                    # Check if there is a file that starts with the same name
+                    for file in os.listdir(ModelsDir):
+                        if file.startswith(filename_start):
+                            model_exisits = True
+                            break
+                    if model_exisits:
+                        print("Model already exists")
+                        print("Skipping: ", filename_start)
+                        continue
+                    else:
+                        print("Training model: ", filename_start)
+                        
+                        feature_extractor, history = train_channel_feature_extractor(data, labels, train_configurations, model_type)
+                        
+                        timestamp = int(time.time())
+                        filename = 'FeatureExtractor_'+str(train_configurations[model_type]["fft_len"]) \
+                                    +'_alpha'+str(train_configurations[model_type]["alpha"]) \
+                                    +'_beta'+str(train_configurations[model_type]["beta"]) \
+                                    +('_gamma'+str(train_configurations[model_type]["gamma"]) if "gamma" in train_configurations[model_type] else "") \
+                                    +'_'+train_configurations[model_type]['optimizer'] \
+                                    +'_lr'+str(train_configurations[model_type]["LearningRate"]) \
+                                    +'_'+configuration["config_name"] \
+                                    +'_'+str(timestamp) \
+                                    +'.h5'
+                        
+                        feature_extractor.save(ModelsDir+filename)
+                        print("Saving file: ", filename)
+                        
+                        # Save the history
+                        ResultsDir = homeDir+"Results/"
+                        with h5py.File(ResultsDir+"History_"+filename, "w") as f:
+                            f.create_dataset("train_loss",data=history.history['loss'])
+                            f.create_dataset("validation_loss",data=history.history['val_loss'])
+                            f.close()

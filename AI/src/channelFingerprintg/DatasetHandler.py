@@ -71,12 +71,50 @@ class DatasetHandler():
         data_complex = I + 1j*Q
         return data_complex
     
-    def load_data(self):
+    def shuffle_in_groups_of_four(self, data, labels):
+        """Shuffle dataset by contiguous quadruplet blocks while preserving each block.
+
+        The generator samples indices in steps of 4: [i, i+1, i+2, i+3].
+        This function randomly permutes the order of those quadruplet blocks
+        but keeps the items inside each block together and in-order.
+
+        If the dataset length is not divisible by 4, the trailing samples
+        are dropped so that all remaining samples form complete quadruplets.
+        """
+        if data is None or labels is None:
+            return data, labels
+
+        num_samples = len(data)
+        usable = (num_samples // 4) * 4
+        if usable == 0:
+            return data[:0], labels[:0]
+
+        if usable != num_samples:
+            # Drop trailing samples that don't form a complete quadruplet
+            data = data[:usable]
+            labels = labels[:usable]
+
+        num_blocks = usable // 4
+        block_order = np.random.permutation(num_blocks)
+        # Build the new index order by concatenating each block's four indices
+        new_indices = []
+        for b in block_order:
+            base = 4 * b
+            new_indices.extend([base, base + 1, base + 2, base + 3])
+
+        new_indices = np.asarray(new_indices, dtype=int)
+        data_shuffled = data[new_indices]
+        labels_shuffled = labels[new_indices]
+        return data_shuffled, labels_shuffled
+    
+    def load_data(self, shuffle=False):
         label = self.dataFrame["channel"]
         # label = self.dataFrame["label"]
         label = label.astype(int)
         label = np.transpose(label)
         data = self.convert_to_complex()
+        if shuffle:
+            data, label = self.shuffle_in_groups_of_four(data, label)
         return data,label
     
 class ChannelSpectrogram():
@@ -157,7 +195,7 @@ class ChannelSpectrogram():
         
         num_sample = data.shape[0]
         num_row = int(win_len*0.4)
-        num_column = int(np.floor((data.shape[1]-win_len)/overlap + 1))
+        num_column = int(np.ceil((data.shape[1]-win_len)/overlap + 1))
         data_channel_spec = np.zeros([num_sample, num_row, num_column, 1])
         
         # Convert each packet (IQ samples) to a channel independent spectrogram.

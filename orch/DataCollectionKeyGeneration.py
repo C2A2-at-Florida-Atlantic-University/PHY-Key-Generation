@@ -374,7 +374,7 @@ def loadOTARooftopConfig(
         # [4,3,2],  # Ustar, Moran, Guesthouse
         # [4,1,3],  # Ustar, EBC, Moran
         # [4, 3, 5],  # Ustar, Moran, Local
-        [1,2,5]
+        [1,2,5] # EBC, GuestsHouse, Local
     ]
     return NodeIPs, NodeGains, NodeConfigs
 
