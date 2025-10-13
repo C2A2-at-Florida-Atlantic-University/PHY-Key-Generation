@@ -24,7 +24,6 @@ import hashlib
 import time
 from tensorflow.keras.models import load_model
 from tensorflow.keras.utils import plot_model
-from deep_learning_models import QuadrupletNet_Channel
 from DatasetHandler import DatasetHandler, ChannelSpectrogram
 import os
 # Import scipy
@@ -186,9 +185,9 @@ def get_latest_results_file(results_directory, results_file):
     results_files.sort(key=lambda x: os.path.getmtime(os.path.join(results_directory, x)))
     return results_files[-1]
 
-def extract_features_data(data, feature_extractor):
+def extract_features_data(data, feature_extractor, fft_len):
     ChannelSpectrogramObj = ChannelSpectrogram()
-    data_spectrogram = ChannelSpectrogramObj.channel_spectrogram(np.array(data),256)
+    data_spectrogram = ChannelSpectrogramObj.channel_spectrogram(np.array(data),fft_len)
     features = feature_extractor.predict(data_spectrogram)
     return features
 
@@ -234,8 +233,8 @@ def test_model(feature_extractor_name, node_configurations, home="/home/Research
     if generate_results:
         # with tf.device('/CPU:0'):
         #     print("loading model")
-        feature_extractor = load_model(feature_extractor_name)
-        features = extract_features_data(data, feature_extractor)
+        feature_extractor = load_model(feature_extractor_name, custom_objects={"K": tf.keras.backend})
+        features = extract_features_data(data, feature_extractor, fft_len)
         t_start = time.time()
         quantized_data = quantize_data(features)
         t_end = time.time()
@@ -745,9 +744,13 @@ def find_best_model(configuration, homeDir, node_configurations):
     # # alphas = [1]
     betas = [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]
     # betas = [1]
-    gammas = [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]
+    gammas = []
     # gammas = [0.5]
     optimizers = ["SGD"]
+    
+    network_types = ["ResNet", "FeedForward", "RNN"]
+    FFT_lengths = [256, 512] # [256, 512, 1024]
+    output_lengths = [128, 256, 512] # [128, 256, 512]
     
     # results = {"alpha":[],"beta":[],"gamma":[],"optimizer":[],"KDR_AB":[],"KDR_AC":[],"KDR_BC":[], "Models":[], "KDR_ratio":[]}
     # change results as a pandas dataframe
@@ -767,72 +770,80 @@ def find_best_model(configuration, homeDir, node_configurations):
         else:
             dataset.add_dataset(dataset_name, node_config_name, repo_name)
     dataset.get_dataframe_Info()
-    data, _ = dataset.load_data()
+    REPRO_SEED = 42
+    data, _, _, _ = dataset.load_data(shuffle=True, seed=REPRO_SEED)
     
-    for a in alphas:
-        for b in betas:
-            for g in gammas:
-                for o in optimizers:
-                    # for file in os.listdir(modelsDir):
-                    print("Alpha: ", a, "Beta: ", b, "Gamma: ", g, "Optimizer: ", o)
-                    train_configurations = {
-                        "QuadrupletNet": {
-                            "alpha": a,
-                            "beta": b,
-                            "gamma": g,
-                            "fft_len": fft_len,
-                            "batch_size": batch_size,
-                            "validation_size": val_size,
-                            "LearningRate": lr,
-                            "epochs": maxEpochs,
-                            "patience": patience,
-                            "factor": factor,
-                            "optimizer": o
-                        },
-                        "TripletNet": {
-                            "alpha": a,
-                            "beta": b,
-                            "fft_len": fft_len,
-                            "batch_size": batch_size,
-                            "validation_size": val_size,
-                            "LearningRate": lr,
-                            "epochs": maxEpochs,
-                            "patience": patience,
-                            "factor": factor,
-                            "optimizer": o
+    # for a in alphas:
+    #     for b in betas:
+    #         for g in gammas:
+    for network_type in network_types:
+        for fft_len in FFT_lengths:
+            for output_length in output_lengths:
+                for a in alphas:
+                    b,g = a,a
+                    for o in optimizers:
+                        # for file in os.listdir(modelsDir):
+                        print("Alpha: ", a, "Beta: ", b, "Gamma: ", g, "Optimizer: ", o)
+                        train_configurations = {
+                            "QuadrupletNet": {
+                                "alpha": a,
+                                "beta": b,
+                                # "gamma": g,
+                                "fft_len": fft_len,
+                                "output_length": output_length,
+                                "batch_size": batch_size,
+                                "validation_size": val_size,
+                                "LearningRate": lr,
+                                "epochs": maxEpochs,
+                                "patience": patience,
+                                "factor": factor,
+                                "optimizer": o
+                            },
+                            "TripletNet": {
+                                "alpha": a,
+                                "beta": b,
+                                "fft_len": fft_len,
+                                "batch_size": batch_size,
+                                "validation_size": val_size,
+                                "LearningRate": lr,
+                                "epochs": maxEpochs,
+                                "patience": patience,
+                                "factor": factor,
+                                "optimizer": o
+                            }
                         }
-                    }
-                    model_type = "QuadrupletNet"
-                    
-                    filename_start = 'FeatureExtractor_'+str(train_configurations[model_type]["fft_len"]) \
-                            +'_alpha'+str(train_configurations[model_type]["alpha"]) \
-                            +'_beta'+str(train_configurations[model_type]["beta"]) \
-                            +('_gamma'+str(train_configurations[model_type]["gamma"]) if "gamma" in train_configurations[model_type] else "") \
-                            +'_'+train_configurations[model_type]['optimizer'] \
-                            +'_lr'+str(train_configurations[model_type]["LearningRate"]) \
-                            +'_'+configuration["config_name"]
-                    
-                    ModelsDir = homeDir+"Models/"
-                    for file in os.listdir(ModelsDir):
-                        if file.startswith(filename_start):
-                            complete_filename = ModelsDir+file
-                            feature_extractor = load_model(complete_filename)
-                            features = extract_features_data(data, feature_extractor)
-                            quantized_data = quantize_data(features)
-                            quantized_data = quantized_data[:]
-                            avg_KDR_AB, avg_KDR_AC, avg_KDR_BC, _, _, _ = bdr_data(quantized_data)
-                            print("Average KDR Alice-Bob:", avg_KDR_AB)
-                            print("Average KDR Bob-Eve:", avg_KDR_AC)
-                            print("Average KDR Alice-Eve:", avg_KDR_BC)
-                            # if (avg_KDR_AC > 0.1 and avg_KDR_BC > 0.1):
-                            KDR_ratio = calculate_KDR_ratio(avg_KDR_AB, avg_KDR_AC, avg_KDR_BC)
-                            print("Average KDR ratio: ", KDR_ratio)
-                            results = pd.concat([results, pd.DataFrame([{"alpha": a, "beta": b, "gamma": g, "optimizer": o, "KDR_AB": avg_KDR_AB, "KDR_AC": avg_KDR_AC, "KDR_BC": avg_KDR_BC, "KDR_ratio": KDR_ratio, "Models": file}])], ignore_index=True)
-                            break        
+                        model_type = "QuadrupletNet"
+                        
+                        filename_start = 'FeatureExtractor_'+network_type+'_in'+str(train_configurations[model_type]["fft_len"]) \
+                                +'_out'+str(train_configurations[model_type]["output_length"]) \
+                                +'_alpha'+str(train_configurations[model_type]["alpha"]) \
+                                +'_beta'+str(train_configurations[model_type]["beta"]) \
+                                +('_gamma'+str(train_configurations[model_type]["gamma"]) if "gamma" in train_configurations[model_type] else "") \
+                                +'_'+train_configurations[model_type]['optimizer'] \
+                                +'_lr'+str(train_configurations[model_type]["LearningRate"]) \
+                                +'_'+configuration["config_name"]
+                        
+                        ModelsDir = homeDir+"Models/"
+                        for file in os.listdir(ModelsDir):
+                            if file.startswith(filename_start):
+                                complete_filename = ModelsDir+file
+                                feature_extractor = load_model(complete_filename, custom_objects={"K": tf.keras.backend})
+                                features = extract_features_data(data, feature_extractor, train_configurations[model_type]["fft_len"])
+                                quantized_data = quantize_data(features)
+                                quantized_data = quantized_data[:]
+                                avg_KDR_AB, avg_KDR_AC, avg_KDR_BC, _, _, _ = bdr_data(quantized_data)
+                                print("Average KDR Alice-Bob:", avg_KDR_AB)
+                                print("Average KDR Bob-Eve:", avg_KDR_AC)
+                                print("Average KDR Alice-Eve:", avg_KDR_BC)
+                                # if (avg_KDR_AC > 0.1 and avg_KDR_BC > 0.1):
+                                KDR_ratio = calculate_KDR_ratio(avg_KDR_AB, avg_KDR_AC, avg_KDR_BC)
+                                print("Average KDR ratio: ", KDR_ratio)
+                                results = pd.concat([results, pd.DataFrame([{"alpha": a, "beta": b, "gamma": g, "optimizer": o, "KDR_AB": avg_KDR_AB, "KDR_AC": avg_KDR_AC, "KDR_BC": avg_KDR_BC, "KDR_ratio": KDR_ratio, "Models": file}])], ignore_index=True)
+                                break        
 
     # Save the results dataframe in a file
     ResultsDir = homeDir+"Results/"
-    results.to_csv(ResultsDir+"results_BDR_models.csv", index=False)
+    results.to_csv(ResultsDir+"results_BDR_models_OTA-Lab.csv", index=False)
         
     KDR_ratios = results["KDR_ratio"]
     best_KDR_ratio_index = np.argmax(KDR_ratios)
@@ -858,7 +869,7 @@ if __name__ == "__main__":
                 'node_Ids': [
                     [1,2,3],
                     [1,4,5],
-                    [1,4,8],
+                    [1,4,8], # Fourth scenario
                     [2,4,3],
                     [4,2,5],
                     [4,2,8],
@@ -875,15 +886,17 @@ if __name__ == "__main__":
                 'config_name': 'Sinusoid-Powder-OTA-Dense-Nodes',
                 'repo_name': 'CAAI-FAU',
                 'node_Ids': [
-                    # [1,2,3], 
+                    [1,2,3], # Third scenario
                     [1,2,5], # Second scenario
                     # [1,3,2],
-                    # [4,3,5] # First scenario
+                    [4,3,5] # First scenario
                 ]
             }
         }
     # Get name of file from command line
     # If there is no command line argument, use the default model name
+    data_collection_type_train = "OTA-Lab" # "OTA-Lab", "OTA-Dense"
+    data_collection_type_test = "OTA-Lab" # "OTA-Lab", "OTA-Dense"
     if len(sys.argv) == 1:
         # model_name = "FeatureExtractor_512_alpha0.5_beta0.5_SGD_lr0.1_Sinusoid-Powder-OTA-Lab-Nodes_1758227515"
         # Use the model with the best validation loss
@@ -909,17 +922,35 @@ if __name__ == "__main__":
             # Get the filename with the best validation loss
             # model_name = saved_filename[-1]
         else:
-            model_name = find_best_model(test_node_configurations['OTA-Lab'], homeDir, test_node_configurations['OTA-Dense'])
+            model_name = find_best_model(test_node_configurations[data_collection_type_train], homeDir, test_node_configurations[data_collection_type_test])
             # Copy the file as a best model under models directory
             shutil.copy(ModelsDir+model_name, ModelsDir+"Best_Model.h5")
     else:
         # model_name = sys.argv[1]
         #0.2,0.4,0.3,SGD
-        alpha = sys.argv[1]
-        beta = sys.argv[2]
-        gamma = sys.argv[3]
-        optimizer = sys.argv[4]
-        model_name = "FeatureExtractor_256_alpha"+alpha+"_beta"+beta+"_gamma"+gamma+"_"+optimizer+"_lr0.1"
+        arg_idx = 1
+        alpha = sys.argv[arg_idx]
+        arg_idx += 1
+        beta = sys.argv[arg_idx]
+        arg_idx += 1
+        # Check if next argument is a number
+        if sys.argv[arg_idx].isdigit():
+            gamma = sys.argv[arg_idx]
+            arg_idx += 1
+        else:
+            gamma = None
+        optimizer = sys.argv[arg_idx]
+        arg_idx += 1
+        network_type = sys.argv[arg_idx]
+        arg_idx += 1
+        input_length = sys.argv[arg_idx]
+        arg_idx += 1
+        output_length = sys.argv[arg_idx]
+        arg_idx += 1
+        model_name = "FeatureExtractor_"+network_type \
+                +"_in"+input_length+"_out"+output_length \
+                +"_alpha"+alpha+"_beta"+beta+("_gamma"+gamma+"_") if gamma is not None else "" \
+                +optimizer+"_lr0.1"
         # Find the file that starts with the model_name
         found = False
         print("Model name: ", model_name)
@@ -930,7 +961,6 @@ if __name__ == "__main__":
                 break
         if not found:
             print("Model not found")
-            
             exit()
     
     # model_name = "FeatureExtractor_512_alpha0.5_beta0.5_SGD_lr0.1_Sinusoid-Powder-OTA-Lab-Nodes_1758225804"

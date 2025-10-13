@@ -1,8 +1,8 @@
 import math
 from sklearn.model_selection import train_test_split
-from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
 from tensorflow.keras.optimizers import RMSprop, Adam, SGD
-from deep_learning_models import identity_loss, QuadrupletNet_Channel
+from deep_learning_models import identity_loss, ResNet_QuadrupletNet_Channel, FeedForward_QuadrupletNet_Channel, RNN_QuadrupletNet_Channel, Transformer_QuadrupletNet_Channel, AE_QuadrupletNet_Channel
 from DatasetHandler import DatasetHandler, ChannelSpectrogram
 
 import time
@@ -11,8 +11,40 @@ import h5py
 from collections import Counter
 import numpy as np
 import os
+import random
+import tensorflow as tf
 
-def train_channel_feature_extractor(data, labels, train_configurations, model_type):
+def set_reproducible(seed: int, deterministic: bool = True, max_threads: int = 1):
+    """Set seeds and deterministic execution for reproducibility.
+
+    Note: Some ops may remain nondeterministic on certain GPUs/versions.
+    """
+    # Python, NumPy, TensorFlow seeds
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    try:
+        # Sets TF, NumPy, and Python seeds together (TF 2.9+)
+        tf.keras.utils.set_random_seed(seed)
+    except Exception:
+        tf.random.set_seed(seed)
+
+    # Deterministic behavior (TF 2.12+)
+    if deterministic:
+        os.environ.setdefault("TF_DETERMINISTIC_OPS", "1")
+        try:
+            tf.config.experimental.enable_op_determinism(True)
+        except Exception:
+            pass
+
+    # Constrain parallelism to reduce nondeterminism from threads
+    try:
+        tf.config.threading.set_intra_op_parallelism_threads(max_threads)
+        tf.config.threading.set_inter_op_parallelism_threads(max_threads)
+    except Exception:
+        pass
+
+def train_channel_feature_extractor(data, labels, train_configurations, model_type, network_type="ResNet", model_name="", seed: int = 42):
     '''
     train_feature_extractor trains an RFF extractor using triplet loss.
     
@@ -30,6 +62,8 @@ def train_channel_feature_extractor(data, labels, train_configurations, model_ty
         channel-independent spectrograms.
     '''
         
+    # Ensure reproducibility for any TF/NumPy/Python randomness within training
+    set_reproducible(seed)
     ChannelSpectrogramObj = ChannelSpectrogram()
     
     # Convert time-domain IQ samples to channel-independent spectrograms.
@@ -39,19 +73,29 @@ def train_channel_feature_extractor(data, labels, train_configurations, model_ty
     )
 
     #NetObj =  TripletNet_Channel()
-    NetObj = QuadrupletNet_Channel()
+    # NetObj = QuadrupletNet_Channel()
     
+    # NetObj = ResNet_QuadrupletNet_Channel()
+    output_length = train_configurations[model_type]['output_length']
     # Create an RFF extractor.
-    feature_extractor = NetObj.feature_extractor(data.shape)
-
-    feature_extractor.summary()
+    if network_type == "ResNet":
+        NetObj = ResNet_QuadrupletNet_Channel()
+    elif network_type == "FeedForward":
+        NetObj = FeedForward_QuadrupletNet_Channel()
+    elif network_type == "RNN":
+        NetObj = RNN_QuadrupletNet_Channel()
+    elif network_type == "Transformer":
+        NetObj = Transformer_QuadrupletNet_Channel()
+    elif network_type == "AE":
+        NetObj = AE_QuadrupletNet_Channel()
+    feature_extractor = NetObj.feature_extractor(data.shape, output_length)
     
     # Create the quadruplet net using the RFF extractor.
     net = NetObj.create_quadruplet_net(
         feature_extractor, 
         train_configurations[model_type]['alpha'], 
         train_configurations[model_type]['beta'], 
-        train_configurations[model_type]['gamma']
+        train_configurations[model_type]['gamma'] if 'gamma' in train_configurations[model_type] else None
     )
 
     # Create callbacks during training. The training stops when validation loss 
@@ -69,7 +113,19 @@ def train_channel_feature_extractor(data, labels, train_configurations, model_ty
                                     patience = int(math.ceil(patience/2)), 
                                     verbose=1
                                     )
-    callbacks = [early_stop, reduce_lr]
+    
+    ResultsDir = homeDir+"Results/"
+    
+    # Model checkpoint
+    checkpoint_filename = os.path.join(ResultsDir, f"model_checkpoint_{model_name}.h5")
+    checkpoint = ModelCheckpoint(checkpoint_filename, 
+                                 monitor='val_loss', 
+                                 verbose=1, 
+                                 save_best_only=True, 
+                                 mode='min',
+                                 save_weights_only=True)
+    
+    callbacks = [early_stop, reduce_lr, checkpoint]
 
     validation_size= train_configurations[model_type]['validation_size']
 
@@ -84,12 +140,14 @@ def train_channel_feature_extractor(data, labels, train_configurations, model_ty
     # Create the trainining generator.
     train_generator = NetObj.create_generator_channel(batch_size, 
                                                         data_train, 
-                                                        label_train)
+                                                        label_train,
+                                                        seed=seed)
     
     # Create the validation generator.
     valid_generator = NetObj.create_generator_channel(batch_size, 
                                                         data_valid, 
-                                                        label_valid)
+                                                        label_valid,
+                                                        seed=seed + 1 if isinstance(seed, int) else None)
     
     # Use the RMSprop optimizer for training.
     LearningRate = train_configurations[model_type]['LearningRate']
@@ -116,11 +174,24 @@ def train_channel_feature_extractor(data, labels, train_configurations, model_ty
                         validation_steps = data_valid.shape[0]//batch_size,
                         verbose=1, 
                         callbacks = callbacks)
+    # Save the history and reproducibility metadata
+    with h5py.File(ResultsDir+"History_"+model_name, "w") as f:
+                        f.create_dataset("train_loss",data=history.history['loss'])
+                        f.create_dataset("validation_loss",data=history.history['val_loss'])
+                        f.close()
+                        
+    timestamp = int(time.time())
+    filename = model_name +'_'+str(timestamp)+'.h5'
     
-    return feature_extractor, history
+    feature_extractor.save(ModelsDir+filename)
+    print("Saving file: ", filename)
+    
+    return feature_extractor
 
 if __name__ == "__main__":
     homeDir = "/home/Research/POWDER/"
+    # Central seed for full reproducibility of data shuffling, initialization, and training
+    
     node_configurations = {
         'OTA-Lab': {
             'dataset_name': 'Key-Generation',
@@ -167,7 +238,10 @@ if __name__ == "__main__":
         else:
             dataset.add_dataset(dataset_name, config_name, repo_name)
         dataset.get_dataframe_Info()
-    data, labels = dataset.load_data(shuffle=True)
+    # Set seeds and determinism prior to any TF ops
+    REPRO_SEED = 42
+    set_reproducible(REPRO_SEED)
+    data, labels, rx, tx = dataset.load_data(shuffle=True, seed=REPRO_SEED)
     
     batch_size = 128
     fft_len = 256
@@ -178,88 +252,87 @@ if __name__ == "__main__":
     factor = 0.5
     optimizer = "SGD" # "RMSprop", "SGD", "Adam"
 
-    alphas = [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]
-    betas = [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]
-    gammas = [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]
+    # alphas = [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]
+    # betas = [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]
+    # gammas = [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]
+    FFT_lengths = [256, 512, 1024]
+    output_lengths = [128, 256, 512]
+    params_a_b_g = [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]   
+    alphas = [0.4]
+    betas = [0.4]
+    gammas = [0.2]
     optimizers = ["SGD"]
-    
-    for a in alphas:
-        for b in betas:
-            for g in gammas:
-                for o in optimizers:
-                    print("Alpha: ", a, "Beta: ", b, "Gamma: ", g, "Optimizer: ", o)
-                    train_configurations = {
-                        "QuadrupletNet": {
-                            "alpha": a,
-                            "beta": b,
-                            "gamma": g,
-                            "fft_len": fft_len,
-                            "batch_size": batch_size,
-                            "validation_size": val_size,
-                            "LearningRate": lr,
-                            "epochs": maxEpochs,
-                            "patience": patience,
-                            "factor": factor,
-                            "optimizer": o
-                        },
-                        "TripletNet": {
-                            "alpha": a,
-                            "beta": b,
-                            "fft_len": fft_len,
-                            "batch_size": batch_size,
-                            "validation_size": val_size,
-                            "LearningRate": lr,
-                            "epochs": maxEpochs,
-                            "patience": patience,
-                            "factor": factor,
-                            "optimizer": o
+    network_types = ["RNN"] #["ResNet", "FeedForward", "RNN", "Transformer", "AE"]
+    # network_type = network_types[0]
+    for fft_len in FFT_lengths:
+        for output_length in output_lengths:
+            for network_type in network_types:
+                for a in params_a_b_g:
+                    b, g = a, a
+                    for o in optimizers:
+                        print("Alpha: ", a, "Beta: ", b, "Gamma: ", g, "Optimizer: ", o, "Network Type: ", network_type)
+                        train_configurations = {
+                            "QuadrupletNet": {
+                                "alpha": a,
+                                "beta": b,
+                                # "gamma": g,
+                                "fft_len": fft_len,
+                                "output_length": output_length,
+                                "batch_size": batch_size,
+                                "validation_size": val_size,
+                                "LearningRate": lr,
+                                "epochs": maxEpochs,
+                                "patience": patience,
+                                "factor": factor,
+                                "optimizer": o
+                            },
+                            "TripletNet": {
+                                "alpha": a,
+                                "beta": b,
+                                "fft_len": fft_len,
+                                "output_length": output_length,
+                                "batch_size": batch_size,
+                                "validation_size": val_size,
+                                "LearningRate": lr,
+                                "epochs": maxEpochs,
+                                "patience": patience,
+                                "factor": factor,
+                                "optimizer": o
+                            }
                         }
-                    }
-                    model_type = "QuadrupletNet"
-                    
-                    filename_start = 'FeatureExtractor_'+str(train_configurations[model_type]["fft_len"]) \
-                            +'_alpha'+str(train_configurations[model_type]["alpha"]) \
-                            +'_beta'+str(train_configurations[model_type]["beta"]) \
-                            +('_gamma'+str(train_configurations[model_type]["gamma"]) if "gamma" in train_configurations[model_type] else "") \
-                            +'_'+train_configurations[model_type]['optimizer'] \
-                            +'_lr'+str(train_configurations[model_type]["LearningRate"]) \
-                            +'_'+configuration["config_name"]
-                    
-                    ModelsDir = homeDir+"Models/"
-                    
-                    # Check if there is a file that starts with the same name
-                    model_exisits = False
-                    # Check if there is a file that starts with the same name
-                    for file in os.listdir(ModelsDir):
-                        if file.startswith(filename_start):
-                            model_exisits = True
-                            break
-                    if model_exisits:
-                        print("Model already exists")
-                        print("Skipping: ", filename_start)
-                        continue
-                    else:
-                        print("Training model: ", filename_start)
+                        model_type = "QuadrupletNet"
                         
-                        feature_extractor, history = train_channel_feature_extractor(data, labels, train_configurations, model_type)
+                        filename_start = 'FeatureExtractor_'+network_type+'_in'+str(train_configurations[model_type]["fft_len"]) \
+                                +'_out'+str(train_configurations[model_type]["output_length"]) \
+                                +'_alpha'+str(train_configurations[model_type]["alpha"]) \
+                                +'_beta'+str(train_configurations[model_type]["beta"]) \
+                                +('_gamma'+str(train_configurations[model_type]["gamma"]) if "gamma" in train_configurations[model_type] else "") \
+                                +'_'+train_configurations[model_type]['optimizer'] \
+                                +'_lr'+str(train_configurations[model_type]["LearningRate"]) \
+                                +'_'+configuration["config_name"]
                         
-                        timestamp = int(time.time())
-                        filename = 'FeatureExtractor_'+str(train_configurations[model_type]["fft_len"]) \
-                                    +'_alpha'+str(train_configurations[model_type]["alpha"]) \
-                                    +'_beta'+str(train_configurations[model_type]["beta"]) \
-                                    +('_gamma'+str(train_configurations[model_type]["gamma"]) if "gamma" in train_configurations[model_type] else "") \
-                                    +'_'+train_configurations[model_type]['optimizer'] \
-                                    +'_lr'+str(train_configurations[model_type]["LearningRate"]) \
-                                    +'_'+configuration["config_name"] \
-                                    +'_'+str(timestamp) \
-                                    +'.h5'
+                        ModelsDir = homeDir+"Models/"
                         
-                        feature_extractor.save(ModelsDir+filename)
-                        print("Saving file: ", filename)
-                        
-                        # Save the history
-                        ResultsDir = homeDir+"Results/"
-                        with h5py.File(ResultsDir+"History_"+filename, "w") as f:
-                            f.create_dataset("train_loss",data=history.history['loss'])
-                            f.create_dataset("validation_loss",data=history.history['val_loss'])
-                            f.close()
+                        model_exisits = False
+                        # Check if there is a file that starts with the same name
+                        for file in os.listdir(ModelsDir):
+                            if file.startswith(filename_start):
+                                model_exisits = True
+                                break
+                        if model_exisits:
+                            print("Model already exists")
+                            print("Skipping: ", filename_start)
+                            continue
+                        else:
+                            print("Training model: ", filename_start)
+                            
+                            feature_extractor = train_channel_feature_extractor(
+                                data,
+                                labels,
+                                train_configurations,
+                                model_type,
+                                network_type,
+                                filename_start,
+                                seed=REPRO_SEED,
+                            )
+                            

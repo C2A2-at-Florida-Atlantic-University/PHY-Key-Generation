@@ -71,7 +71,7 @@ class DatasetHandler():
         data_complex = I + 1j*Q
         return data_complex
     
-    def shuffle_in_groups_of_four(self, data, labels):
+    def shuffle_in_groups_of_four(self, data, labels, rx, tx, seed=None):
         """Shuffle dataset by contiguous quadruplet blocks while preserving each block.
 
         The generator samples indices in steps of 4: [i, i+1, i+2, i+3].
@@ -81,21 +81,24 @@ class DatasetHandler():
         If the dataset length is not divisible by 4, the trailing samples
         are dropped so that all remaining samples form complete quadruplets.
         """
+        # Use a local RNG when a seed is provided to avoid mutating global state
+        rng = np.random.default_rng(seed) if seed is not None else None
         if data is None or labels is None:
-            return data, labels
+            return data, labels, rx, tx
 
         num_samples = len(data)
         usable = (num_samples // 4) * 4
         if usable == 0:
-            return data[:0], labels[:0]
+            return data[:0], labels[:0], rx[:0], tx[:0]
 
         if usable != num_samples:
             # Drop trailing samples that don't form a complete quadruplet
             data = data[:usable]
             labels = labels[:usable]
-
+            rx = rx[:usable]
+            tx = tx[:usable]
         num_blocks = usable // 4
-        block_order = np.random.permutation(num_blocks)
+        block_order = (rng.permutation(num_blocks) if rng is not None else np.random.permutation(num_blocks))
         # Build the new index order by concatenating each block's four indices
         new_indices = []
         for b in block_order:
@@ -105,17 +108,163 @@ class DatasetHandler():
         new_indices = np.asarray(new_indices, dtype=int)
         data_shuffled = data[new_indices]
         labels_shuffled = labels[new_indices]
-        return data_shuffled, labels_shuffled
+        rx_shuffled = rx[new_indices]
+        tx_shuffled = tx[new_indices]
+        return data_shuffled, labels_shuffled, rx_shuffled, tx_shuffled
     
-    def load_data(self, shuffle=False):
+    def load_data(self, shuffle=False, seed=None):
         label = self.dataFrame["channel"]
         # label = self.dataFrame["label"]
         label = label.astype(int)
         label = np.transpose(label)
+        
+        rx = self.dataFrame["rx"]
+        tx = self.dataFrame["tx"]
+        rx = rx.astype(int)
+        tx = tx.astype(int)
+        rx = np.transpose(rx)
+        tx = np.transpose(tx)
+        
         data = self.convert_to_complex()
         if shuffle:
-            data, label = self.shuffle_in_groups_of_four(data, label)
-        return data,label
+            data, label, rx, tx = self.shuffle_in_groups_of_four(data, label, rx, tx, seed=seed)
+        return data,label, rx, tx
+    
+    def plot_spectrogram(self,spectrogram, config_name):
+        # In a figure with 4 subplots each showing a spectrogram for each quadruplet
+        fig, axes = plt.subplots(nrows=2, ncols=2, figsize=(10, 5))
+        labels = ["alice-bob", "alice-eve", "bob-alice", "bob-eve"]
+        spec_index = 0
+        for i in range(2):
+            for j in range(2):
+                axes[i,j].imshow(spectrogram[spec_index], aspect='auto', cmap='jet')
+                axes[i,j].set_title(f'Spectrogram {labels[spec_index]}')
+                axes[i,j].set_xlabel('Time')
+                axes[i,j].set_ylabel('Frequency')
+                spec_index += 1
+        plt.tight_layout()
+        plt.show()
+        plt.savefig(f"spectrogram_{spectrogram.shape[0]}_{spectrogram.shape[1]}_{spectrogram.shape[2]}_{config_name}.png")
+        
+        # plt.figure(figsize=(10, 5))
+        # plt.imshow(spectrogram, aspect='auto', cmap='jet')
+        # plt.colorbar()
+        # plt.title('Spectrogram')
+        # plt.xlabel('Time')
+        # plt.ylabel('Frequency')
+        # plt.show()
+        # plt.savefig(f"spectrogram_{spectrogram.shape[0]}_{spectrogram.shape[1]}_{spectrogram.shape[2]}.png")
+        
+    def plot_avg_signal_power(self, data, config_name, scenarios_info):
+        # Get the average power for every sample in data
+        # Plot avg power for each sample
+        # Labels are distributed as quadruplets where each quadruplet is sample [i, i+1, i+2, i+3]
+        # For each sample in the quadruplet lets assign a label [alice-bob, alice-eve, bob-alice, bob-eve]
+        numScenarios = scenarios_info["numScenarios"]
+        numSamplesPerScenario = scenarios_info["numSamplesPerScenario"]
+        rx = scenarios_info["rx"]
+        tx = scenarios_info["tx"]
+        # avg_signal_power_arr = {"alice-bob":[], "alice-eve":[], "bob-alice":[], "bob-eve":[]}
+        scenario_avg_signal_power_arr = {"scenario-"+str(scenario):{"alice-bob":[], "alice-eve":[], "bob-alice":[], "bob-eve":[]} for scenario in range(numScenarios)}
+        for scenario in range(numScenarios):
+            print("Scenario:", scenario)
+            for sample in range(0, numSamplesPerScenario, 4):
+                i = scenario*(numSamplesPerScenario) + sample
+                scenario_avg_signal_power_arr["scenario-"+str(scenario)]["alice-bob"].append(np.mean(np.abs(data[i])**2))
+                scenario_avg_signal_power_arr["scenario-"+str(scenario)]["alice-eve"].append(np.mean(np.abs(data[i+1])**2))
+                scenario_avg_signal_power_arr["scenario-"+str(scenario)]["bob-alice"].append(np.mean(np.abs(data[i+2])**2))
+                scenario_avg_signal_power_arr["scenario-"+str(scenario)]["bob-eve"].append(np.mean(np.abs(data[i+3])**2))
+        
+        # plt.figure(figsize=(10, 5))
+        # for label in avg_signal_power_arr.keys():
+        #     plt.plot(avg_signal_power_arr[label], label=label)
+        # plt.title('Average Signal Power')
+        # plt.xlabel('Sample')
+        # plt.ylabel('Power')
+        # plt.legend()
+        # plt.show()
+        # plt.savefig(f"avg_signal_power_{data.shape[0]}_{config_name}.png")
+        
+        # Create a box plot where the x-axis is the scenario and the y-axis is the average signal power for each label
+        # On every scenario plot a box plot for each label
+        # Lets have a single plot where the x axis
+        from matplotlib.patches import Patch
+        label_names = ["alice-bob", "alice-eve", "bob-alice", "bob-eve"]
+        colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728"]
+
+        fig, ax = plt.subplots(figsize=(12, 6))
+        positions_base = list(range(numScenarios))
+        offsets = np.linspace(-0.3, 0.3, len(label_names))
+        box_width = 0.18
+
+        for l_idx, label_name in enumerate(label_names):
+            positions = [p + offsets[l_idx] for p in positions_base]
+            data_to_plot = [scenario_avg_signal_power_arr[f"scenario-{s}"][label_name] for s in range(numScenarios)]
+
+            bp = ax.boxplot(
+                data_to_plot,
+                positions=positions,
+                widths=box_width,
+                patch_artist=True,
+                manage_ticks=False,
+                showfliers=False,
+            )
+
+            for box in bp["boxes"]:
+                box.set_facecolor(colors[l_idx])
+                box.set_alpha(0.7)
+                box.set_edgecolor("black")
+            for median in bp["medians"]:
+                median.set_color("black")
+                median.set_linewidth(1.5)
+
+        ax.set_xticks(positions_base)
+        ax.set_xlabel("Scenario")
+        ax.set_ylabel("Average Signal Power")
+        ax.set_title(f"Average Signal Power per Scenario ({config_name})")
+        ax.grid(axis="y", linestyle="--", alpha=0.4)
+
+        legend_handles = [
+            Patch(facecolor=colors[i], edgecolor="black", label=label_names[i], alpha=0.7)
+            for i in range(len(label_names))
+        ]
+        ax.legend(handles=legend_handles, title="Label", loc="best")
+        
+        # Annotate RX number above the maximum point for each label within each scenario
+        rx_arr = np.asarray(rx)
+        label_offset_map = {"alice-bob": 0, "alice-eve": 1, "bob-alice": 2, "bob-eve": 3}
+        global_max_val = None
+        for l_idx, label_name in enumerate(label_names):
+            offset_val = label_offset_map[label_name]
+            for s in range(numScenarios):
+                values = scenario_avg_signal_power_arr[f"scenario-{s}"][label_name]
+                if len(values) == 0:
+                    continue
+                max_idx = int(np.argmax(values))
+                max_val = float(values[max_idx])
+                if (global_max_val is None) or (max_val > global_max_val):
+                    global_max_val = max_val
+                # Map back to sample index to fetch RX
+                sample_index = s * numSamplesPerScenario + 4 * max_idx + offset_val
+                rx_num = int(rx_arr[sample_index])
+                x_pos = positions_base[s] + offsets[l_idx]
+                ax.text(
+                    x_pos,
+                    max_val,
+                    f"RX: {rx_num}",
+                    ha="center",
+                    va="bottom",
+                    fontsize=8,
+                )
+        # Ensure room for annotations globally
+        if global_max_val is None:
+            global_max_val = 1.0
+        y_margin = 0.05 * (global_max_val if global_max_val != 0 else 1.0)
+        ax.set_ylim(top=global_max_val + 2 * y_margin)
+
+        plt.tight_layout()
+        plt.savefig(f"avg_signal_power_{data.shape[0]}_{config_name}.png")
+        plt.show()
     
 class ChannelSpectrogram():
     def __init__(self,):
@@ -172,6 +321,11 @@ class ChannelSpectrogram():
         chan_spec_amp = np.log10(np.abs(spec)**2)
         return chan_spec_amp
     
+    def normalize_data(self, data):
+        ''' Normalize the data with values between 0 and 1.'''
+        data = data / np.max(data)
+        return data
+    
     def channel_spectrogram(self, data, FFTwindow=512):
         '''
         channel_ind_spectrogram converts IQ samples to channel independent 
@@ -194,40 +348,88 @@ class ChannelSpectrogram():
         overlap=win_len/2
         
         num_sample = data.shape[0]
-        num_row = int(win_len*0.4)
+        # num_row = int(np.floor(win_len*0.4))
+        num_row = int(win_len)
         num_column = int(np.ceil((data.shape[1]-win_len)/overlap + 1))
         data_channel_spec = np.zeros([num_sample, num_row, num_column, 1])
         
         # Convert each packet (IQ samples) to a channel independent spectrogram.
         for i in range(num_sample):
             chan_spec_amp = self._gen_single_channel_spectrogram(data[i],win_len, overlap)
-            chan_spec_amp = self._spec_crop(chan_spec_amp)
+            # chan_spec_amp = self._spec_crop(chan_spec_amp)
+            chan_spec_amp = self.normalize_data(chan_spec_amp)
             data_channel_spec[i,:,:,0] = chan_spec_amp
             
         return data_channel_spec
 
-def plot_channel_spectrogram(data_channel_spec):
-    '''Plot the channel independent spectrogram.'''
-    plt.figure(figsize=(10, 5))
-    plt.imshow(data_channel_spec[:,:,0], aspect='auto', cmap='jet')
-    plt.colorbar()
-    plt.title('Channel Independent Spectrogram')
-    plt.xlabel('Time')
-    plt.ylabel('Frequency')
-    plt.show()
+
     
 if __name__ == "__main__":
     # Example usage
     dataset_name = "Key-Generation"
-    config_name = "Sinusoid-Powder-OTA-Dense-Nodes-123" #"Sinusoid-Powder-OTA-Lab"
+    # config_name = "Sinusoid-Powder-OTA-Dense-Nodes-123" #"Sinusoid-Powder-OTA-Lab"
+    config_names= [
+            # "Sinusoid-Powder-OTA-Dense-Nodes-123",
+            # "Sinusoid-Powder-OTA-Dense-Nodes-125",
+            # "Sinusoid-Powder-OTA-Dense-Nodes-132",
+            # "Sinusoid-Powder-OTA-Dense-Nodes-435",
+            "Sinusoid-Powder-OTA-Lab-Nodes-123",
+            "Sinusoid-Powder-OTA-Lab-Nodes-145",
+            "Sinusoid-Powder-OTA-Lab-Nodes-148",
+            "Sinusoid-Powder-OTA-Lab-Nodes-243",
+            "Sinusoid-Powder-OTA-Lab-Nodes-425",
+            "Sinusoid-Powder-OTA-Lab-Nodes-428",
+            "Sinusoid-Powder-OTA-Lab-Nodes-485",
+            "Sinusoid-Powder-OTA-Lab-Nodes-578",
+            "Sinusoid-Powder-OTA-Lab-Nodes-587",
+            "Sinusoid-Powder-OTA-Lab-Nodes-841",
+            "Sinusoid-Powder-OTA-Lab-Nodes-851",
+            "Sinusoid-Powder-OTA-Lab-Nodes-854"
+            ]
+    
+    # Lets concatenate the dataframes
+    dataframes = []
     repo_name="CAAI-FAU"
-    dataset_handler = DatasetHandler(dataset_name, config_name, repo_name)
+    numScenarios = 0
+    for idx, config_name in enumerate(config_names):
+        if idx == 0:
+            dataset_handler = DatasetHandler(dataset_name, config_name, repo_name)
+        else:
+            dataset_handler.add_dataset(dataset_name, config_name, repo_name)
+        numScenarios += 1
+    print("Number of scenarios:", numScenarios)
+    numSamplesPerScenario = len(dataset_handler.dataFrame)//numScenarios
+    print("Number of samples per scenario: ", numSamplesPerScenario)
     dataset_handler.get_dataframe_Info()
-    data, labels = dataset_handler.load_data()
+    data, labels, rx, tx = dataset_handler.load_data()
+    group_name = "OTA-Lab"
+    scenarios_info = {
+        "numScenarios": numScenarios,
+        "numSamplesPerScenario": numSamplesPerScenario,
+        "rx": rx,
+        "tx": tx
+    }
+    dataset_handler.plot_avg_signal_power(data, config_name = group_name, scenarios_info = scenarios_info)
+    
     signal_processor = ChannelSpectrogram()
-    data_channel_spec = signal_processor.channel_spectrogram(data)
-    plot_channel_spectrogram(data_channel_spec[0])
-    plot_channel_spectrogram(data_channel_spec[1])
-    plot_channel_spectrogram(data_channel_spec[2])
-    plot_channel_spectrogram(data_channel_spec[3])
+    # Print all unique labels, rx, tx
+    print("Unique labels:", np.unique(labels))
+    print("Unique rx:", np.unique(rx))
+    print("Unique tx:", np.unique(tx))
+        
+    for FFTwindow in [128, 256, 512, 1024]:
+        try:
+            data_channel_spec = signal_processor.channel_spectrogram(data, FFTwindow=FFTwindow)
+            print("Data channel spec shape FFTwindow=", FFTwindow, ":", data_channel_spec.shape)
+            dataset_handler.plot_spectrogram(data_channel_spec, config_name = group_name)
+        except Exception as e:
+            print("Error in FFTwindow=", FFTwindow, ":", e)
+        
+    # data_channel_spec_128 = signal_processor.channel_spectrogram(data, FFTwindow=200)
+    # print("Data channel spec shape FFTwindow=200:", data_channel_spec_128.shape)
+    
+    # plot_channel_spectrogram(data_channel_spec[0])
+    # plot_channel_spectrogram(data_channel_spec[1])
+    # plot_channel_spectrogram(data_channel_spec[2])
+    # plot_channel_spectrogram(data_channel_spec[3])
     

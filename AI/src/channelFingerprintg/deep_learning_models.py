@@ -3,16 +3,20 @@ import random
 import tensorflow as tf
 from tensorflow.keras import backend as K
 from tensorflow.keras.models import Model
-from tensorflow.keras.layers import Input, Lambda, ReLU, Add, Dense, Conv2D, Flatten, AveragePooling2D, Dropout, BatchNormalization
+from tensorflow.keras.layers import Input, Lambda, ReLU, Add, Dense, Conv2D, Conv2DTranspose, Flatten, AveragePooling2D, Dropout, BatchNormalization, Reshape, Permute, GlobalAveragePooling1D, Bidirectional, GRU, MultiHeadAttention, LayerNormalization, Concatenate
 from tensorflow.keras.regularizers import l2
 
-def divisible_random(a,b,n):
-    if b-a < n:
+def divisible_random(a, b, n, rng: random.Random = None):
+    """Random integer in [a, b] divisible by n. Uses provided RNG if given.
+
+    Providing an RNG enables deterministic sampling tied to a seed.
+    """
+    if b - a < n:
         raise Exception('{} is too big'.format(n))
-        # return a
-    result = random.randint(a, b)
+    _rng = rng if rng is not None else random
+    result = _rng.randint(a, b)
     while result % n != 0:
-        result = random.randint(a, b)
+        result = _rng.randint(a, b)
     return result
 
 def identity_loss(y_true, y_pred):
@@ -129,21 +133,22 @@ class TripletNet_Channel():
         model = Model(inputs=inputs, outputs=outputs)
         return model             
     
-    def create_generator_channel(self, batchsize, data, label):
+    def create_generator_channel(self, batchsize, data, label, seed: int = None):
         """Generate a triplets generator for training."""
         self.data = data
         self.label = label
+        local_rng = random.Random(seed) if seed is not None else None
         while True:
             list_a = []
             list_p = []
             list_n = []
-            idx = divisible_random(0,len(data)-4,4)
+            idx = divisible_random(0, len(data)-4, 4, rng=local_rng)
             #batchsize_limit = batchsize+idx-1
             #print("batchsize_limit",batchsize_limit)
             #print("idx",idx)
             batch = 0
             while batch < batchsize:
-                decision = bool(random.getrandbits(1))
+                decision = (bool(local_rng.getrandbits(1)) if local_rng is not None else bool(random.getrandbits(1)))
                 if decision:
                     a =data[idx]
                     n =data[idx+1]
@@ -158,7 +163,7 @@ class TripletNet_Channel():
                     list_a.append(a)
                     list_p.append(p)
                     list_n.append(n)
-                idx = divisible_random(0,len(data)-4,4)
+                idx = divisible_random(0, len(data)-4, 4, rng=local_rng)
                 batch = batch + 1
             A = np.array(list_a, dtype='float32')
             P = np.array(list_p, dtype='float32')
@@ -172,7 +177,7 @@ class QuadrupletNet():
     def __init__(self):
         pass
         
-    def create_quadruplet_net(self, embedding_net, alpha, beta, gamma):
+    def create_quadruplet_net(self, embedding_net, alpha, beta, gamma=None):
         
         # embedding_net = encoder()
         self.alpha = alpha
@@ -204,7 +209,12 @@ class QuadrupletNet():
         D3 = K.sum(K.square(positive-negative2),axis=1)
         # distance between the negative 1 and negative 2 features (Alice-Eve & Bob-Eve)
         D4 = K.sum(K.square(negative1-negative2),axis=1)
-        loss = K.maximum(D1 - D2 + self.alpha,0.0) + K.maximum(D1 - D3 + self.beta,0.0) + K.maximum(D1 - D4 + self.gamma,0.0)
+        # Loss taking into account all distances
+        if self.gamma is not None:
+            loss = K.maximum(D1 - D2 + self.alpha,0.0) + K.maximum(D1 - D3 + self.beta,0.0) + K.maximum(D1 - D4 + self.gamma,0.0)
+        else:
+            # Loss taking into account only the distances between the anchor and the positive and the negative 1
+            loss = K.maximum(D1 - D2 + self.alpha,0.0) + K.maximum(D1 - D3 + self.beta,0.0)
         return loss  
 
     def quantization_layer(self,x):
@@ -217,16 +227,17 @@ class QuadrupletNet():
         x_q = tf.where(x_less, x_q, zeros)
         return x_q           
             
-    def create_generator_channel(self, batchsize, data, label):
+    def create_generator_channel(self, batchsize, data, label, seed: int = None):
         """Generate a quadruplets generator for training."""
         self.data = data
         self.label = label
+        local_rng = random.Random(seed) if seed is not None else None
         while True:
             list_a = []
             list_p = []
             list_n1 = []
             list_n2 = []
-            idx = divisible_random(0,len(data)-4,4)
+            idx = divisible_random(0, len(data)-4, 4, rng=local_rng)
             #batchsize_limit = batchsize+idx-1
             #print("batchsize_limit",batchsize_limit)
             #print("idx",idx)
@@ -240,7 +251,7 @@ class QuadrupletNet():
                 list_p.append(p)
                 list_n1.append(n1)
                 list_n2.append(n2)
-                idx = divisible_random(0,len(data)-4,4)
+                idx = divisible_random(0, len(data)-4, 4, rng=local_rng)
                 batch = batch + 1
             A = np.array(list_a, dtype='float32')
             P = np.array(list_p, dtype='float32')
@@ -278,49 +289,64 @@ class ResNet_QuadrupletNet_Channel(QuadrupletNet):
 
         return out 
 
-    def feature_extractor(self, datashape):
+    def feature_extractor(self, datashape, output_length):
         self.datashape = datashape
         reg = l2(0.001)  # Define L2 regularizer
         inputs = Input(shape=([self.datashape[1],self.datashape[2],self.datashape[3]]))
         x = Conv2D(32, 7, strides = 2, activation='relu', padding='same', kernel_regularizer=reg)(inputs)
         x =  Dropout(0.3)(x)
         x = self.resblock(x, 3, 32, first_layer = True)
-        for _ in range(3):
+        for _ in range(1):
             x = self.resblock(x, 3, 32)
         x = self.resblock(x, 3, 64, first_layer = True)
-        for _ in range(3):
+        for _ in range(1):
             x = self.resblock(x, 3, 64)
         x = AveragePooling2D(pool_size=2)(x)
         x = Flatten()(x)
-        x = Dense(512)(x)
-        outputs = Lambda(lambda  x: K.l2_normalize(x,axis=1))(x)
-        outputs = Dense(units=512, activation='sigmoid', kernel_initializer="lecun_normal")(outputs)
-        model = Model(inputs=inputs, outputs=outputs)
+        x = Dense(output_length)(x)
+        x = Lambda(lambda  x: K.l2_normalize(x,axis=1))(x)
+        # x = Dense(units=output_length, activation='sigmoid', kernel_initializer="lecun_normal")(x)
+        model = Model(inputs=inputs, outputs=x)
         return model  
     
 class FeedForward_QuadrupletNet_Channel(QuadrupletNet):
-    def __init__(self, embed_dim=512, width=[2048, 1024], dropout=0.4, l2_w=1e-3):
+    def __init__(self, embed_dim=512, width=[2048, 1024], dropout=0.3, l2_w=1e-3):
         self.embed_dim = embed_dim
         self.width = width
         self.dropout = dropout
         self.l2_w = l2_w
     
-    def feature_extractor(self, datashape):
+    def feature_extractor(self, datashape, output_length):
         self.datashape = datashape
         reg = l2(self.l2_w)
+        
+        def mlp_layer(y, units):
+            # y = Dense(units, kernel_regularizer=reg)(y)
+            y = Conv2D(units, 1, padding='same', kernel_regularizer=reg)(y)
+            y = BatchNormalization()(y)
+            y = ReLU()(y)
+            return y
+
+        def mlp_block(y, units):
+            # Two-layer block mirroring a ResNet block (without residual Add)
+            y = mlp_layer(y, units)
+            y = mlp_layer(y, units)
+            return y
 
         inputs = Input(shape=(datashape[1], datashape[2], datashape[3]))
-        x = Flatten()(inputs)
-        for units in self.width:
-            x = Dense(units, activation='relu', kernel_regularizer=reg)(x)
-            x = BatchNormalization()(x)
-            x = Dropout(self.dropout)(x)
-
-        x = Dense(self.embed_dim, kernel_regularizer=reg)(x)
-        x = BatchNormalization()(x)
+        # x = Flatten()(inputs)
+        x = Conv2D(32, 7, strides = 2, activation='relu', padding='same', kernel_regularizer=reg)(inputs)
+        x = Dropout(self.dropout)(x)
+        # Stage 1: first-layer block + 3 blocks
+        x = mlp_block(x, 32)
+        x = mlp_block(x, 32)
+        x = mlp_block(x, 64)
+        x = mlp_block(x, 64)
+        x = AveragePooling2D(pool_size=2)(x)
+        x = Flatten()(x)
+        x = Dense(output_length, kernel_regularizer=reg)(x)
         x = Lambda(lambda t: K.l2_normalize(t, axis=1))(x)  # unit-norm embeddings
-        # (Optional) If you want to mirror your ResNet head exactly:
-        # x = Dense(self.embed_dim, activation='sigmoid', kernel_initializer="lecun_normal")(x)
+        # x = Dense(units=output_length, activation='sigmoid', kernel_initializer="lecun_normal")(x)
 
         return Model(inputs, x, name="MLP_Encoder")
 
@@ -331,37 +357,69 @@ class RNN_QuadrupletNet_Channel(QuadrupletNet):
       - Treat spectrogram time (W) as sequence; features per step = F*C
       - Bi-GRU -> pooling -> 512-D embedding.
     """
-    def __init__(self, embed_dim=512, gru_units=256, td_width=256, dropout=0.3, l2_w=1e-3, bidirectional=True):
+    def __init__(self,
+                 embed_dim=512,
+                 gru_units=384,
+                 td_width=256,
+                 dropout=0.3,
+                 recurrent_dropout=0.0,
+                 l2_w=1e-3,
+                 bidirectional=True):
         self.embed_dim = embed_dim
         self.gru_units = gru_units
         self.td_width = td_width
         self.dropout = dropout
+        self.recurrent_dropout = recurrent_dropout
         self.l2_w = l2_w
         self.bidirectional = bidirectional
 
-    def feature_extractor(self, datashape):
+    def feature_extractor(self, datashape, output_length):
         self.datashape = datashape
+        # F: Frequency, T: Time, C: Channels
         F, T, C = datashape[1], datashape[2], datashape[3]
         reg = l2(self.l2_w)
+        
+        def mlp_layer(y, units):
+            # y = Dense(units, kernel_regularizer=reg)(y)
+            # y = Conv2D(units, 1, padding='same', kernel_regularizer=reg)(y)
+            y = Dense(units, kernel_regularizer=reg)(y)
+            y = BatchNormalization()(y)
+            y = ReLU()(y)
+            return y
+
+        def mlp_block(y, units):
+            # Two-layer block mirroring a ResNet block (without residual Add)
+            y = mlp_layer(y, units)
+            y = mlp_layer(y, units)
+            return y
 
         inputs = Input(shape=(F, T, C))
-        # Reorder to (batch, T, F*C)  -> time-major sequence
+        # Treat time as sequence; per-step features = F*C
         x = Permute((2,1,3))(inputs)                      # (T, F, C)
         x = Reshape((T, F*C))(x)                          # (T, F*C)
-        x = Dense(self.td_width, activation='relu', kernel_regularizer=reg)(x)
+        x = Dense(output_length, activation='relu', kernel_regularizer=reg)(x)
+        x = LayerNormalization(epsilon=1e-5)(x)
         x = Dropout(self.dropout)(x)
-        x = BatchNormalization()(x)
 
+        # Single GRU layer (optionally bidirectional)
         if self.bidirectional:
-            x = Bidirectional(GRU(self.gru_units, return_sequences=True))(x)
+            x = Bidirectional(GRU(self.gru_units, return_sequences=True, dropout=self.dropout))(x)
         else:
-            x = GRU(self.gru_units, return_sequences=True)(x)
+            x = GRU(self.gru_units, return_sequences=True, dropout=self.dropout)(x)
 
-        x = Dropout(self.dropout)(x)
-        x = BatchNormalization()(x)
-        x = GlobalAveragePooling1D()(x)                   # mean over time
-        x = Dense(self.embed_dim, kernel_regularizer=reg)(x)
-        x = BatchNormalization()(x)
+        # Normalize sequence features before pooling
+        x = LayerNormalization(epsilon=1e-5)(x)
+
+        # Projection head -> L2-normalized embedding
+        # x = Dense(output_length, kernel_regularizer=reg)(pooled)
+        # x = BatchNormalization()(x)
+        # add two mlp blocks
+        x = mlp_block(x, int(np.ceil(output_length/2)))
+        x = mlp_block(x, output_length)
+        # Average pooling
+        x = GlobalAveragePooling1D()(x)
+        x = Flatten()(x)
+        x = Dense(output_length, kernel_regularizer=reg)(x)
         x = Lambda(lambda t: K.l2_normalize(t, axis=1))(x)
 
         return Model(inputs, x, name="GRU_Encoder")
@@ -397,7 +455,7 @@ class Transformer_QuadrupletNet_Channel(QuadrupletNet):
         x = LayerNormalization(epsilon=1e-5)(x)
         return x
 
-    def feature_extractor(self, datashape):
+    def feature_extractor(self, datashape, output_length):
         self.datashape = datashape
         F, T, C = datashape[1], datashape[2], datashape[3]
         reg = l2(self.l2_w)
@@ -423,7 +481,7 @@ class Transformer_QuadrupletNet_Channel(QuadrupletNet):
 
         # Pool tokens
         x = GlobalAveragePooling1D()(x)
-        x = Dense(self.embed_dim, kernel_regularizer=reg)(x)
+        x = Dense(output_length, kernel_regularizer=reg)(x)
         x = BatchNormalization()(x)
         x = Lambda(lambda t: K.l2_normalize(t, axis=1))(x)
 
@@ -462,7 +520,7 @@ class AE_QuadrupletNet_Channel(QuadrupletNet):
         return x
 
     # ------------------- Encoder only (for quadruplet training) ----------------
-    def feature_extractor(self, datashape):
+    def feature_extractor(self, datashape, output_length):
         self.datashape = datashape
         reg = l2(self.l2_w)
 
@@ -483,14 +541,14 @@ class AE_QuadrupletNet_Channel(QuadrupletNet):
 
         # Projection to embedding
         x = Flatten()(x)
-        x = Dense(self.embed_dim, kernel_regularizer=reg)(x)
+        x = Dense(output_length, kernel_regularizer=reg)(x)
         x = BatchNormalization()(x)
         x = Lambda(lambda t: K.l2_normalize(t, axis=1))(x)  # 512-D unit-norm
 
         return Model(inputs, x, name="CAE_Encoder")
 
     # --------------- Full AE for (optional) reconstruction pretraining --------
-    def build_autoencoder_pretrain(self, datashape):
+    def build_autoencoder_pretrain(self, datashape, output_length):
         """Returns (encoder, autoencoder). Train AE with MSE (or SSIM) before quadruplet."""
         self.datashape = datashape
         reg = l2(self.l2_w)
@@ -510,14 +568,14 @@ class AE_QuadrupletNet_Channel(QuadrupletNet):
         c_last = x.shape[-1]
 
         flat = Flatten()(x)
-        emb  = Dense(self.embed_dim, kernel_regularizer=reg)(flat)
+        emb  = Dense(output_length, kernel_regularizer=reg)(flat)
         emb  = BatchNormalization()(emb)
         emb_n= Lambda(lambda t: K.l2_normalize(t, axis=1), name="embedding")(emb)
 
         encoder = Model(enc_in, emb_n, name="CAE_Encoder")
 
         # Decoder (mirror)
-        dec_in = Input(shape=(self.embed_dim,))
+        dec_in = Input(shape=(output_length,))
         x = Dense(int(h_last)*int(w_last)*int(c_last), kernel_regularizer=reg)(dec_in)
         x = BatchNormalization()(x); x = ReLU()(x)
         x = Reshape((int(h_last), int(w_last), int(c_last)))(x)
