@@ -272,10 +272,10 @@ def loadOTALabConfig(
         2:"ota-nuc2.emulab.net",    # b210 nuc node 2
         3:"ota-nuc3.emulab.net",    # b210 nuc node 3
         4:"ota-nuc4.emulab.net",    # b210 nuc node 4
-        5:"pc783.emulab.net",       # x310 radio node 1
-        6:"pc792.emulab.net",       # x310 radio node 2
-        7:"pc796.emulab.net",       # x310 radio node 3
-        8:"pc781.emulab.net"        # x310 radio node 4
+        5:"pc07-fort.emulab.net",       # x310 radio node 1
+        6:"pc03-meb.emulab.net",       # x310 radio node 2
+        7:"pc06-fort.emulab.net",       # x310 radio node 3
+        8:"pc04-meb.emulab.net"        # x310 radio node 4
     }
     NodeGains = {
         1:gainConfigs["b210"],
@@ -289,18 +289,19 @@ def loadOTALabConfig(
     }
     NodeConfigs = [
         # Create every triplet combination for nodes 1,2,3,4,5,6,7,8
-        [1,2,3],  # b210, b210, b210
-        [2,4,3],  # b210, b210, b210
-        [4,2,8],  # b210, b210, x310
-        [4,2,5],  # b210, b210, x310
-        [1,4,5],  # b210, b210, x310
-        [1,4,8],  # b210, b210, x310
-        [5,7,8],  # x310, x310, x310
-        [5,8,7],  # x310, x310, x310
-        [8,5,4],  # x310, x310, b210
-        [8,5,1],  # x310, x310, b210
-        [8,4,1],  # x310, b210, b210
-        [4,8,5]   # b210, x310, x310
+        # [1,2,3],  # b210, b210, b210
+        # [2,4,3],  # b210, b210, b210
+        # [4,2,8],  # b210, b210, x310
+        # [4,2,5],  # b210, b210, x310
+        # [1,4,5],  # b210, b210, x310
+        # [1,4,8],  # b210, b210, x310
+        # [5,7,8],  # x310, x310, x310
+        # [5,8,7],  # x310, x310, x310
+        # [8,5,4],  # x310, x310, b210
+        # [8,5,1],  # x310, x310, b210
+        # [8,4,1],  # x310, b210, b210
+        # [4,8,5]   # b210, x310, x310
+        [1,4,7]
     ]
     return NodeIPs, NodeGains, NodeConfigs
 
@@ -380,8 +381,8 @@ def loadOTARooftopConfig(
 
 if __name__ == "__main__":
 
-    # NodeIPs, NodeGains, nodeConfigs = loadOTALabConfig()
-    NodeIPs, NodeGains, nodeConfigs = loadOTADenseConfig()
+    NodeIPs, NodeGains, nodeConfigs = loadOTALabConfig()
+    # NodeIPs, NodeGains, nodeConfigs = loadOTADenseConfig()
 
     port = {'orch':'5001','radio':'5002','ai':'5003'}
 
@@ -423,7 +424,7 @@ if __name__ == "__main__":
         timestamp_arr = np.array(timestamp)
         ts = int(time.time())
         create_dataset(
-            "Dataset_OTADense_Channels_"+type+"_"+str(examples)+"_"+"".join(str(node) for node in nodes)+"_"+str(ts)+".hdf5",
+            "Dataset_OTALab_Channels_"+type+"_"+str(examples)+"_"+"".join(str(node) for node in nodes)+"_"+str(ts)+".hdf5",
             I_arr,
             Q_arr,
             channel_arr, 
