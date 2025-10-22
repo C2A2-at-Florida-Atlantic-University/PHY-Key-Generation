@@ -1,6 +1,7 @@
 from math import sqrt
 import numpy as np
 from statistics import mean
+from matplotlib import pyplot as plt
 
 class Quantization:
     def __init__(self):
@@ -82,16 +83,32 @@ class Quantization:
                 features_quatized.append(0)
         return features_quatized
     
+def plot_features(features, threshold=0.5, L=512):
+    plt.scatter(range(L), features)
+    # Plot a line by the 0.5 threshold
+    plt.axhline(y=threshold, color='r', linestyle='--')
+    # Color the features above the threshold in red and the features below the threshold in blue
+    for i in range(L):
+        if features[i] >= threshold:
+            plt.scatter(i, features[i], color='red')
+        else:
+            plt.scatter(i, features[i], color='blue')
+    plt.title("Features")
+    plt.xlabel("Index")
+    plt.ylabel("Feature")
+    plt.tight_layout()
+    plt.show()
+    
 if __name__ == "__main__":
     quantization = Quantization()
     # Random feature vector with L values between 0 and 1 with fp16 precision
-    L = 4
+    L = 128
     # Create a feature vector of L ones
     # features = np.ones(L).astype(np.float16)
     features = np.random.rand(L).astype(np.float16)
-    # Plot features on a line plot
-    plt.plot(features)
-    plt.show()
+    # Plot features on a line plot as scatter plot over a single plane
+    plot_features(features, threshold=0.5, L=L)
+    
     print("Features:", features[0:10])
     l2_norm = np.linalg.norm(features)
     print("L2 norm:", l2_norm)
@@ -104,6 +121,7 @@ if __name__ == "__main__":
     print("Features Max:", np.max(features))
     print("Features Min:", np.min(features))
     print("Magnitude:", np.abs(features))
+    plot_features(features, threshold=1/sqrt(L), L=L)
     # exit()
     print("Mean Quantization:")
     features_quatized = quantization.mean_quantization(features)
