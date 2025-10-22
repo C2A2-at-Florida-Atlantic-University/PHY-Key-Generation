@@ -3,7 +3,7 @@ from sklearn.model_selection import train_test_split
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
 from tensorflow.keras.optimizers import RMSprop, Adam, SGD
 from deep_learning_models import identity_loss, ResNet_QuadrupletNet_Channel, FeedForward_QuadrupletNet_Channel, RNN_QuadrupletNet_Channel, Transformer_QuadrupletNet_Channel, AE_QuadrupletNet_Channel
-from DatasetHandler import DatasetHandler, ChannelSpectrogram
+from DatasetHandler import DatasetHandler, ChannelSpectrogram, ChannelIQ, ChannelPolar
 
 import time
 from TestChannelFingerprinting import test_model
@@ -64,13 +64,19 @@ def train_channel_feature_extractor(data, labels, train_configurations, model_ty
         
     # Ensure reproducibility for any TF/NumPy/Python randomness within training
     set_reproducible(seed)
-    ChannelSpectrogramObj = ChannelSpectrogram()
     
-    # Convert time-domain IQ samples to channel-independent spectrograms.
-    data = ChannelSpectrogramObj.channel_spectrogram(
-        data,
-        train_configurations[model_type]['fft_len']
-    )
+    if train_configurations[model_type]['data_type'] == "IQ":
+        ChannelIQObj = ChannelIQ()
+        data = ChannelIQObj.channel_iq(data)
+    elif train_configurations[model_type]['data_type'] == "Polar":
+        ChannelPolarObj = ChannelPolar()
+        data = ChannelPolarObj.channel_polar(data)
+    elif train_configurations[model_type]['data_type'] == "Spectrogram":
+        ChannelSpectrogramObj = ChannelSpectrogram()
+        data = ChannelSpectrogramObj.channel_spectrogram(
+            data,
+            train_configurations[model_type]['fft_len']
+        )
 
     #NetObj =  TripletNet_Channel()
     # NetObj = QuadrupletNet_Channel()
@@ -125,10 +131,11 @@ def train_channel_feature_extractor(data, labels, train_configurations, model_ty
                                  mode='min',
                                  save_weights_only=True)
     
-    callbacks = [early_stop, reduce_lr, checkpoint]
-
+    # callbacks = [early_stop, reduce_lr, checkpoint]
+    callbacks = [reduce_lr]
+    
     validation_size= train_configurations[model_type]['validation_size']
-
+    
     # Split the dasetset into validation and training sets.
     data_train, data_valid, label_train, label_valid = train_test_split(data, 
                                                                         labels, 
@@ -198,7 +205,7 @@ if __name__ == "__main__":
             'config_name': 'Sinusoid-Powder-OTA-Lab-Nodes',
             'repo_name': 'CAAI-FAU',
             'node_Ids': [
-                [1,2,3],
+                # [1,2,3],
                 [1,4,5],
                 [1,4,8],
                 [2,4,3],
@@ -245,94 +252,94 @@ if __name__ == "__main__":
     
     batch_size = 128
     fft_len = 256
-    patience = 50
-    maxEpochs = 1000
-    lr = 0.1
-    val_size = 0.15
-    factor = 0.5
-    optimizer = "SGD" # "RMSprop", "SGD", "Adam"
+    patience = 100
+    maxEpochs = 300
+    lr = 0.0001
+    val_size = 0.10
+    factor = 0.1
+    optimizer = "Adam" # "RMSprop", "SGD", "Adam"
 
-    # alphas = [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]
-    # betas = [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]
-    # gammas = [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]
-    FFT_lengths = [256, 512, 1024]
+    alphas = [0.5] # [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]
+    betas = [0.5] # [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]
+    gammas = [0.1] # [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]
+    FFT_lengths = [256]
     output_lengths = [128, 256, 512]
-    params_a_b_g = [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]   
-    alphas = [0.4]
-    betas = [0.4]
-    gammas = [0.2]
-    optimizers = ["SGD"]
-    network_types = ["RNN"] #["ResNet", "FeedForward", "RNN", "Transformer", "AE"]
-    # network_type = network_types[0]
+    optimizers = ["Adam"] # "RMSprop", "SGD", "Adam"
+    network_types = ["RNN"] # ["ResNet", "FeedForward", "RNN", "Transformer", "AE"]
+    data_types = ["IQ", "Polar", "Spectrogram"]
+    data_type = data_types[1]
     for fft_len in FFT_lengths:
         for output_length in output_lengths:
             for network_type in network_types:
-                for a in params_a_b_g:
-                    b, g = a, a
-                    for o in optimizers:
-                        print("Alpha: ", a, "Beta: ", b, "Gamma: ", g, "Optimizer: ", o, "Network Type: ", network_type)
-                        train_configurations = {
-                            "QuadrupletNet": {
-                                "alpha": a,
-                                "beta": b,
-                                # "gamma": g,
-                                "fft_len": fft_len,
-                                "output_length": output_length,
-                                "batch_size": batch_size,
-                                "validation_size": val_size,
-                                "LearningRate": lr,
-                                "epochs": maxEpochs,
-                                "patience": patience,
-                                "factor": factor,
-                                "optimizer": o
-                            },
-                            "TripletNet": {
-                                "alpha": a,
-                                "beta": b,
-                                "fft_len": fft_len,
-                                "output_length": output_length,
-                                "batch_size": batch_size,
-                                "validation_size": val_size,
-                                "LearningRate": lr,
-                                "epochs": maxEpochs,
-                                "patience": patience,
-                                "factor": factor,
-                                "optimizer": o
-                            }
-                        }
-                        model_type = "QuadrupletNet"
-                        
-                        filename_start = 'FeatureExtractor_'+network_type+'_in'+str(train_configurations[model_type]["fft_len"]) \
-                                +'_out'+str(train_configurations[model_type]["output_length"]) \
-                                +'_alpha'+str(train_configurations[model_type]["alpha"]) \
-                                +'_beta'+str(train_configurations[model_type]["beta"]) \
-                                +('_gamma'+str(train_configurations[model_type]["gamma"]) if "gamma" in train_configurations[model_type] else "") \
-                                +'_'+train_configurations[model_type]['optimizer'] \
-                                +'_lr'+str(train_configurations[model_type]["LearningRate"]) \
-                                +'_'+configuration["config_name"]
-                        
-                        ModelsDir = homeDir+"Models/"
-                        
-                        model_exisits = False
-                        # Check if there is a file that starts with the same name
-                        for file in os.listdir(ModelsDir):
-                            if file.startswith(filename_start):
-                                model_exisits = True
-                                break
-                        if model_exisits:
-                            print("Model already exists")
-                            print("Skipping: ", filename_start)
-                            continue
-                        else:
-                            print("Training model: ", filename_start)
-                            
-                            feature_extractor = train_channel_feature_extractor(
-                                data,
-                                labels,
-                                train_configurations,
-                                model_type,
-                                network_type,
-                                filename_start,
-                                seed=REPRO_SEED,
-                            )
-                            
+                for a in alphas:
+                    for b in betas:
+                        for g in gammas:
+                            for o in optimizers:
+                                print("Alpha: ", a, "Beta: ", b, "Gamma: ", g, "Optimizer: ", o, "Network Type: ", network_type)
+                                train_configurations = {
+                                    "QuadrupletNet": {
+                                        "alpha": a,
+                                        "beta": b,
+                                        "gamma": g,
+                                        "data_type": data_type,
+                                        "fft_len": fft_len,
+                                        "output_length": output_length,
+                                        "batch_size": batch_size,
+                                        "validation_size": val_size,
+                                        "LearningRate": lr,
+                                        "epochs": maxEpochs,
+                                        "patience": patience,
+                                        "factor": factor,
+                                        "optimizer": o,
+                                    },
+                                    "TripletNet": {
+                                        "alpha": a,
+                                        "beta": b,
+                                        "data_type": data_type,
+                                        "fft_len": fft_len,
+                                        "output_length": output_length,
+                                        "batch_size": batch_size,
+                                        "validation_size": val_size,
+                                        "LearningRate": lr,
+                                        "epochs": maxEpochs,
+                                        "patience": patience,
+                                        "factor": factor,
+                                        "optimizer": o
+                                    }
+                                }
+                                model_type = "QuadrupletNet"
+                                
+                                filename_start = train_configurations[model_type]['data_type']+'_FeatureExtractor_'+network_type+'_in'+str(train_configurations[model_type]["fft_len"]) \
+                                        +'_out'+str(train_configurations[model_type]["output_length"]) \
+                                        +'_alpha'+str(train_configurations[model_type]["alpha"]) \
+                                        +'_beta'+str(train_configurations[model_type]["beta"]) \
+                                        +('_gamma'+str(train_configurations[model_type]["gamma"]) if "gamma" in train_configurations[model_type] else "") \
+                                        +'_'+train_configurations[model_type]['optimizer'] \
+                                        +'_lr'+str(train_configurations[model_type]["LearningRate"]) \
+                                        +'_'+configuration["config_name"]
+                                
+                                ModelsDir = homeDir+"Models/"
+                                
+                                model_exisits = False
+                                # Check if there is a file that starts with the same name
+                                for file in os.listdir(ModelsDir):
+                                    if file.startswith(filename_start):
+                                        model_exisits = True
+                                        break
+                                if model_exisits:
+                                    print("Model already exists")
+                                    print("Skipping: ", filename_start)
+                                    continue
+                                else:
+                                    print("Training model: ", filename_start)
+                                    
+                                    feature_extractor = train_channel_feature_extractor(
+                                        data,
+                                        labels,
+                                        train_configurations,
+                                        model_type,
+                                        network_type,
+                                        filename_start,
+                                        seed=REPRO_SEED,
+                                    )
+                                    

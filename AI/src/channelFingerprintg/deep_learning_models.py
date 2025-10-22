@@ -215,7 +215,7 @@ class QuadrupletNet():
         else:
             # Loss taking into account only the distances between the anchor and the positive and the negative 1
             loss = K.maximum(D1 - D2 + self.alpha,0.0) + K.maximum(D1 - D3 + self.beta,0.0)
-        return loss  
+        return loss        
 
     def quantization_layer(self,x):
         ones = tf.ones_like(x)
@@ -296,18 +296,19 @@ class ResNet_QuadrupletNet_Channel(QuadrupletNet):
         x = Conv2D(32, 7, strides = 2, activation='relu', padding='same', kernel_regularizer=reg)(inputs)
         x =  Dropout(0.3)(x)
         x = self.resblock(x, 3, 32, first_layer = True)
-        for _ in range(1):
+        for _ in range(2):
             x = self.resblock(x, 3, 32)
         x = self.resblock(x, 3, 64, first_layer = True)
-        for _ in range(1):
+        for _ in range(2):
             x = self.resblock(x, 3, 64)
         x = AveragePooling2D(pool_size=2)(x)
         x = Flatten()(x)
         x = Dense(output_length)(x)
         x = Lambda(lambda  x: K.l2_normalize(x,axis=1))(x)
+        # x = Lambda(lambda x: tf.cast(x > 0.5, dtype=tf.float32))(x) # Quantization layer
         # x = Dense(units=output_length, activation='sigmoid', kernel_initializer="lecun_normal")(x)
         model = Model(inputs=inputs, outputs=x)
-        return model  
+        return model
     
 class FeedForward_QuadrupletNet_Channel(QuadrupletNet):
     def __init__(self, embed_dim=512, width=[2048, 1024], dropout=0.3, l2_w=1e-3):
@@ -416,6 +417,82 @@ class RNN_QuadrupletNet_Channel(QuadrupletNet):
         # add two mlp blocks
         x = mlp_block(x, int(np.ceil(output_length/2)))
         x = mlp_block(x, output_length)
+        # Average pooling
+        x = GlobalAveragePooling1D()(x)
+        x = Flatten()(x)
+        x = Dense(output_length, kernel_regularizer=reg)(x)
+        x = Lambda(lambda t: K.l2_normalize(t, axis=1))(x)
+
+        return Model(inputs, x, name="GRU_Encoder")
+    
+class RNN_QuadrupletNet_Channel2(QuadrupletNet):
+    """
+    GRU over time axis:
+      - Treat spectrogram time (W) as sequence; features per step = F*C
+      - Bi-GRU -> pooling -> 512-D embedding.
+    """
+    def __init__(self,
+                 embed_dim=512,
+                 gru_units=384,
+                 td_width=256,
+                 dropout=0.3,
+                 recurrent_dropout=0.0,
+                 l2_w=1e-3,
+                 bidirectional=True,
+                 num_gru_layers=1,
+                 use_attention=False,
+                 n_heads=4,
+                 ff_multiplier=2):
+        self.embed_dim = embed_dim
+        self.gru_units = gru_units
+        self.td_width = td_width
+        self.dropout = dropout
+        self.recurrent_dropout = recurrent_dropout
+        self.l2_w = l2_w
+        self.bidirectional = bidirectional
+        self.num_gru_layers = num_gru_layers
+        self.use_attention = use_attention
+        self.n_heads = n_heads
+        self.ff_multiplier = ff_multiplier
+
+    def feature_extractor(self, datashape, output_length):
+        self.datashape = datashape
+        # F: Frequency, T: Time, C: Channels
+        F, T, C = datashape[1], datashape[2], datashape[3]
+        reg = l2(self.l2_w)
+
+        inputs = Input(shape=(F, T, C))
+        # Treat time as sequence; per-step features = F*C
+        x = Permute((2,1,3))(inputs)                      # (T, F, C)
+        x = Reshape((T, F*C))(x)                          # (T, F*C)
+        x = Dense(output_length, activation='relu', kernel_regularizer=reg)(x)
+        x = LayerNormalization(epsilon=1e-5)(x)
+        x = Dropout(self.dropout)(x)
+
+        # Stacked GRU blocks with optional attention and residual connections
+        d_model = int(self.gru_units * (2 if self.bidirectional else 1))
+        for _ in range(self.num_gru_layers):
+            gru_layer = GRU(self.gru_units, return_sequences=True,
+                            dropout=self.dropout, recurrent_dropout=self.recurrent_dropout)
+            y = Bidirectional(gru_layer)(x) if self.bidirectional else gru_layer(x)
+            y = LayerNormalization(epsilon=1e-5)(y)
+            # Residual connection if dimensions align
+            if y.shape[-1] == x.shape[-1]:
+                y = Add()([x, y])
+            x = y
+
+            if self.use_attention:
+                attn = MultiHeadAttention(num_heads=self.n_heads,
+                                          key_dim=max(1, d_model // self.n_heads),
+                                          dropout=self.dropout)(x, x)
+                x = Add()([x, Dropout(self.dropout)(attn)])
+                x = LayerNormalization(epsilon=1e-5)(x)
+
+            ff = Dense(self.ff_multiplier * d_model, activation='relu')(x)
+            ff = Dropout(self.dropout)(ff)
+            ff = Dense(d_model)(ff)
+            x = Add()([x, Dropout(self.dropout)(ff)])
+            x = LayerNormalization(epsilon=1e-5)(x)
         # Average pooling
         x = GlobalAveragePooling1D()(x)
         x = Flatten()(x)
