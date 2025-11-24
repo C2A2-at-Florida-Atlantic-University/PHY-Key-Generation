@@ -99,9 +99,14 @@ class phyAPI(FlaskView):
 
     @route('/rx/set/IQ', methods=['GET'])
     def rx_setIQ(self):
-        contents = phy.set_receive_IQ()
-        callback = {"contents": contents}
-        return jsonify(callback), 200
+        try:
+            contents = phy.set_receive_IQ()
+            callback = {"contents": contents}
+            return jsonify(callback), 200
+        except Exception as error:
+            callback = {"error": str(error)}
+            print("Error: ", error)
+            return jsonify(callback), 500
 
     @route('/rx/set/MPSK', methods=['POST'])
     def rx_setMPSK(self):
@@ -121,22 +126,30 @@ class phyAPI(FlaskView):
             real_data = np.real(IQ_data)
             imag_data = np.imag(IQ_data)
             callback = {"real": real_data.tolist(), "imag": imag_data.tolist()}
+            return jsonify(callback), 200
         except Exception as error:
             callback = {"error": str(error)}
-        return jsonify(callback), 200
+            print("Error: ", error)
+            return jsonify(callback), 500
+        
     
     @route('/set/PHY', methods=['POST'])
     def setTx(self):
-        data=request.get_json()
-        if "freq" in data:
-            phy.setFreq(data["freq"],data["x"])
-        if "SamplingRate" in data:
-            phy.setSamplingRate(data["SamplingRate"],data["x"])
-        if "gain" in data:
-            phy.setGain(data["gain"],data["x"])
-        if "bandwidth" in data:
-            phy.setBandwidth(data["bandwidth"],data["x"])
-        if "buffer_size" in data:
-            phy.setBufferSize(data["buffer_size"],data["x"])
-        callback = {"contents": "done"}
-        return jsonify(callback), 200
+        try:
+            data=request.get_json()
+            if "freq" in data:
+                phy.setFreq(data["freq"],data["x"])
+            if "SamplingRate" in data:
+                phy.setSamplingRate(data["SamplingRate"],data["x"])
+            if "gain" in data:
+                phy.setGain(data["gain"],data["x"])
+            if "bandwidth" in data:
+                phy.setBandwidth(data["bandwidth"],data["x"])
+            if "buffer_size" in data:
+                phy.setBufferSize(data["buffer_size"],data["x"])
+            callback = {"contents": "done"}
+            return jsonify(callback), 200
+        except Exception as error:
+            callback = {"error": str(error)}
+            print("Error: ", error)
+            return jsonify(callback), 500

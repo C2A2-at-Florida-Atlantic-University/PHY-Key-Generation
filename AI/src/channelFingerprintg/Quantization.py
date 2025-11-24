@@ -88,6 +88,7 @@ def plot_features(features, threshold=0.5, L=512):
     # Plot a line by the 0.5 threshold
     plt.axhline(y=threshold, color='r', linestyle='--')
     # Color the features above the threshold in red and the features below the threshold in blue
+    
     for i in range(L):
         if features[i] >= threshold:
             plt.scatter(i, features[i], color='red')
@@ -109,20 +110,34 @@ if __name__ == "__main__":
     # Plot features on a line plot as scatter plot over a single plane
     plot_features(features, threshold=0.5, L=L)
     
+    r = np.linalg.norm(features)
+    u = features / r  
+    print("u:", u)
+    print("u size:", u.size)
+    
+    angles = np.linspace(0, 2*np.pi, L, endpoint=False)
+    plt.figure(figsize=(6,6))
+    ax = plt.subplot(111, polar=True)
+    ax.scatter(angles, u, color='blue', linewidth=1)
+    # Plot the radius r
+    ax.scatter(0, r, color='red', linewidth=1)
+    ax.set_title('Radial (Polar) Representation of L²-Normalized Vector')
+    plt.show()
+    # exit()
     print("Features:", features[0:10])
-    l2_norm = np.linalg.norm(features)
+    l2_norm = np.linalg.norm(features, ord=2)
     print("L2 norm:", l2_norm)
+    print("Sqrt of L:", sqrt(L))
     print("L2 norm average:", l2_norm / L)
     print("L2 norm values expected avg magnitude:", 1/sqrt(L))
     features = features / l2_norm 
     print("Features L2 normalized:", features[0:10])
     print("features average:", mean(features))
-    print("Features sum:", np.sum(features))
+    print("Features sum:", np.sum(features**2))
     print("Features Max:", np.max(features))
     print("Features Min:", np.min(features))
-    print("Magnitude:", np.abs(features))
     plot_features(features, threshold=1/sqrt(L), L=L)
-    # exit()
+    exit()
     print("Mean Quantization:")
     features_quatized = quantization.mean_quantization(features)
     print("features_quatized mean:", features_quatized[0:10])

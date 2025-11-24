@@ -18,10 +18,14 @@ def recordIQ(nodeID,port,samples):
     # response_rx = requests.get(APILink(NodeIPs[nodeID],port,path))
     # print("Response:",response)
     response_json = response.json()
-    # print("Response JSON:",response_json)
-    imag = response_json["imag"]
-    real = response_json["real"]
-    return real,imag
+    try:
+        imag = response_json["imag"]
+        real = response_json["real"]
+        return real,imag
+    except Exception as error:
+        print("Error: ", error)
+        print("Response:",response_json)
+        return None, None
 
 def setRxIQ(nodeID,port):
     path = "/rx/set/IQ"
@@ -114,7 +118,9 @@ def setTXNode(params,type,nodeID,metadata = {"pnSequence":"glfsr"}):
     
 def setRXNode(params,nodeID):
     response = setRxIQ(nodeID,port["radio"])
+    print("Response SetRXNode IQ: ", response)
     response = setPHY(nodeID,port["radio"],params["rx"])
+    print("Response SetRXNode PHY: ", response)
     
 def RecordNodeData(nodeID,samples):
     return recordIQ(nodeID,port["radio"],samples)
@@ -140,7 +146,7 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
     rx = []
     timestamp = []
     id = 0
-    timeSleep = 0.3
+    timeSleep = 0.2
     Alice = nodes[0]
     Bob = nodes[1]
     Eve = nodes[2]
@@ -161,38 +167,49 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
             
             print("Recording RX Node: ", Alice)
             real1, imaginary1 = RecordNodeData(Alice, samples=numberOfSamples)
-            idxStart1 = len(real1)-numberOfSamples
-            I.append(real1[idxStart1:])
-            Q.append(imaginary1[idxStart1:])
-            channel.append(channel_Labels[0])
-            instance.append(1)
-            ids.append(id)
-            tx.append(Bob)
-            rx.append(Alice)
-            timestamp.append(int(time.time()))
+            timestamp1 = int(time.time())
             
             print("Recording RX Node: ", Eve)
             real2, imaginary2 = RecordNodeData(Eve, samples=numberOfSamples)
-            idxStart2 = len(real2)-numberOfSamples
-            I.append(real2[idxStart2:])
-            Q.append(imaginary2[idxStart2:])
-            channel.append(channel_Labels[1])  
-            instance.append(2)   
-            ids.append(id)
-            tx.append(Bob)
-            rx.append(Eve)
-            timestamp.append(int(time.time()))
+            timestamp2 = int(time.time())
             
-            if(generatePlots):
-                plotTimeDomain(
-                    real1[idxStart1:], 
-                    imaginary1[idxStart1:], 
-                    samples=numberOfSamples, id=Alice)
-                plotTimeDomain(
-                    real2[idxStart2:], 
-                    imaginary2[idxStart2:], 
-                    samples=numberOfSamples, id=Eve
-                )
+            if real2 is None or real1 is None:
+                id = id - 1
+                i = i - 1
+                # continue
+                setRXNode(params,Eve)
+            
+            if real1 is not None and real2 is not None:
+                idxStart1 = len(real1)-numberOfSamples
+                I.append(real1[idxStart1:])
+                Q.append(imaginary1[idxStart1:])
+                channel.append(channel_Labels[0])
+                instance.append(1)
+                ids.append(id)
+                tx.append(Bob)
+                rx.append(Alice)
+                timestamp.append(timestamp1)
+                
+                idxStart2 = len(real2)-numberOfSamples
+                I.append(real2[idxStart2:])
+                Q.append(imaginary2[idxStart2:])
+                channel.append(channel_Labels[1])  
+                instance.append(2)   
+                ids.append(id)
+                tx.append(Bob)
+                rx.append(Eve)
+                timestamp.append(timestamp2)
+                
+                if(generatePlots):
+                    plotTimeDomain(
+                        real1[idxStart1:], 
+                        imaginary1[idxStart1:], 
+                        samples=numberOfSamples, id=Alice)
+                    plotTimeDomain(
+                        real2[idxStart2:], 
+                        imaginary2[idxStart2:], 
+                        samples=numberOfSamples, id=Eve
+                    )
             
             stopTXNode(Bob)
             time.sleep(timeSleep)
@@ -208,41 +225,50 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
             
             print("Recording RX Node: ", Bob)
             real1, imaginary1 = RecordNodeData(Bob, samples=numberOfSamples)
-            idxStart1 = len(real1)-numberOfSamples
-            I.append(real1[idxStart1:])
-            Q.append(imaginary1[idxStart1:])
-            channel.append(channel_Labels[0])
-            instance.append(3)
-            ids.append(id)
-            tx.append(Alice)
-            rx.append(Bob)
-            timestamp.append(int(time.time()))
-
+            timestamp1 = int(time.time())
+            
             print("Recording RX Node: ", Eve)
             real2, imaginary2 = RecordNodeData(Eve, samples=numberOfSamples)
-            idxStart2 = len(real2)-numberOfSamples
-            I.append(real2[idxStart2:])
-            Q.append(imaginary2[idxStart2:])
-            channel.append(channel_Labels[2]) # Changed from "labels" to "channel"
-            instance.append(4)
-            ids.append(id)
-            tx.append(Alice)
-            rx.append(Eve)
-            timestamp.append(int(time.time()))
-
+            timestamp2 = int(time.time())
+            if real2 is None or real1 is None:
+                id = id - 1
+                i = i - 1
+                setRXNode(params,Eve)
+            
             stopTXNode(Alice)
             
-            if(generatePlots):
-                plotTimeDomain(
-                    real1[idxStart1:], 
-                    imaginary1[idxStart1:], 
-                    samples=numberOfSamples, id=Bob)
-                plotTimeDomain(
-                    real2[idxStart2:], 
-                    imaginary2[idxStart2:], 
-                    samples=numberOfSamples, id=Eve
-                )
-            time.sleep(timeSleep)
+            if real1 is not None and real2 is not None:
+                if(generatePlots):
+                    idxStart1 = len(real1)-numberOfSamples
+                    I.append(real1[idxStart1:])
+                    Q.append(imaginary1[idxStart1:])
+                    channel.append(channel_Labels[0])
+                    instance.append(3)
+                    ids.append(id)
+                    tx.append(Alice)
+                    rx.append(Bob)
+                    timestamp.append(timestamp1)
+                    
+                    idxStart2 = len(real2)-numberOfSamples
+                    I.append(real2[idxStart2:])
+                    Q.append(imaginary2[idxStart2:])
+                    channel.append(channel_Labels[2]) # Changed from "labels" to "channel"
+                    instance.append(4)
+                    ids.append(id)
+                    tx.append(Alice)
+                    rx.append(Eve)
+                    timestamp.append(timestamp2)
+                    
+                    plotTimeDomain(
+                        real1[idxStart1:], 
+                        imaginary1[idxStart1:], 
+                        samples=numberOfSamples, id=Bob)
+                    plotTimeDomain(
+                        real2[idxStart2:], 
+                        imaginary2[idxStart2:], 
+                        samples=numberOfSamples, id=Eve
+                    )
+                time.sleep(timeSleep)
         
         i = i + 1
     return I, Q, channel, instance, ids, tx, rx, timestamp
