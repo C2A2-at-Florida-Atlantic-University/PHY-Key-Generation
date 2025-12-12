@@ -57,6 +57,20 @@ def set_tx_sinusoid(nodeID,port):
     response = requests.post(APILink(NodeIPs[nodeID],port,path), data=json.dumps(data), headers=headers)
     return response
 
+def set_tx_deltaPulse(nodeID,port,metadata):
+    path = "/tx/set/deltaPulse"
+    data = {
+        "num_bins": metadata["num_bins"],
+        "amplitude": metadata["amplitude"],
+        "center": metadata["center"],
+        "repeat": metadata["repeat"],
+        "window": metadata["window"],
+        "num_pulses": metadata["num_pulses"]
+    }
+    headers = {'Content-Type': 'application/json'}
+    response = requests.post(APILink(NodeIPs[nodeID],port,path), data=json.dumps(data), headers=headers)
+    return response
+
 def set_tx_MPSK(nodeID,port,M):
     path = "/tx/set/MPSK"
     data = {
@@ -113,6 +127,8 @@ def setTXNode(params,type,nodeID,metadata = {"pnSequence":"glfsr"}):
         response = set_tx_sinusoid(nodeID,port["radio"])
     elif type == "pnSequence":
         response = set_tx_pnSequence(nodeID,port["radio"],metadata[type])
+    elif type == "deltaPulse":
+        response = set_tx_deltaPulse(nodeID,port["radio"],metadata[type])
     response = setPHY(nodeID,port["radio"],params["tx"])
     response = start_tx(nodeID,port["radio"])
     
@@ -294,28 +310,28 @@ def loadOTALabConfig(
     ):
     # OTA Lab node IPs
     NodeIPs = {
-        1:"ota-nuc1.emulab.net",    # b210 nuc node 1
-        2:"ota-nuc2.emulab.net",    # b210 nuc node 2
-        3:"ota-nuc3.emulab.net",    # b210 nuc node 3
-        4:"ota-nuc4.emulab.net",    # b210 nuc node 4
-        5:"pc07-fort.emulab.net",       # x310 radio node 1
-        6:"pc03-meb.emulab.net",       # x310 radio node 2
-        7:"pc06-fort.emulab.net",       # x310 radio node 3
-        8:"pc04-meb.emulab.net"        # x310 radio node 4
+        1:"pc804.emulab.net",       # x310 radio node 1
+        2:"pc811.emulab.net",       # x310 radio node 2
+        3:"pc807.emulab.net",       # x310 radio node 3
+        4:"pc809.emulab.net",        # x310 radio node 4
+        5:"ota-nuc1.emulab.net",    # b210 nuc node 1
+        6:"ota-nuc2.emulab.net",    # b210 nuc node 2
+        7:"ota-nuc3.emulab.net",    # b210 nuc node 3
+        8:"ota-nuc4.emulab.net",    # b210 nuc node 4
     }
     NodeGains = {
-        1:gainConfigs["b210"],
-        2:gainConfigs["b210"],
-        3:gainConfigs["b210"],
-        4:gainConfigs["b210"],
-        5:gainConfigs["x310"],
-        6:gainConfigs["x310"],
-        7:gainConfigs["x310"],
-        8:gainConfigs["x310"]
+        1:gainConfigs["x310"],
+        2:gainConfigs["x310"],
+        3:gainConfigs["x310"],
+        4:gainConfigs["x310"],
+        5:gainConfigs["b210"],
+        6:gainConfigs["b210"],
+        7:gainConfigs["b210"],
+        8:gainConfigs["b210"],
     }
     NodeConfigs = [
         # Create every triplet combination for nodes 1,2,3,4,5,6,7,8
-        # [1,2,3],  # b210, b210, b210
+        [1,2,3],  # x310, x310, x310
         # [2,4,3],  # b210, b210, b210
         # [4,2,8],  # b210, b210, x310
         # [4,2,5],  # b210, b210, x310
@@ -327,7 +343,7 @@ def loadOTALabConfig(
         # [8,5,1],  # x310, x310, b210
         # [8,4,1],  # x310, b210, b210
         # [4,8,5]   # b210, x310, x310
-        [1,4,7]
+        # [1,4,7]
     ]
     return NodeIPs, NodeGains, NodeConfigs
 
@@ -414,7 +430,7 @@ if __name__ == "__main__":
 
     examples= 100
     freq = 3.450e9
-    samp_rate = 600e3
+    samp_rate = 1000e3
 
     paramsTx = {
         "x":"tx",
@@ -430,15 +446,26 @@ if __name__ == "__main__":
     }
     params = {"tx":paramsTx,"rx":paramsRx}
 
-    type = "sinusoid" #pnSequence, MPSK, sinusoid
+    type = "deltaPulse" #pnSequence, MPSK, sinusoid, deltaPulse
         
+    metadata = {
+        "deltaPulse": {
+            "num_bins": 512,
+            "amplitude": 1,
+            "center": False,
+            "repeat": True,
+            "window": True,
+            "num_pulses": -1
+        }
+    }
     for nodes in nodeConfigs:
         print(f"Collecting data for node config: Alice={nodes[0]}, Bob={nodes[1]}, Eve={nodes[2]}")
         I, Q, channel, instance, ids, tx, rx, timestamp = collect_data_ping_pong_3Nodes(
                                             params, 
                                             nodes, 
                                             examples, 
-                                            type
+                                            type,
+                                            metadata = metadata
                                         )
         I_arr = np.array(I)
         Q_arr = np.array(Q)
