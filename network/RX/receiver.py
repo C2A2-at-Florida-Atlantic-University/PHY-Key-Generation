@@ -34,7 +34,8 @@ class Receiver():
         self.UDP_IP=UDP_IP
         self.sock = self.set_UDP_socket()
         self.rx = None
-        self.set_rx_data()
+        # self.set_rx_data()
+        self.set_rx_IQ()
         print("Receiver Initialized")
         print("Gain: "+str(self.gain))
         print("Sampling Rate: "+str(self.samp_rate))

@@ -9,7 +9,7 @@
 # Author: Jose Sanchez
 # GNU Radio version: 3.10.6.0
 
-from gnuradio import digital, gr, blocks, uhd
+from gnuradio import digital, gr, blocks, uhd, network
 from gnuradio.filter import firdes
 import math
 
@@ -48,9 +48,9 @@ class MPSK(gr.top_block):
         # Blocks
         ##################################################
 
-        self.udp_sink = blocks.udp_sink(
-            gr.sizeof_gr_complex, "127.0.0.1", self.UDP_port,
-            self.buffer_size, True
+        self.udp_sink = network.udp_sink(
+            gr.sizeof_gr_complex, 1, "127.0.0.1", self.UDP_port,
+            0, self.buffer_size, False
         )
         
         # self.iio_pluto_source_0=iio.pluto_source(self.SDR_ID, self.freq, self.samp_rate, self.bandwidth, 
@@ -87,7 +87,7 @@ class MPSK(gr.top_block):
         ##################################################
         # Connections
         ##################################################
-        self.connect((self.digital_costas_loop_cc_0_0, 0), (self.blocks_udp_sink_1, 0))
+        self.connect((self.digital_costas_loop_cc_0_0, 0), (self.udp_sink, 0))
         self.connect((self.digital_symbol_sync_xx_0_0, 0), (self.digital_costas_loop_cc_0_0, 0))
         self.connect((self.usrp_source, 0), (self.digital_symbol_sync_xx_0_0, 0))
 

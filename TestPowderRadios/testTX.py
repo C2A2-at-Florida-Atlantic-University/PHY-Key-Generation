@@ -87,7 +87,7 @@ class testTX(gr.top_block, Qt.QWidget):
         self._gain_win = RangeWidget(self._gain_range, self.set_gain, "'gain'", "counter_slider", float, QtCore.Qt.Horizontal)
         self.top_layout.addWidget(self._gain_win)
         self.uhd_usrp_sink_0 = uhd.usrp_sink(
-            ",".join(("", "", "master_clock_rate=30.72e6")),
+            ",".join(("", "")),
             uhd.stream_args(
                 cpu_format="fc32",
                 args='',

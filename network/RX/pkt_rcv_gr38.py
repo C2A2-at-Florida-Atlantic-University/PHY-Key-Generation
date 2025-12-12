@@ -11,7 +11,7 @@
 # GNU Radio version: v3.8.5.0-6-g57bd109d
 
 import time
-from gnuradio import blocks, digital, filter, gr, uhd
+from gnuradio import blocks, digital, filter, gr, uhd, network
 
 class packetReceive(gr.top_block):
 
@@ -86,7 +86,7 @@ class packetReceive(gr.top_block):
         self.digital_costas_loop_cc_0=digital.costas_loop_cc(self.phase_bw, self.order, False)
         self.digital_correlate_access_code_xx_ts_0=digital.correlate_access_code_bb_ts("11100001010110101110100010010011",thresh, 'packet_len')
         self.digital_constellation_decoder_cb_0=digital.constellation_decoder_cb(self.bpsk)
-        self.blocks_udp_sink_1=blocks.udp_sink(gr.sizeof_char*1, '127.0.0.1', self.UDP_port, 2048, True)
+        self.blocks_udp_sink_1=network.udp_sink(gr.sizeof_char, 1, '127.0.0.1', self.UDP_port, 0, 2048, False)
         self.blocks_throttle_0=blocks.throttle(gr.sizeof_gr_complex*1, self.samp_rate,True)
         self.blocks_tagged_stream_to_pdu_0=blocks.tagged_stream_to_pdu(blocks.byte_t, 'packet_len')
         self.blocks_repack_bits_bb_1=blocks.repack_bits_bb(1, 8, "packet_len", False, gr.GR_MSB_FIRST)

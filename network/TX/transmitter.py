@@ -33,7 +33,8 @@ class Transmitter():
         self.SDR_ADDR = SDR_ADDR
         self.tx = None
         self.type = "None"
-        self.set_tx_data("default")
+        # self.set_tx_data("default")
+        self.set_tx_delta_pulse()
         
     def setFreq(self,freq):
         self.freq = freq

@@ -18,7 +18,7 @@ if __name__ == '__main__':
         except:
             print("Warning: failed to XInitThreads()")
 
-from gnuradio import gr, blocks, uhd
+from gnuradio import gr, blocks, uhd, network
 import sys
 import time
 
@@ -48,12 +48,14 @@ class Sinusoid(gr.top_block):
         ##################################################
         # Blocks
         ##################################################
-        self.udp_sink = blocks.udp_sink(
-            gr.sizeof_gr_complex*1, 
+        self.udp_sink = network.udp_sink(
+            gr.sizeof_gr_complex, 
+            1, 
             '127.0.0.1', 
             self.UDP_port, 
+            0, 
             self.buffer_size, 
-            True
+            False
         )
         # self.iio_pluto_source_0=iio.pluto_source(SDR_ID, freq, samp_rate, bandwidth, buffer_size, True, True, True, 'manual', gain, '', True)
         # UHD USRP source block
