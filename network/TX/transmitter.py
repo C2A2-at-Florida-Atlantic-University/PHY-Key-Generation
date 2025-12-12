@@ -5,12 +5,14 @@ import json
 if __name__ != '__main__':
     from TX.mpsk import MPSK
     from TX.sinusoid import Sinusoid
+    from TX.delta_pulse import DeltaPulse
     from TX.pkt_xmt_gr38 import packetTransmit
     from TX.pnSequence import pnSequence
     from TX.FileSource import FileSource
 else:
     from mpsk import MPSK
     from sinusoid import Sinusoid
+    from delta_pulse import DeltaPulse
     from pkt_xmt_gr38 import packetTransmit
     from pnSequence import pnSequence
     from FileSource import FileSource
@@ -102,6 +104,23 @@ class Transmitter():
             buffer_size=self.buffer_size,
             bandwidth=self.bandwidth,
             SDR_ADDR=self.SDR_ADDR)
+    
+    def set_tx_delta_pulse(self, num_bins=512, amplitude=1, center=False, repeat=True, window=True, num_pulses=-1):
+        self.type = "deltaPulse"
+        del self.tx
+        self.tx=DeltaPulse(
+            samp_rate=self.samp_rate,
+            gain=self.gain,
+            freq=self.freq,
+            buffer_size=self.buffer_size,
+            bandwidth=self.bandwidth,
+            SDR_ADDR=self.SDR_ADDR,
+            num_bins=num_bins,
+            amplitude=amplitude,
+            center=center,
+            repeat=repeat,
+            window=window,
+            num_pulses=num_pulses)
         
     def set_tx_pnSequence(self,sequence="glfsr"):
         self.type = "pnSequence"

@@ -38,6 +38,19 @@ class phyAPI(FlaskView):
         callback = {"contents": "setTxSinusoid" }
         return jsonify(callback), 201
 
+    @route('/tx/set/deltaPulse', methods=['POST'])
+    def tx_set_deltaPulse(self):
+        data=request.get_json()
+        num_bins = data.get("num_bins", 512)
+        amplitude = data.get("amplitude", 1)
+        center = data.get("center", True)
+        repeat = data.get("repeat", True)
+        window = data.get("window", True)
+        num_pulses = data.get("num_pulses", -1)
+        phy.setTxDeltaPulse(num_bins=num_bins, amplitude=amplitude, center=center, repeat=repeat, window=window, num_pulses=num_pulses)
+        callback = {"contents": "setTxDeltaPulse" }
+        return jsonify(callback), 201
+
     @route('/tx/set/MPSK', methods=['POST'])
     def tx_set_MPSK(self):
         data=request.get_json()

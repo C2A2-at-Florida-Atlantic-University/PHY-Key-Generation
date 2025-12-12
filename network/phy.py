@@ -98,6 +98,10 @@ class PHY:
     def setTxSinusoid(self):
         self.mode["tx"] = "sinusoid"
         self.transmitter.set_tx_sinusoid() 
+    
+    def setTxDeltaPulse(self, num_bins=512, amplitude=1, center=False, repeat=True, window=True, num_pulses=-1):
+        self.mode["tx"] = "deltaPulse"
+        self.transmitter.set_tx_delta_pulse(num_bins=num_bins, amplitude=amplitude, center=center, repeat=repeat, window=window, num_pulses=num_pulses)
         
     def setTxPnSequence(self,sequence="glfsr"):
         self.mode["tx"] = "pnSequence"
