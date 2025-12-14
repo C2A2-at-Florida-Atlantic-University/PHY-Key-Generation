@@ -166,7 +166,7 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
     Alice = nodes[0]
     Bob = nodes[1]
     Eve = nodes[2]
-    numberOfSamples = 8192
+    numberOfSamples = 1024*20
     print("Setting RX Node: ", Eve)
     
     generatePlots = True
@@ -302,11 +302,31 @@ def create_dataset(filename, I, Q, channel, instance, ids, tx, rx, timestamp):
     # Save dataset to file
     print("Dataset saved to", filename)
 
+def generateNodeConfigs(nodeIDs):
+    # Generate all possible triplet (Alice, Bob, Eve) combinations for the given node IDs
+    # Constraints:
+    # - Alice and Bob cannot be the same node
+    # - Eve cannot be the same node as Alice or Bob
+    # - [Alice, Bob, Eve] is considered the same as [Bob, Alice, Eve] (only include one)
+    nodeConfigs = []
+    for Alice in nodeIDs:
+        for Bob in nodeIDs:
+            # Ensure Alice != Bob and enforce ordering to avoid duplicates
+            # (only consider cases where Bob > Alice to avoid [Bob, Alice, Eve] duplicates)
+            if Bob <= Alice:
+                continue
+            for Eve in nodeIDs:
+                # Eve must be different from both Alice and Bob
+                if Eve != Alice and Eve != Bob:
+                    nodeConfigs.append([Alice, Bob, Eve])
+    return nodeConfigs
+
 def loadOTALabConfig(
         gainConfigs={
             "x310":{"tx":31,"rx":31},
             "b210":{"tx":80,"rx":70}
-            }
+            },
+        nodeIDs = None
     ):
     # OTA Lab node IPs
     NodeIPs = {
@@ -329,29 +349,17 @@ def loadOTALabConfig(
         7:gainConfigs["b210"],
         8:gainConfigs["b210"],
     }
-    NodeConfigs = [
-        # Create every triplet combination for nodes 1,2,3,4,5,6,7,8
-        [1,2,3],  # x310, x310, x310
-        # [2,4,3],  # b210, b210, b210
-        # [4,2,8],  # b210, b210, x310
-        # [4,2,5],  # b210, b210, x310
-        # [1,4,5],  # b210, b210, x310
-        # [1,4,8],  # b210, b210, x310
-        # [5,7,8],  # x310, x310, x310
-        # [5,8,7],  # x310, x310, x310
-        # [8,5,4],  # x310, x310, b210
-        # [8,5,1],  # x310, x310, b210
-        # [8,4,1],  # x310, b210, b210
-        # [4,8,5]   # b210, x310, x310
-        # [1,4,7]
-    ]
+    
+    nodeIDs = NodeIPs.keys()
+    NodeConfigs = generateNodeConfigs(nodeIDs)
     return NodeIPs, NodeGains, NodeConfigs
 
 def loadOTADenseConfig(
         gainConfigs={
             "x310":{"tx":31,"rx":31},
             "b210":{"tx":80,"rx":70}
-            }
+            },
+        nodeIDs = None
     ):
     # OTA Lab node IPs
     NodeIPs = {
@@ -372,23 +380,17 @@ def loadOTADenseConfig(
         6:gainConfigs["b210"],
         7:gainConfigs["b210"]
     }
-    NodeConfigs = [
-        # [1,2,3],  # EBC, Guesthouse, Moran
-        # [2,3,1],  # Guesthouse, Moran, EBC
-        # [1,3,2],  # EBC, Moran, Guesthouse
-        # [4,3,1],  # Ustar, Moran, EBC
-        # [4,3,2],  # Ustar, Moran, Guesthouse
-        # [4,1,3],  # Ustar, EBC, Moran
-        [4, 3, 5],  # Ustar, Moran, Local
-        # [1,2,5]
-    ]
+    if nodeIDs is None:
+        nodeIDs = NodeIPs.keys()
+    NodeConfigs = generateNodeConfigs(nodeIDs)
     return NodeIPs, NodeGains, NodeConfigs
 
 def loadOTARooftopConfig(
         gainConfigs={
             "x310":{"tx":31,"rx":31},
             "b210":{"tx":80,"rx":70}
-            }
+            },
+        nodeIDs = None
     ):
     # OTA Lab node IPs
     NodeIPs = {
@@ -409,23 +411,20 @@ def loadOTARooftopConfig(
         6:gainConfigs["x310"],
         7:gainConfigs["x310"]
     }
-    NodeConfigs = [
-        # [1,2,3],  # EBC, Guesthouse, Moran
-        # [2,3,1],  # Guesthouse, Moran, EBC
-        # [1,3,2],  # EBC, Moran, Guesthouse
-        # [4,3,1],  # Ustar, Moran, EBC
-        # [4,3,2],  # Ustar, Moran, Guesthouse
-        # [4,1,3],  # Ustar, EBC, Moran
-        # [4, 3, 5],  # Ustar, Moran, Local
-        [1,2,5] # EBC, GuestsHouse, Local
-    ]
+    if nodeIDs is None:
+        nodeIDs = NodeIPs.keys()
+    NodeConfigs = generateNodeConfigs(nodeIDs)
     return NodeIPs, NodeGains, NodeConfigs
 
 if __name__ == "__main__":
-
-    NodeIPs, NodeGains, nodeConfigs = loadOTALabConfig()
+    
+    nodeIDs = [1,2,3,5,6,7,8]
+    NodeIPs, NodeGains, nodeConfigs = loadOTALabConfig(nodeIDs = nodeIDs)
     # NodeIPs, NodeGains, nodeConfigs = loadOTADenseConfig()
 
+    print("Node configs: ", nodeConfigs)
+    print(len(nodeConfigs))
+    # exit()
     port = {'orch':'5001','radio':'5002','ai':'5003'}
 
     examples= 100
@@ -450,9 +449,9 @@ if __name__ == "__main__":
         
     metadata = {
         "deltaPulse": {
-            "num_bins": 512,
+            "num_bins": 1024,
             "amplitude": 1,
-            "center": False,
+            "center": True,
             "repeat": True,
             "window": True,
             "num_pulses": -1
