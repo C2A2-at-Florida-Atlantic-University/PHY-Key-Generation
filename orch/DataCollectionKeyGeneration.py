@@ -123,6 +123,13 @@ def plotTimeDomain(I,Q,samples=-1,id=0):
 
 def setTXNode(params,type,nodeID,metadata = {"pnSequence":"glfsr"}):
     print("type:",type)
+    # Stop any existing transmitter first to avoid interference
+    try:
+        stop_tx(nodeID,port["radio"])
+        time.sleep(0.1)  # Brief pause to ensure transmitter is fully stopped
+    except Exception as e:
+        print(f"Warning: Could not stop existing transmitter: {e}")
+    
     if type == "sinusoid":
         response = set_tx_sinusoid(nodeID,port["radio"])
     elif type == "pnSequence":
