@@ -33,8 +33,7 @@ class Transmitter():
         self.SDR_ADDR = SDR_ADDR
         self.tx = None
         self.type = "None"
-        # self.set_tx_data("default")
-        self.set_tx_delta_pulse()
+        # Don't initialize any transmitter by default - wait for explicit type selection
         
     def setFreq(self,freq):
         self.freq = freq
@@ -64,12 +63,32 @@ class Transmitter():
         length=len(values)
         return length, values
 
+    def _cleanup_tx(self):
+        """Helper method to properly stop and cleanup existing transmitter"""
+        if self.tx is not None:
+            try:
+                # Try to stop the transmitter if it's running
+                self.tx.stop()
+            except Exception:
+                pass
+            try:
+                # Wait for it to finish stopping
+                self.tx.wait()
+            except Exception:
+                pass
+            try:
+                # Delete the transmitter object
+                del self.tx
+            except Exception:
+                pass
+        self.tx = None
+
     def set_tx_data(self,data):
         json_string=json.dumps(data)
         length, values=self.str_to_length_and_decimals(json_string)
         sps=2
         self.type = "data"
-        del self.tx
+        self._cleanup_tx()
         self.tx=packetTransmit(
             input=values,
             input_len=length,
@@ -83,7 +102,7 @@ class Transmitter():
         
     def set_tx_M_PSK(self,M):
         self.type = "mpsk"
-        del self.tx
+        self._cleanup_tx()
         self.tx = MPSK(
             samp_rate=self.samp_rate,
             sps=4,
@@ -97,7 +116,7 @@ class Transmitter():
 
     def set_tx_sinusoid(self):
         self.type = "sinusoid"
-        del self.tx
+        self._cleanup_tx()
         self.tx=Sinusoid(
             samp_rate=self.samp_rate,
             gain=self.gain,
@@ -108,7 +127,7 @@ class Transmitter():
     
     def set_tx_delta_pulse(self, num_bins=512, amplitude=1, center=False, repeat=True, window=True, num_pulses=-1):
         self.type = "deltaPulse"
-        del self.tx
+        self._cleanup_tx()
         self.tx=DeltaPulse(
             samp_rate=self.samp_rate,
             gain=self.gain,
@@ -125,7 +144,7 @@ class Transmitter():
         
     def set_tx_pnSequence(self,sequence="glfsr"):
         self.type = "pnSequence"
-        del self.tx
+        self._cleanup_tx()
         self.tx=pnSequence(
             samp_rate=self.samp_rate,
             gain=self.gain,
@@ -138,7 +157,7 @@ class Transmitter():
     
     def set_tx_fileSource(self,filename="'/home/siwn/siwn-node/network/Matlab/BPSK.dat"):
         self.type = "fileSource"
-        del self.tx
+        self._cleanup_tx()
         self.tx=FileSource(
             samp_rate=self.samp_rate,
             gain=self.gain,
@@ -150,12 +169,21 @@ class Transmitter():
         )
     
     def start(self):
+        if self.tx is None:
+            raise RuntimeError("No transmitter type has been set. Call set_tx_* method first.")
         self.tx.start()
 
     def stop(self):
-        self.tx.stop()
-        self.tx.wait()
-        del self.tx
+        if self.tx is not None:
+            try:
+                self.tx.stop()
+                self.tx.wait()
+            except Exception:
+                pass
+            try:
+                del self.tx
+            except Exception:
+                pass
         self.tx = None
 
 def create_data_packet(data):
