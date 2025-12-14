@@ -78,6 +78,21 @@ class DeltaPulse(gr.top_block):
         self.usrp_sink.set_clock_rate(30.72e6, uhd.ALL_MBOARDS)
         self.usrp_sink.set_max_output_buffer(self.max_buf)
         self.usrp_sink.set_time_unknown_pps(uhd.time_spec())
+        
+        # Set DC offset to zero to minimize DC offset and LO leakage (especially for x310 radios)
+        try:
+            self.usrp_sink.set_dc_offset(0.0, 0)
+        except Exception:
+            # Some USRP models may not support set_dc_offset, ignore if not available
+            pass
+        
+        # Try to enable automatic DC offset correction if available
+        try:
+            self.usrp_sink.set_auto_dc_offset(True, 0)
+        except Exception:
+            # Auto DC offset may not be available on all USRP models, ignore if not available
+            pass
+        
         self.usrp_sink.set_gpio_attr("FP0", "DDR", 0x10, 0x10, 0)
         self.usrp_sink.set_gpio_attr("FP0", "OUT", 0x10, 0x10, 0)
         self.delta_pulse_source_0 = delta_pulse_source(
@@ -117,6 +132,15 @@ class DeltaPulse(gr.top_block):
     def set_freq(self, freq):
         self.freq=freq
         self.usrp_sink.set_center_freq(self.freq, 0)
+        # Re-apply DC offset correction when frequency changes (DC offset can be frequency-dependent)
+        try:
+            self.usrp_sink.set_dc_offset(0.0, 0)
+        except Exception:
+            pass
+        try:
+            self.usrp_sink.set_auto_dc_offset(True, 0)
+        except Exception:
+            pass
 
     def get_buffer_size(self):
         return self.buffer_size

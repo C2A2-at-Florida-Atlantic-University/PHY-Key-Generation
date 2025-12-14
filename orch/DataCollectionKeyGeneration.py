@@ -456,14 +456,25 @@ if __name__ == "__main__":
         
     metadata = {
         "deltaPulse": {
-            "num_bins": 1024,
+            "num_bins": 512,
             "amplitude": 1,
             "center": True,
             "repeat": True,
-            "window": True,
+            "window": False,  # Set to False to avoid windowing artifacts that may create continuous signal
             "num_pulses": -1
         }
     }
+    
+    # Lets test a single node setting it up, then starting the transmitter and then stopping it after 10 seconds
+    print("Testing single node setup")
+    nodeID = 3
+    port = {'orch':'5001','radio':'5002','ai':'5003'}
+    setTXNode(params,type,nodeID,metadata)
+    time.sleep(10)
+    stopTXNode(nodeID)
+    print("Transmitter stopped")
+    exit()
+    
     for nodes in nodeConfigs:
         print(f"Collecting data for node config: Alice={nodes[0]}, Bob={nodes[1]}, Eve={nodes[2]}")
         I, Q, channel, instance, ids, tx, rx, timestamp = collect_data_ping_pong_3Nodes(
