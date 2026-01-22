@@ -118,8 +118,47 @@ def plotTimeDomain(I,Q,samples=-1,id=0):
     plt.axvline(0, color='black',linewidth=0.5)
     # plt.show()
     # Show for 0.5 seconds
-    plt.pause(0.5)
+    plt.pause(0.1)
     plt.clf()  # Clear the figure for the next plot
+
+def plotTimeDomainSideBySide(I1, Q1, I2, Q2, samples=-1, id1=0, id2=0, ax1=None, ax2=None, fig=None):
+    
+    if fig is None:
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+    else:
+        # Check if axes exist, if not recreate them
+        if len(fig.axes) == 0:
+            ax1, ax2 = fig.subplots(1, 2)
+        else:
+            ax1 = fig.axes[0]
+            ax2 = fig.axes[1]
+    
+    # Clear the axes before plotting new data
+    ax1.clear()
+    ax2.clear()
+        
+    # Plot first subplot
+    ax1.plot(I1[0:samples], color='red')
+    ax1.plot(Q1[0:samples], color='blue')
+    ax1.set_xlabel('Time')
+    ax1.set_ylabel('IQ')
+    ax1.set_title('Time Domain Plot Node: '+str(id1))
+    ax1.grid(True)
+    ax1.axhline(0, color='black', linewidth=0.5)
+    ax1.axvline(0, color='black', linewidth=0.5)
+    
+    # Plot second subplot
+    ax2.plot(I2[0:samples], color='red')
+    ax2.plot(Q2[0:samples], color='blue')
+    ax2.set_xlabel('Time')
+    ax2.set_ylabel('IQ')
+    ax2.set_title('Time Domain Plot Node: '+str(id2))
+    ax2.grid(True)
+    ax2.axhline(0, color='black', linewidth=0.5)
+    ax2.axvline(0, color='black', linewidth=0.5)
+    
+    plt.tight_layout()
+    plt.pause(0.1)
 
 def setTXNode(params,type,nodeID,metadata = {"pnSequence":"glfsr"}):
     print("type:",type)
@@ -169,14 +208,15 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
     rx = []
     timestamp = []
     id = 0
-    timeSleep = 0.2
+    timeSleep = 0.1
     Alice = nodes[0]
     Bob = nodes[1]
     Eve = nodes[2]
-    numberOfSamples = 1024*20
+    numberOfSamples = 32768
     print("Setting RX Node: ", Eve)
     
     generatePlots = True
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
     while i<packages*2+1:
         print(i)
         if i%2 == 0:
@@ -196,6 +236,8 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
             real2, imaginary2 = RecordNodeData(Eve, samples=numberOfSamples)
             timestamp2 = int(time.time())
             
+            stopTXNode(Bob)
+            
             if real2 is None or real1 is None:
                 id = id - 1
                 i = i - 1
@@ -203,9 +245,8 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
                 setRXNode(params,Eve)
             
             if real1 is not None and real2 is not None:
-                idxStart1 = len(real1)-numberOfSamples
-                I.append(real1[idxStart1:])
-                Q.append(imaginary1[idxStart1:])
+                I.append(real1[-numberOfSamples:])
+                Q.append(imaginary1[-numberOfSamples:])
                 channel.append(channel_Labels[0])
                 instance.append(1)
                 ids.append(id)
@@ -213,9 +254,8 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
                 rx.append(Alice)
                 timestamp.append(timestamp1)
                 
-                idxStart2 = len(real2)-numberOfSamples
-                I.append(real2[idxStart2:])
-                Q.append(imaginary2[idxStart2:])
+                I.append(real2[-numberOfSamples:])
+                Q.append(imaginary2[-numberOfSamples:])
                 channel.append(channel_Labels[1])  
                 instance.append(2)   
                 ids.append(id)
@@ -224,19 +264,13 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
                 timestamp.append(timestamp2)
                 
                 if(generatePlots):
-                    plotTimeDomain(
-                        real1[idxStart1:], 
-                        imaginary1[idxStart1:], 
-                        samples=numberOfSamples, id=Alice)
-                    plotTimeDomain(
-                        real2[idxStart2:], 
-                        imaginary2[idxStart2:], 
-                        samples=numberOfSamples, id=Eve
-                    )
-            
-            stopTXNode(Bob)
-            time.sleep(timeSleep)
-
+                    plotTimeDomainSideBySide(
+                        real1[-numberOfSamples:], 
+                        imaginary1[-numberOfSamples:],
+                        real2[-numberOfSamples:], 
+                        imaginary2[-numberOfSamples:], 
+                        samples=numberOfSamples, id1=Alice, id2=Eve, ax1=ax1, ax2=ax2, fig=fig)
+                time.sleep(timeSleep)
         else:
             id = id + 1
             print(("Setting TX Node: ", Alice))
@@ -261,36 +295,31 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
             stopTXNode(Alice)
             
             if real1 is not None and real2 is not None:
-                if(generatePlots):
-                    idxStart1 = len(real1)-numberOfSamples
-                    I.append(real1[idxStart1:])
-                    Q.append(imaginary1[idxStart1:])
-                    channel.append(channel_Labels[0])
-                    instance.append(3)
-                    ids.append(id)
-                    tx.append(Alice)
-                    rx.append(Bob)
-                    timestamp.append(timestamp1)
+                I.append(real1[-numberOfSamples:])
+                Q.append(imaginary1[-numberOfSamples:])
+                channel.append(channel_Labels[0])
+                instance.append(3)
+                ids.append(id)
+                tx.append(Alice)
+                rx.append(Bob)
+                timestamp.append(timestamp1)
+                
+                I.append(real2[-numberOfSamples:])
+                Q.append(imaginary2[-numberOfSamples:])
+                channel.append(channel_Labels[2]) # Changed from "labels" to "channel"
+                instance.append(4)
+                ids.append(id)
+                tx.append(Alice)
+                rx.append(Eve)
+                timestamp.append(timestamp2)
+                if(generatePlots):    
                     
-                    idxStart2 = len(real2)-numberOfSamples
-                    I.append(real2[idxStart2:])
-                    Q.append(imaginary2[idxStart2:])
-                    channel.append(channel_Labels[2]) # Changed from "labels" to "channel"
-                    instance.append(4)
-                    ids.append(id)
-                    tx.append(Alice)
-                    rx.append(Eve)
-                    timestamp.append(timestamp2)
-                    
-                    plotTimeDomain(
-                        real1[idxStart1:], 
-                        imaginary1[idxStart1:], 
-                        samples=numberOfSamples, id=Bob)
-                    plotTimeDomain(
-                        real2[idxStart2:], 
-                        imaginary2[idxStart2:], 
-                        samples=numberOfSamples, id=Eve
-                    )
+                    plotTimeDomainSideBySide(
+                        real1[-numberOfSamples:], 
+                        imaginary1[-numberOfSamples:],
+                        real2[-numberOfSamples:], 
+                        imaginary2[-numberOfSamples:], 
+                        samples=numberOfSamples, id1=Bob, id2=Eve, ax1=ax1, ax2=ax2, fig=fig)
                 time.sleep(timeSleep)
         
         i = i + 1
@@ -337,10 +366,10 @@ def loadOTALabConfig(
     ):
     # OTA Lab node IPs
     NodeIPs = {
-        1:"pc804.emulab.net",       # x310 radio node 1
-        2:"pc811.emulab.net",       # x310 radio node 2
-        3:"pc807.emulab.net",       # x310 radio node 3
-        4:"pc809.emulab.net",        # x310 radio node 4
+        1:"pc743.emulab.net",       # x310 radio node 1
+        2:"pc744.emulab.net",       # x310 radio node 2
+        3:"pc749.emulab.net",       # x310 radio node 3
+        4:"pc745.emulab.net",        # x310 radio node 4
         5:"ota-nuc1.emulab.net",    # b210 nuc node 1
         6:"ota-nuc2.emulab.net",    # b210 nuc node 2
         7:"ota-nuc3.emulab.net",    # b210 nuc node 3
@@ -357,8 +386,12 @@ def loadOTALabConfig(
         8:gainConfigs["b210"],
     }
     
-    nodeIDs = NodeIPs.keys()
+    nodeIDs = nodeIDs if nodeIDs is not None else NodeIPs.keys()
     NodeConfigs = generateNodeConfigs(nodeIDs)
+    
+    # From the x310 nodes, remove them as transmitters (first two nodes in the list)
+    x310_nodes = [1,2,3,4]
+    NodeConfigs = [config for config in NodeConfigs if config[0] not in x310_nodes and config[1] not in x310_nodes]
     return NodeIPs, NodeGains, NodeConfigs
 
 def loadOTADenseConfig(
@@ -425,10 +458,12 @@ def loadOTARooftopConfig(
 
 if __name__ == "__main__":
     
-    nodeIDs = [1,2,3,5,6,7,8]
+    nodeIDs = [2,3,4,5,6,7,8] #[1,2,3,4,5,6,7,8]
     NodeIPs, NodeGains, nodeConfigs = loadOTALabConfig(nodeIDs = nodeIDs)
     # NodeIPs, NodeGains, nodeConfigs = loadOTADenseConfig()
-
+    # Removing certain nodes that data has been collected
+    configsToRemove = [[5, 6, 2], [5, 6, 3], [5, 6, 4], [5, 6, 7], [5, 6, 8], [5, 7, 2], [5, 7, 3], [5, 7, 4]]
+    nodeConfigs = [config for config in nodeConfigs if config not in configsToRemove]
     print("Node configs: ", nodeConfigs)
     print(len(nodeConfigs))
     # exit()
@@ -456,7 +491,7 @@ if __name__ == "__main__":
         
     metadata = {
         "deltaPulse": {
-            "num_bins": 512,
+            "num_bins": 1024,
             "amplitude": 1,
             "center": True,
             "repeat": True,
@@ -466,14 +501,14 @@ if __name__ == "__main__":
     }
     
     # Lets test a single node setting it up, then starting the transmitter and then stopping it after 10 seconds
-    print("Testing single node setup")
-    nodeID = 3
-    port = {'orch':'5001','radio':'5002','ai':'5003'}
-    setTXNode(params,type,nodeID,metadata)
-    time.sleep(10)
-    stopTXNode(nodeID)
-    print("Transmitter stopped")
-    exit()
+    # print("Testing single node setup")
+    # nodeID = 3
+    # port = {'orch':'5001','radio':'5002','ai':'5003'}
+    # setTXNode(params,type,nodeID,metadata)
+    # time.sleep(10)
+    # stopTXNode(nodeID)
+    # print("Transmitter stopped")
+    # exit()
     
     for nodes in nodeConfigs:
         print(f"Collecting data for node config: Alice={nodes[0]}, Bob={nodes[1]}, Eve={nodes[2]}")

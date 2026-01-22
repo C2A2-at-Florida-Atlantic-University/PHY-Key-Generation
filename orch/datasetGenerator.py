@@ -1,74 +1,221 @@
-import datetime as dt
-from sigmf import SigMFFile
-from sigmf.utils import get_data_type_str
-import os 
+import h5py
+import matplotlib.pyplot as plt
+import pandas as pd
+from datasets import Dataset
+import huggingface_hub as hf
+import datasets
 
-#Dataset Generator for creating datasets
-#Creates IQ datasets within the SigMF format
-#IQ files as well as signal metadata
-class sigMFDataset():
-    def __init__(self):
-        self.date_time = dt.datetime.utcnow().isoformat()+'Z'
-        self.metadataIsSet = False
-        
-    def setData(self,data,label,samplesPerExample):
-        self.data = data
-        self.label = label
-        self.SPE = samplesPerExample
-        
-    def createDataset(self):
-        if self.metadataIsSet:
-            self.createFolder()
-            self.createIQFile()
-            self.createMetadata()
-        else:
-            print("Set metadata first with setMetadata()")
-    
-    def createFolder(self):
-        parent_dir = os.getcwd()
-        directory = self.fileName+"_"+self.author+"_"+self.date_time
-        self.path = os.path.join(parent_dir,directory)
-        os.mkdir(self.path) 
-        print("Directory '% s' created" % directory) 
-    
-    def createIQFile(self):
-        self.data.tofile(self.fileName+'.sigmf-data')
-    
-    def setMetadata(self):
-        # create the metadata
-        self.fileName = input("File Name:")
-        self.samp_rate = input("Sampling Rate:")
-        self.freq = input("Sampling Frequency:")
-        self.author = input("Author Email:")
-        self.description = input("Description:")
-        self.metadataIsSet = True
-        
-    def setMetadata(self,fileName,samp_rate,freq,author,description):
-        # create the metadata
+class DatasetGenerator():
+    def __init__(self, fileName):
         self.fileName = fileName
-        self.samp_rate = samp_rate
-        self.freq = freq
-        self.author = author
-        self.description = description
-        self.metadataIsSet = True
-    
-    def createMetadata(self):
-        self.metadata = SigMFFile(
-            data_file=self.fileName+'.sigmf-data', # extension is optional
-            global_info = {
-                SigMFFile.DATATYPE_KEY: get_data_type_str(self.data),  # in this case, 'cf32_le'
-                SigMFFile.SAMPLE_RATE_KEY: self.samp_rate,
-                SigMFFile.AUTHOR_KEY: self.author,
-                SigMFFile.DESCRIPTION_KEY: self.description,
-                SigMFFile.FREQUENCY_KEY: self.freq,
-                SigMFFile.DATETIME_KEY: self.date_time,
-            }
+        self.dataFrame = self.generate_dataframe_from_hdf5()        
+
+    # Save dataframe to huggingface dataset
+    def saveDataFrame(self, dataset_name, config_name, repo_name="CAAI-FAU"):
+        username = hf.whoami()['name']
+        print("Pushing dataset to Hugging Face hub...")
+        # Create a new dataset
+        print("Creating new dataset...")
+        # Convert to HF Dataset
+        hf_dataset = Dataset.from_pandas(self.dataFrame)
+        # Push to Hugging Face hub
+        repo_name = username if repo_name == "" else repo_name
+        hf_dataset.push_to_hub(
+            repo_name+"/"+dataset_name, 
+            private=True, 
+            config_name=config_name
         )
-        self.metadata.tofile(self.fileName+'.sigmf-meta')
+        print("Dataset pushed to Hugging Face hub successfully.")
 
-def testDatasetGenerator():
-    return True
+    # read hdf5 file
+    def read_hdf5_file(self):
+        data = {}
+        with h5py.File(self.fileName, 'r') as f:
+            # Assuming the dataset is named 'dataset'
+            # Read all key from the file
+            keys = list(f.keys())
+            print("Keys in HDF5 file: ", keys)
+            for key in keys:
+                data[key] = f[key][:]
+        return data
 
-if __name__ == '__main__':
-    testDatasetGenerator()
-    print("Done")
+    def generate_dataframe_from_hdf5(self):
+        data = self.read_hdf5_file()
+        for key in data.keys(): # Read all keys in dictionary
+            if data[key].shape[0] == 1: # If first dimension shape is 1, remove it
+                data[key] = data[key][0]
+            if len(data[key].shape) > 1: # If data shape is 2D, make it a list
+                data[key] = list(data[key])
+        return pd.DataFrame(data)
+
+    def separate_iq_samples(self, data):
+        # I is the second half of the samples
+        I = data[len(data)//2:]
+        # Q is the first half of the samples
+        Q = data[:len(data)//2]
+        return I, Q
+
+    def plot_iq_samples(self, I,Q):
+        # Plot IQ samples
+        plt.plot(I, label='I')
+        plt.plot(Q, label='Q')
+        plt.title('IQ Samples')
+        plt.xlabel('Sample Number')
+        plt.ylabel('Amplitude')
+        plt.legend()
+        plt.show()
+
+    def plot_quadruplet_samples(self, id):
+        # Plot quadrupole samples
+        dataInstance = self.dataFrame[self.dataFrame['ids'] == id]
+        for index, row in dataInstance.iterrows():
+            print("Index: ", index)
+            I = row["I"]
+            Q = row["Q"]
+            plt.plot(I, label='I')
+            plt.plot(Q, label='Q')
+            name = "Eve" if row["instance"] % 2 == 0 else "Alice" if row["instance"] == 1 else "Bob"
+            plt.title(f'IQ Samples. ID: {id}, label: {row["channel"]}, instance: {row["instance"]} for {name}')
+            plt.xlabel('Sample Number')
+            plt.ylabel('Amplitude')
+            plt.legend()
+            plt.show()
+    
+def load_OTA_lab_config():
+    nodeConfigs = {
+        "IDs":[
+            # [1,2,3],
+            # [1,4,5],
+            # [1,4,8],
+            # [2,4,3],
+            # [4,2,5],
+            # [4,2,8],
+            # [4,8,5],
+            # [5,7,8],
+            # [5,8,7],
+            # [8,4,1],
+            # [8,5,1],
+            # [8,5,4]
+            # [1,4,7]
+            [5,7,6],
+            [5,7,8],
+            [5,8,2],
+            [5,8,3],
+            [5,8,4],
+            [5,8,6],
+            [5,8,7],
+            [6,7,2],
+            [6,7,3],
+            [6,7,4],
+            [6,7,5],
+            [6,7,8],
+            [6,8,2],
+            [6,8,3],
+            [6,8,4],
+            [6,8,5],
+            [6,8,7],
+            [7,8,2],
+            [7,8,3],
+            [7,8,4],
+            [7,8,5],
+            [7,8,6]
+        ],
+        "Timestamps":[
+            # 1747672681,
+            # 1747678946,
+            # 1747679768,
+            # 1747673451,
+            # 1747675004,
+            # 1747674226,
+            # 1747716767,
+            # 1747697115,
+            # 1747699032,
+            # 1747713786,
+            # 1747709125,
+            # 1747706583,
+            # 1747698126
+            1768617241,
+            1768620814,
+            1768624673,
+            1768628487,
+            1768632247,
+            1768635668,
+            1768639083,
+            1768642737,
+            1768646379,
+            1768650027,
+            1768653482,
+            1768656902,
+            1768660598,
+            1768664353,
+            1768668115,
+            1768671517,
+            1768674938,
+            1768678672,
+            1768682289,
+            1768685932,
+            1768689359,
+            1768692821
+        ]
+    }
+    return nodeConfigs
+
+def load_OTA_dense_config():
+    nodeConfigs = {
+        "IDs":[
+            [1,2,3],
+            [1,2,5],
+            [1,3,2],
+            [4,3,5]
+        ],
+        "Timestamps":[
+            1747695341,
+            1747776498,
+            1747698126,
+            1747770576
+        ]
+    }
+    return nodeConfigs
+
+if __name__ == "__main__":
+
+    
+    # Example usage
+    saveDataFrame = True
+    names = ['Alice', 'Bob', 'Eve']
+    
+    site = "Powder-OTA-Lab" # "Powder-OTA-Lab" or "Powder-OTA-Dense"
+    if site == "Powder-OTA-Lab":
+        nodeConfigs = load_OTA_lab_config()
+    else:
+        nodeConfigs = load_OTA_dense_config()
+    
+    numProbes = 100
+    signalType = "deltaPulse"
+    folder = "./"
+    for nodeIDs, timestamp in zip(nodeConfigs["IDs"], nodeConfigs["Timestamps"]):
+        file = folder + "Dataset_"+("OTALab_" if site == "Powder-OTA-Lab" else "OTADense_")+"Channels_"+signalType+"_"+str(numProbes)+"_"+"".join(str(node) for node in nodeIDs)+"_"+str(timestamp)+".hdf5"
+        print("Reading file: ", file)
+        # Read the hdf5 file
+        dataset = DatasetGenerator(file)
+        # Print the dataframe info
+        dataset.dataFrame.info()
+        # print("Dataframe:", dataset.dataFrame)
+        # Plot the IQ samples
+        # dataset.plot_iq_samples(0, 1)
+        # Plot the quadruplet samples
+        # dataset.plot_quadruplet_samples(3)
+        if saveDataFrame:
+            dataset_name = "Key-Generation"
+            config_name = signalType+"-"+site+"-Nodes-"+"".join(str(node) for node in nodeIDs)  #"Sinusoid-Powder-OTA-Lab" 
+            repo_name="CAAI-FAU"
+            print("Saving dataset to huggingface...")
+            print("Dataset name: ", dataset_name)
+            print("Config name: ", config_name)
+            print("Repo name: ", repo_name)
+            dataset.saveDataFrame(dataset_name, config_name, repo_name)
+            print("Dataframe saved to huggingface.")
+            # Load the dataset from huggingface
+            dataset = datasets.load_dataset(repo_name+"/"+dataset_name, config_name)
+            # Dataset information
+            print("Dataset information: ", dataset)
