@@ -134,21 +134,27 @@ class ReedSolomonReconciliation:
         A_str = A_bytes.decode('latin-1')
         return [A_str == Breconciled, Breconciled]
     
-    def reconcile_rate(self, data):
-        j = 0
+    def reconcile_rate(self, data, dataRayTracing=None):
+        i, j = 0, 0
         reconciliation_data1 = []
         reconciliation_data2 = []
         reconciliation_data3 = []
+        reconciliation_data4 = []
+        reconciliation_data5 = []
         reconciled_data = []
         pbar = tqdm(total = len(data)/4+1)
         while j <= len(data)-3:
             reconciliation_data1.append(self.reconcile(data[j],data[j+2]))
             reconciliation_data2.append(self.reconcile(data[j],data[j+1]))
             reconciliation_data3.append(self.reconcile(data[j+2],data[j+3]))
+            if dataRayTracing is not None:
+                reconciliation_data4.append(self.reconcile(data[j],dataRayTracing[i]))
+                reconciliation_data5.append(self.reconcile(data[j+2],dataRayTracing[i+1]))
+                i = i + 2
             j = j + 4
             pbar.update(1)
             
-        return reconciliation_data1, reconciliation_data2, reconciliation_data3
+        return reconciliation_data1, reconciliation_data2, reconciliation_data3, reconciliation_data4, reconciliation_data5
 
 if __name__ == "__main__":
     L = 128

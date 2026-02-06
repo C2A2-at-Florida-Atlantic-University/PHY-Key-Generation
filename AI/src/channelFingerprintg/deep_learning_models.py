@@ -20,7 +20,37 @@ def divisible_random(a, b, n, rng: random.Random = None):
     return result
 
 def identity_loss(y_true, y_pred):
-    return K.mean(y_pred)           
+    return K.mean(y_pred)
+
+
+@tf.custom_gradient
+def straight_through_quantize(x, threshold=0.5):
+    """Hard quantization with straight-through estimator for gradients.
+    
+    Forward pass: returns hard binary values (0 or 1)
+    Backward pass: passes gradients through as if it were identity (STE)
+    
+    This allows the network to learn while still producing binary outputs.
+    """
+    # Forward: hard threshold
+    y = tf.cast(x > threshold, dtype=tf.float32)
+    
+    def grad(dy):
+        # Backward: pass gradients straight through (identity)
+        # Optionally clip to region where sigmoid gradient would be non-zero
+        # This helps focus learning on values near the threshold
+        return dy, None  # None for threshold gradient
+    
+    return y, grad
+
+
+def ste_quantize_layer(threshold=0.5):
+    """Returns a Lambda layer that applies straight-through quantization."""
+    return Lambda(
+        lambda t: straight_through_quantize(t, threshold),
+        name="quantization_ste"
+    )
+
 
 class TripletNet_Channel():
     def __init__(self):
@@ -177,7 +207,7 @@ class QuadrupletNet():
     def __init__(self):
         pass
         
-    def create_quadruplet_net(self, embedding_net, alpha, beta, gamma=None):
+    def create_quadruplet_net(self, embedding_net, alpha, beta, gamma=None, loss_type=""):
         
         # embedding_net = encoder()
         self.alpha = alpha
@@ -194,7 +224,11 @@ class QuadrupletNet():
         N1 = embedding_net(input_3)
         N2 = embedding_net(input_4)
         
-        loss = Lambda(self.quadruplet_loss)([A, P, N1, N2]) 
+        if loss_type == "KDR":
+            loss = Lambda(self.quadruplet_loss_KDR)([A, P, N1, N2]) 
+        else:
+            loss = Lambda(self.quadruplet_loss)([A, P, N1, N2]) 
+            
         return Model(inputs=[input_1, input_2, input_3, input_4], outputs=loss)
 
     # Quadruplet Loss function.
@@ -215,8 +249,84 @@ class QuadrupletNet():
         else:
             # Loss taking into account only the distances between the anchor and the positive and the negative 1
             loss = K.maximum(D1 - D2 + self.alpha,0.0) + K.maximum(D1 - D3 + self.beta,0.0)
-        return loss        
-
+        return loss    
+    
+    def quadruplet_loss_KDR(self, x, entropy_weight=0.5, diversity_weight=0.5):
+        """Simple KDR-based quadruplet loss.
+        
+        Goals:
+        1. Minimize KDR(anchor, positive) - Alice & Bob should match
+        2. Maximize KDR(anchor, negative) - Eve should differ (~0.5)
+        3. Entropy: ~50% ones in each embedding
+        4. Diversity: Different inputs → different outputs
+        
+        Args:
+            x: List of [anchor, positive, negative1, negative2] embeddings
+            entropy_weight: Weight for entropy loss (default 0.5)
+            diversity_weight: Weight for diversity loss (default 0.5)
+            separation_weight: Weight for Eve separation loss (default 2.0)
+        """
+        def diff_xor(a, b):
+            return a + b - 2.0 * a * b
+        
+        def kdr(a, b):
+            return tf.reduce_mean(diff_xor(a, b), axis=1)
+        
+        # Unpack
+        anchor, positive, negative1, negative2 = x
+        
+        # KDR calculations
+        KDR_AP = kdr(anchor, positive)       # Should be LOW (~0)
+        KDR_AN = kdr(anchor, negative1)      # Should be HIGH (~0.5)
+        KDR_PN = kdr(positive, negative2)    # Should be HIGH (~0.5)
+        KDR_NN = kdr(negative1, negative2)   # Should be HIGH (~0.5)
+        
+        # =====================================================================
+        # LOSS 1: Similarity - minimize KDR between anchor and positive
+        # =====================================================================
+        # similarity_loss = tf.reduce_mean(KDR_AP)
+        if self.gamma is not None:
+            loss = tf.maximum(KDR_AP - KDR_AN + self.alpha, 0.0) + tf.maximum(KDR_AP - KDR_PN + self.beta, 0.0) + tf.maximum(KDR_AP - KDR_NN + self.gamma, 0.0)
+        else:
+            loss = tf.maximum(KDR_AP - KDR_AN + self.alpha, 0.0) + tf.maximum(KDR_AP - KDR_PN + self.beta, 0.0)
+        
+        
+        
+        # =====================================================================
+        # LOSS 3: Entropy - encourage ~50% ones (balanced bits)
+        # =====================================================================
+        all_emb = tf.concat([anchor, positive, negative1, negative2], axis=0)
+        bit_means = tf.reduce_mean(all_emb, axis=1)
+        entropy_loss = tf.reduce_mean(tf.square(bit_means - 0.5))
+        # Calculate entropy of each embedding to have a balanced bit distribution
+        # anchor_entropy = tf.reduce_mean(tf.square(anchor - 0.5))
+        # positive_entropy = tf.reduce_mean(tf.square(positive - 0.5))
+        # negative1_entropy = tf.reduce_mean(tf.square(negative1 - 0.5))
+        # negative2_entropy = tf.reduce_mean(tf.square(negative2 - 0.5))
+        # entropy_loss = tf.reduce_mean(anchor_entropy + positive_entropy + negative1_entropy + negative2_entropy)
+        
+        # =====================================================================
+        # LOSS 4: Diversity - different samples should produce different embeddings
+        # =====================================================================
+        anchor_shifted = tf.roll(anchor, shift=1, axis=0)
+        within_kdr = kdr(anchor, anchor_shifted)
+        diversity_loss = tf.reduce_mean(tf.maximum(0.1 - within_kdr, 0.0))
+        # Check diversity by calculating entropy across all embeddings in the batch
+        # all_emb = tf.concat([anchor, positive, negative1, negative2], axis=0)
+        # bit_means = tf.reduce_mean(all_emb, axis=1)
+        # diversity_loss = tf.reduce_mean(tf.square(bit_means - 0.5))
+        
+        # =====================================================================
+        # COMBINED LOSS
+        # =====================================================================
+        loss = (
+            loss                       # Push Alice-Bob KDR → 0
+            + entropy_weight * entropy_loss         # Balanced bits
+            # + diversity_weight * diversity_loss       # Different inputs → different outputs
+        )
+        
+        return loss
+    
     def quantization_layer(self,x):
         ones = tf.ones_like(x)
         zeros = tf.zeros_like(x)
@@ -296,19 +406,25 @@ class ResNet_QuadrupletNet_Channel(QuadrupletNet):
         x = Conv2D(32, 7, strides = 2, activation='relu', padding='same', kernel_regularizer=reg)(inputs)
         x =  Dropout(0.3)(x)
         x = self.resblock(x, 3, 32, first_layer = True)
-        for _ in range(2):
+        for _ in range(1):
             x = self.resblock(x, 3, 32)
         x = self.resblock(x, 3, 64, first_layer = True)
-        for _ in range(2):
+        for _ in range(1):
             x = self.resblock(x, 3, 64)
         x = AveragePooling2D(pool_size=2)(x)
         x = Flatten()(x)
         x = Dense(output_length)(x)
         x = Lambda(lambda  x: K.l2_normalize(x,axis=1))(x)
         # x = Lambda(lambda x: tf.cast(x > 0.5, dtype=tf.float32))(x) # Quantization layer
-        # x = Dense(units=output_length, activation='sigmoid', kernel_initializer="lecun_normal")(x)
+        x = Dense(units=output_length, activation='sigmoid', kernel_initializer="lecun_normal")(x)
         model = Model(inputs=inputs, outputs=x)
         return model
+    
+    def build_quantized_extractor(self, datashape, output_length, threshold=0.5):
+        """Builds a feature extractor with STE quantization (differentiable)."""
+        base = self.feature_extractor(datashape, output_length)
+        q_out = ste_quantize_layer(threshold)(base.output)
+        return Model(base.input, q_out, name="ResNet_QuadrupletNet_Channel_Quantized")
     
 class FeedForward_QuadrupletNet_Channel(QuadrupletNet):
     def __init__(self, embed_dim=512, width=[2048, 1024], dropout=0.3, l2_w=1e-3):
@@ -347,83 +463,114 @@ class FeedForward_QuadrupletNet_Channel(QuadrupletNet):
         x = Flatten()(x)
         x = Dense(output_length, kernel_regularizer=reg)(x)
         x = Lambda(lambda t: K.l2_normalize(t, axis=1))(x)  # unit-norm embeddings
-        # x = Dense(units=output_length, activation='sigmoid', kernel_initializer="lecun_normal")(x)
+        x = Dense(units=output_length, activation='sigmoid', kernel_initializer="lecun_normal")(x)
 
         return Model(inputs, x, name="MLP_Encoder")
+    
+    def build_quantized_extractor(self, datashape, output_length, threshold=0.5):
+        """Builds a feature extractor with STE quantization (differentiable)."""
+        base = self.feature_extractor(datashape, output_length)
+        q_out = ste_quantize_layer(threshold)(base.output)
+        return Model(base.input, q_out, name="MLP_Encoder_Quantized")
 
 # Recurrent Neural Network (RNN) model
 class RNN_QuadrupletNet_Channel(QuadrupletNet):
     """
-    GRU over time axis:
-      - Treat spectrogram time (W) as sequence; features per step = F*C
-      - Bi-GRU -> pooling -> 512-D embedding.
+    Simple RNN for learning time-frequency channel features from spectrograms.
+    
+    Architecture:
+        Input: Spectrogram (F, T, C) - Frequency bins x Time steps x Channels
+        
+        1. Permute to (T, F, C) - treat time as sequence dimension
+        2. Reshape to (T, F*C) - each time step has all frequency info
+        3. GRU processes sequence - learns temporal evolution of frequency features
+        4. Final hidden state → Dense → Sigmoid → Feature vector [0, 1]
+        5. Optional: STE quantization for binary output {0, 1}
+    
+    The RNN sees frequency content at each time step and learns how
+    the channel's frequency response evolves over time.
     """
     def __init__(self,
-                 embed_dim=512,
-                 gru_units=384,
-                 td_width=256,
+                 gru_units=256,
                  dropout=0.3,
-                 recurrent_dropout=0.0,
-                 l2_w=1e-3,
-                 bidirectional=True):
-        self.embed_dim = embed_dim
+                 recurrent_dropout=0.1,
+                 bidirectional=True,
+                 num_layers=2):
         self.gru_units = gru_units
-        self.td_width = td_width
         self.dropout = dropout
         self.recurrent_dropout = recurrent_dropout
-        self.l2_w = l2_w
         self.bidirectional = bidirectional
+        self.num_layers = num_layers
 
     def feature_extractor(self, datashape, output_length):
-        self.datashape = datashape
-        # F: Frequency, T: Time, C: Channels
-        F, T, C = datashape[1], datashape[2], datashape[3]
-        reg = l2(self.l2_w)
+        """
+        Build the RNN feature extractor.
         
-        def mlp_layer(y, units):
-            # y = Dense(units, kernel_regularizer=reg)(y)
-            # y = Conv2D(units, 1, padding='same', kernel_regularizer=reg)(y)
-            y = Dense(units, kernel_regularizer=reg)(y)
-            y = BatchNormalization()(y)
-            y = ReLU()(y)
-            return y
-
-        def mlp_block(y, units):
-            # Two-layer block mirroring a ResNet block (without residual Add)
-            y = mlp_layer(y, units)
-            y = mlp_layer(y, units)
-            return y
-
+        Args:
+            datashape: Tuple (batch, F, T, C) - spectrogram dimensions
+            output_length: Size of output feature vector
+            
+        Returns:
+            Keras Model: Input spectrogram → Output feature vector [0, 1]
+        """
+        self.datashape = datashape  # Store for create_quadruplet_net
+        F, T, C = datashape[1], datashape[2], datashape[3]
+        print(f"Building RNN: F={F} (freq), T={T} (time), C={C} (channels)")
+        print(f"GRU units={self.gru_units}, layers={self.num_layers}, bidirectional={self.bidirectional}")
+        
+        # Input: spectrogram (F, T, C)
         inputs = Input(shape=(F, T, C))
-        # Treat time as sequence; per-step features = F*C
-        x = Permute((2,1,3))(inputs)                      # (T, F, C)
-        x = Reshape((T, F*C))(x)                          # (T, F*C)
-        x = Dense(output_length, activation='relu', kernel_regularizer=reg)(x)
-        x = LayerNormalization(epsilon=1e-5)(x)
+        
+        # Step 1: Permute to (T, F, C) - time becomes sequence dimension
+        x = Permute((2, 1, 3))(inputs)
+        
+        # Step 2: Reshape to (T, F*C) - flatten frequency & channels per timestep
+        x = Reshape((T, F * C))(x)
+        
+        # Step 3: Stacked GRU layers
+        for i in range(self.num_layers):
+            return_sequences = (i < self.num_layers - 1)  # Only last layer returns final state
+            
+            gru = GRU(
+                self.gru_units,
+                return_sequences=return_sequences,
+                dropout=self.dropout,
+                # recurrent_dropout=self.recurrent_dropout,
+                name=f"gru_{i+1}"
+            )
+            
+            if self.bidirectional:
+                x = Bidirectional(gru, name=f"bi_gru_{i+1}")(x)
+            else:
+                x = gru(x)
+            
+            # Add layer norm between GRU layers (not after last)
+            if return_sequences:
+                x = LayerNormalization()(x)
+                
+        
+        # Step 4: Project to output dimension
+        hidden_dim = self.gru_units * 2 if self.bidirectional else self.gru_units
+        x = Dense(hidden_dim, activation='relu', name="projection")(x)
+        x = BatchNormalization()(x)
         x = Dropout(self.dropout)(x)
+        
+        # Step 5: Output layer with sigmoid for [0, 1] values
+        x = Dense(output_length, activation='sigmoid', name="output")(x)
+        
+        return Model(inputs, x, name="RNN_ChannelEncoder")
 
-        # Single GRU layer (optionally bidirectional)
-        if self.bidirectional:
-            x = Bidirectional(GRU(self.gru_units, return_sequences=True, dropout=self.dropout))(x)
-        else:
-            x = GRU(self.gru_units, return_sequences=True, dropout=self.dropout)(x)
-
-        # Normalize sequence features before pooling
-        x = LayerNormalization(epsilon=1e-5)(x)
-
-        # Projection head -> L2-normalized embedding
-        # x = Dense(output_length, kernel_regularizer=reg)(pooled)
-        # x = BatchNormalization()(x)
-        # add two mlp blocks
-        x = mlp_block(x, int(np.ceil(output_length/2)))
-        x = mlp_block(x, output_length)
-        # Average pooling
-        x = GlobalAveragePooling1D()(x)
-        x = Flatten()(x)
-        x = Dense(output_length, kernel_regularizer=reg)(x)
-        x = Lambda(lambda t: K.l2_normalize(t, axis=1))(x)
-
-        return Model(inputs, x, name="GRU_Encoder")
+    def build_quantized_extractor(self, datashape, output_length, threshold=0.5):
+        """
+        Build RNN with STE quantization layer for binary {0, 1} output.
+        
+        Uses Straight-Through Estimator for differentiable hard quantization:
+        - Forward: Hard threshold to {0, 1}
+        - Backward: Gradients pass through as identity
+        """
+        base = self.feature_extractor(datashape, output_length)
+        q_out = ste_quantize_layer(threshold)(base.output)
+        return Model(base.input, q_out, name="RNN_ChannelEncoder_Quantized")
     
 class RNN_QuadrupletNet_Channel2(QuadrupletNet):
     """
@@ -456,49 +603,34 @@ class RNN_QuadrupletNet_Channel2(QuadrupletNet):
         self.ff_multiplier = ff_multiplier
 
     def feature_extractor(self, datashape, output_length):
-        self.datashape = datashape
-        # F: Frequency, T: Time, C: Channels
         F, T, C = datashape[1], datashape[2], datashape[3]
         reg = l2(self.l2_w)
-
+        
         inputs = Input(shape=(F, T, C))
-        # Treat time as sequence; per-step features = F*C
-        x = Permute((2,1,3))(inputs)                      # (T, F, C)
-        x = Reshape((T, F*C))(x)                          # (T, F*C)
-        x = Dense(output_length, activation='relu', kernel_regularizer=reg)(x)
-        x = LayerNormalization(epsilon=1e-5)(x)
+        x = Permute((2, 1, 3))(inputs)           # (T, F, C)
+        x = Reshape((T, F * C))(x)               # (T, F*C)
+        
+        # Project to working dimension
+        x = Dense(self.embed_dim, kernel_regularizer=reg)(x)
+        x = LayerNormalization()(x)
         x = Dropout(self.dropout)(x)
-
-        # Stacked GRU blocks with optional attention and residual connections
-        d_model = int(self.gru_units * (2 if self.bidirectional else 1))
-        for _ in range(self.num_gru_layers):
-            gru_layer = GRU(self.gru_units, return_sequences=True,
-                            dropout=self.dropout, recurrent_dropout=self.recurrent_dropout)
-            y = Bidirectional(gru_layer)(x) if self.bidirectional else gru_layer(x)
-            y = LayerNormalization(epsilon=1e-5)(y)
-            # Residual connection if dimensions align
-            if y.shape[-1] == x.shape[-1]:
-                y = Add()([x, y])
-            x = y
-
-            if self.use_attention:
-                attn = MultiHeadAttention(num_heads=self.n_heads,
-                                          key_dim=max(1, d_model // self.n_heads),
-                                          dropout=self.dropout)(x, x)
-                x = Add()([x, Dropout(self.dropout)(attn)])
-                x = LayerNormalization(epsilon=1e-5)(x)
-
-            ff = Dense(self.ff_multiplier * d_model, activation='relu')(x)
-            ff = Dropout(self.dropout)(ff)
-            ff = Dense(d_model)(ff)
-            x = Add()([x, Dropout(self.dropout)(ff)])
-            x = LayerNormalization(epsilon=1e-5)(x)
-        # Average pooling
-        x = GlobalAveragePooling1D()(x)
-        x = Flatten()(x)
+        
+        # GRU layer - use the __init__ parameter!
+        gru = GRU(self.gru_units, return_sequences=False,  # Only need final state
+                dropout=self.dropout, 
+                recurrent_dropout=self.recurrent_dropout)
+        if self.bidirectional:
+            x = Bidirectional(gru)(x)
+        else:
+            x = gru(x)
+        
+        # Projection head (after pooling, much cheaper)
         x = Dense(output_length, kernel_regularizer=reg)(x)
-        x = Lambda(lambda t: K.l2_normalize(t, axis=1))(x)
-
+        x = BatchNormalization()(x)
+        x = ReLU()(x)
+        x = Dense(output_length, activation='sigmoid', 
+                kernel_initializer="lecun_normal")(x)
+        
         return Model(inputs, x, name="GRU_Encoder")
     
 # Transformer model
@@ -621,6 +753,8 @@ class AE_QuadrupletNet_Channel(QuadrupletNet):
         x = Dense(output_length, kernel_regularizer=reg)(x)
         x = BatchNormalization()(x)
         x = Lambda(lambda t: K.l2_normalize(t, axis=1))(x)  # 512-D unit-norm
+        # Sigmoid activation
+        x = Lambda(lambda t: K.sigmoid(t))(x)
 
         return Model(inputs, x, name="CAE_Encoder")
 
@@ -670,3 +804,162 @@ class AE_QuadrupletNet_Channel(QuadrupletNet):
         autoencoder = Model(enc_in, ae_out, name="CAE_Pretrain")
 
         return encoder, autoencoder
+    
+    
+if __name__ == "__main__":
+    
+    
+    
+    def diff_xor(a, b):
+        return a + b - 2.0 * a * b
+    
+    # A = [0, 1, 0, 1, 1]
+    # A = tf.cast(A, tf.float32)
+    A = tf.cast(tf.random.uniform((1, 5)) > 0.5, tf.float32)
+    # B = [1, 0, 1, 0, 1]
+    # B = tf.cast(B, tf.float32)
+    B = tf.cast(tf.random.uniform((1, 5)) > 0.5, tf.float32)
+    print("A:", A)
+    print("B:", B)
+    xor_AB = diff_xor(A, B)
+    print("xor_AB:", xor_AB)
+    
+    # calculate KDR
+    KDR = tf.reduce_mean(xor_AB)
+    print("KDR:", KDR)
+    exit()
+    # Test RNN with optional quantization and loss behavior
+    F = 2048
+    T = 32
+    C = 1
+    datashape = (1, F, T, C)
+    output_length = 128  # Smaller for quick testing
+    batch_size = 4
+    
+    def diff_xor(a, b):
+        """Differentiable XOR for values in [0,1] or binary {0,1}."""
+        return a + b - 2.0 * a * b
+    
+    def compute_kdr(a, b):
+        """Compute KDR = mean(XOR) between two tensors."""
+        return tf.reduce_mean(diff_xor(a, b))
+    
+    def compute_loss(kdr_ap, kdr_an, kdr_bp, kdr_bn, alpha, beta, gamma):
+        """Compute quadruplet loss from KDR values."""
+        loss = (
+            tf.maximum(kdr_ap - kdr_an + alpha, 0.0)
+            + tf.maximum(kdr_ap - kdr_bp + beta, 0.0)
+            + tf.maximum(kdr_ap - kdr_bn + gamma, 0.0)
+        )
+        return loss
+    
+    print("\n" + "="*70)
+    print("KDR AND MARGIN PARAMETER ANALYSIS")
+    print("="*70)
+    
+    # Test 1: Simulate expected KDR values from real channel data
+    print("\n--- Test 1: Simulated Binary Embeddings ---")
+    
+    # Simulate embeddings (binary vectors of length output_length)
+    # Anchor: random binary
+    emb_A = tf.cast(tf.random.uniform((batch_size, output_length)) > 0.5, tf.float32)
+    
+    # Positive: similar to Anchor (only ~10% bits different - reciprocal channel)
+    flip_mask_P = tf.cast(tf.random.uniform((batch_size, output_length)) < 0.10, tf.float32)
+    emb_P = tf.abs(emb_A - flip_mask_P)  # XOR with flip mask
+    
+    # Negatives: ~50% different from Anchor (independent Eve channels)
+    flip_mask_N1 = tf.cast(tf.random.uniform((batch_size, output_length)) < 0.50, tf.float32)
+    emb_N1 = tf.abs(emb_A - flip_mask_N1)
+    flip_mask_N2 = tf.cast(tf.random.uniform((batch_size, output_length)) < 0.50, tf.float32)
+    emb_N2 = tf.abs(emb_P - flip_mask_N2)
+    
+    # Compute KDR for each pair
+    kdr_ap = compute_kdr(emb_A, emb_P)
+    kdr_an = compute_kdr(emb_A, emb_N1)
+    kdr_bp = compute_kdr(emb_P, emb_N2)
+    kdr_bn = compute_kdr(emb_N1, emb_N2)
+    
+    print(f"KDR_AP (Alice-Bob, should be LOW):    {kdr_ap.numpy():.4f}")
+    print(f"KDR_AN (Alice-Eve, should be ~0.5):   {kdr_an.numpy():.4f}")
+    print(f"KDR_BP (Bob-Eve, should be ~0.5):     {kdr_bp.numpy():.4f}")
+    print(f"KDR_BN (Eve-Eve, should be ~0.5):     {kdr_bn.numpy():.4f}")
+    
+    # Test different margin values
+    print("\n--- Test 2: Loss for Different Margin Values ---")
+    print(f"{'Alpha':>8} {'Beta':>8} {'Gamma':>8} | {'Loss':>10} | Notes")
+    print("-" * 60)
+    
+    margin_configs = [
+        (0.1, 0.1, 0.05, "Conservative margins"),
+        (0.2, 0.2, 0.1,  "Moderate margins (recommended)"),
+        (0.3, 0.3, 0.15, "Aggressive margins"),
+        (0.4, 0.4, 0.2,  "Very aggressive (may not converge)"),
+        (0.5, 0.5, 0.5,  "Too aggressive (loss always > 0)"),
+    ]
+    
+    for alpha, beta, gamma, note in margin_configs:
+        loss = compute_loss(kdr_ap, kdr_an, kdr_bp, kdr_bn, alpha, beta, gamma)
+        print(f"{alpha:>8.2f} {beta:>8.2f} {gamma:>8.2f} | {loss.numpy():>10.4f} | {note}")
+    
+    # Dynamic margin suggestion based on expected KDR gap
+    print("\n--- Test 3: Dynamic Margin Calculation ---")
+    expected_kdr_ap = 0.10  # What we expect for good Alice-Bob pairs
+    expected_kdr_eve = 0.50  # What we expect for Eve pairs
+    gap = expected_kdr_eve - expected_kdr_ap
+    
+    # Set margins to ~50-70% of the gap (leave room for learning)
+    suggested_alpha = gap * 0.5
+    suggested_beta = gap * 0.5
+    suggested_gamma = gap * 0.25  # Smaller for Eve-Eve comparison
+    
+    print(f"Expected gap (KDR_eve - KDR_ap): {gap:.2f}")
+    print(f"Suggested alpha: {suggested_alpha:.3f} (50% of gap)")
+    print(f"Suggested beta:  {suggested_beta:.3f} (50% of gap)")
+    print(f"Suggested gamma: {suggested_gamma:.3f} (25% of gap)")
+    
+    # Test with actual model
+    print("\n--- Test 4: Full Model Forward Pass ---")
+    
+    alpha, beta, gamma = suggested_alpha, suggested_beta, suggested_gamma
+    print(f"Using margins: alpha={alpha:.3f}, beta={beta:.3f}, gamma={gamma:.3f}")
+    
+    rnn = RNN_QuadrupletNet_Channel(embed_dim=output_length)
+    embed_net_q = rnn.build_quantized_extractor(datashape, output_length, threshold=0.5)
+    quad_loss_model_q = rnn.create_quadruplet_net(
+        embed_net_q, alpha=alpha, beta=beta, gamma=gamma, loss_type="KDR"
+    )
+    
+    # Random input spectrograms
+    A = tf.random.uniform((batch_size, datashape[1], datashape[2], datashape[3]))
+    P = tf.random.uniform((batch_size, datashape[1], datashape[2], datashape[3]))
+    N1 = tf.random.uniform((batch_size, datashape[1], datashape[2], datashape[3]))
+    N2 = tf.random.uniform((batch_size, datashape[1], datashape[2], datashape[3]))
+    
+    # Get embeddings
+    emb_A_model = embed_net_q(A)
+    emb_P_model = embed_net_q(P)
+    emb_N1_model = embed_net_q(N1)
+    emb_N2_model = embed_net_q(N2)
+    
+    print(f"Embedding sample (first 16 bits): {emb_A_model[0, :16].numpy()}")
+    print(f"Unique values in embedding: {tf.unique(tf.reshape(emb_A_model, [-1]))[0].numpy()}")
+    
+    # Compute KDR on model outputs
+    kdr_ap_model = compute_kdr(emb_A_model, emb_P_model)
+    kdr_an_model = compute_kdr(emb_A_model, emb_N1_model)
+    print(f"Model KDR_AP (random inputs, untrained): {kdr_ap_model.numpy():.4f}")
+    print(f"Model KDR_AN (random inputs, untrained): {kdr_an_model.numpy():.4f}")
+    
+    # Forward pass through loss
+    loss_q = quad_loss_model_q([A, P, N1, N2])
+    print(f"Quadruplet loss (untrained model): {tf.reduce_mean(loss_q).numpy():.4f}")
+    
+    print("\n" + "="*70)
+    print("RECOMMENDATION:")
+    print(f"  alpha = {suggested_alpha:.2f}")
+    print(f"  beta  = {suggested_beta:.2f}")
+    print(f"  gamma = {suggested_gamma:.2f}")
+    print("="*70)
+    
+    exit()

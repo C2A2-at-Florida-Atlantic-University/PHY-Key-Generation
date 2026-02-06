@@ -3,7 +3,6 @@ from datasets import Dataset, DatasetDict, DownloadMode
 import datasets
 import pandas as pd
 import matplotlib.pyplot as plt
-from DatasetGenerator import DatasetGenerator
 import numpy as np
 
 from scipy import signal
@@ -195,11 +194,11 @@ class DatasetHandler():
         # In a figure with 4 subplots each showing a spectrogram for each quadruplet
         # spectrogram = np.stack([np.asarray(pkt, dtype=np.complex64) for pkt in spectrogram])
         print("Spectrogram shape:", spectrogram.shape)
-        fig, axes = plt.subplots(nrows=2, ncols=2, figsize=(10, 5))
+        fig, axes = plt.subplots(nrows=1, ncols=4, figsize=(15, 3))
         labels = ["alice-bob", "alice-eve", "bob-alice", "bob-eve"]
         spec_index = 0
         # show spectogram dimensions
-        spectrogram_starting_index = 240
+        spectrogram_starting_index = 200
         print("Spectrogram dimensions:", spectrogram.shape)
         
         # Determine selected indices (4 total)
@@ -220,33 +219,33 @@ class DatasetHandler():
         vmin = float(np.min(vals_min))
         vmax = float(np.max(vals_max))
         unified_img = None
-        for i in range(2):
-            for j in range(2):
-                sample_index = selected_indices[spec_index]
-                arr = np.asarray(spectrogram[sample_index])
-                if arr.ndim == 3 and arr.shape[-1] == 1:
-                    arr = arr[:, :, 0]
-                print("Spectrogram dimensions:", arr.shape)
-                img = axes[i,j].imshow(arr, aspect='auto', cmap='jet', vmin=vmin, vmax=vmax)
-                axes[i,j].set_title(f'Spectrogram {labels[spec_index]} at index {sample_index}')
-                axes[i,j].set_xlabel('M')
-                axes[i,j].set_ylabel('N')
-                # Ensure x and y axis show the starting and ending indices of the spectrogra showing every value
-                axes[i,j].set_xlim(0, arr.shape[1])
-                axes[i,j].set_ylim(0, arr.shape[0])
-                # Add start/end and >=10 intermediate tick marks on both axes
-                height = arr.shape[0]
-                width = arr.shape[1]
-                num_ticks = 12 if width >= 12 else max(width, 2)
-                xticks = np.linspace(0, width - 1, num=num_ticks, dtype=int)
-                axes[i,j].set_xticks(xticks)
-                axes[i,j].set_xticklabels([str(int(x)) for x in xticks])
-                num_ticks_y = 12 if height >= 12 else max(height, 2)
-                yticks = np.linspace(0, height - 1, num=num_ticks_y, dtype=int)
-                axes[i,j].set_yticks(yticks)
-                axes[i,j].set_yticklabels([str(int(y)) for y in yticks])
-                unified_img = img
-                spec_index += 1
+        for i in range(4):
+            # for j in range(4):
+            sample_index = selected_indices[spec_index]
+            arr = np.asarray(spectrogram[sample_index])
+            if arr.ndim == 3 and arr.shape[-1] == 1:
+                arr = arr[:, :, 0]
+            print("Spectrogram dimensions:", arr.shape)
+            img = axes[i].imshow(arr, aspect='auto', cmap='jet', vmin=vmin, vmax=vmax)
+            axes[i].set_title(f'{labels[spec_index]}')
+            axes[i].set_xlabel('M')
+            axes[i].set_ylabel('N')
+            # Ensure x and y axis show the starting and ending indices of the spectrogra showing every value
+            axes[i].set_xlim(0, arr.shape[1])
+            axes[i].set_ylim(0, arr.shape[0])
+            # Add start/end and >=10 intermediate tick marks on both axes
+            height = arr.shape[0]
+            width = arr.shape[1]
+            num_ticks = 12 if width >= 12 else max(width, 2)
+            xticks = np.linspace(0, width - 1, num=num_ticks, dtype=int)
+            axes[i].set_xticks(xticks)
+            axes[i].set_xticklabels([str(int(x)) for x in xticks])
+            num_ticks_y = 12 if height >= 12 else max(height, 2)
+            yticks = np.linspace(0, height - 1, num=num_ticks_y, dtype=int)
+            axes[i].set_yticks(yticks)
+            axes[i].set_yticklabels([str(int(y)) for y in yticks])
+            unified_img = img
+            spec_index += 1
         # Add a single unified colorbar for all subplots (outside on the right)
         if unified_img is not None:
             # Reserve space on the right for the colorbar
@@ -584,9 +583,9 @@ if __name__ == "__main__":
     dataset_name = "Key-Generation"
     # config_name = "Sinusoid-Powder-OTA-Dense-Nodes-123" #"Sinusoid-Powder-OTA-Lab"
     config_names= [
-            "Sinusoid-Powder-OTA-Dense-Nodes-123",
+            # "Sinusoid-Powder-OTA-Dense-Nodes-123",
             # "Sinusoid-Powder-OTA-Dense-Nodes-125",
-            # "Sinusoid-Powder-OTA-Dense-Nodes-132",
+            "Sinusoid-Powder-OTA-Dense-Nodes-132",
             # "Sinusoid-Powder-OTA-Dense-Nodes-435",
             # "Sinusoid-Powder-OTA-Lab-Nodes-123",
             # "Sinusoid-Powder-OTA-Lab-Nodes-145",
