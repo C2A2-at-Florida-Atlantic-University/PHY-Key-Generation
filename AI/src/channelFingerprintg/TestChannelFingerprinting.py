@@ -261,6 +261,14 @@ def test_model(feature_extractor_name, node_configurations, home="/home/Research
         print("EMBEDDING DIAGNOSTICS (before test-time quantization)")
         print("="*70)
         
+        # Check if quantization layer is used
+        quantization_layer = "QuantizationLayer" in feature_extractor_path or "Quantization" in feature_extractor_path
+        print(f"  Quantization layer used: {quantization_layer}")
+        
+        if not quantization_layer:
+            # quantize the features
+            features = quantize_data(features, {"type": "threshold", "threshold": 0.5})
+        
         # Check if model already outputs binary (from STE quantization layer)
         unique_vals = np.unique(features[:10].flatten())
         print(f"Unique values in first 10 embeddings: {unique_vals[:20]}{'...' if len(unique_vals)>20 else ''}")
@@ -1945,7 +1953,11 @@ if __name__ == "__main__":
             # model_name = "Spectrogram_FeatureExtractor_RNN_QuantizationLayer_in2048_out2040_alpha0.5_beta0.5_gamma0.1_RMSprop_lr0.0001_deltaPulse-Powder-OTA-Lab-Nodes_1_1770149385.h5"
             # model_name = "Spectrogram_FeatureExtractor_RNN_QuantizationLayerKDR_in2048_out2040_alpha0.5_beta0.5_gamma0.1_RMSprop_lr0.0001_deltaPulse-Powder-OTA-Lab-Nodes_1_1770153686.h5"
             # model_name = "Spectrogram_FeatureExtractor_RNN_QuantizationLayerKDR_in2048_out2040_alpha0.5_beta0.5_gamma0.1_RMSprop_lr0.001_deltaPulse-Powder-OTA-Lab-Nodes_3_1770221691.h5"
-            model_name = "Spectrogram_FeatureExtractor_RNN_QuantizationLayerKDR_in256_out128_alpha0.5_beta0.5_gamma0.1_SGD_lr0.1_Sinusoid-Powder-OTA-Lab-Nodes_6_1770314341.h5"
+            # model_name = "Spectrogram_FeatureExtractor_RNN_QuantizationLayerKDR_in256_out128_alpha0.5_beta0.5_gamma0.1_SGD_lr0.1_Sinusoid-Powder-OTA-Lab-Nodes_6_1770314341.h5"
+            model_name = "Spectrogram_FeatureExtractor_ResNet_QuantizationLayerKDR_in256_out128_alpha0.1_beta0.1_SGD_lr0.1_Sinusoid-Powder-OTA-Lab-Nodes_1770686013.h5"
+            model_name = "Spectrogram_FeatureExtractor_ResNet_QuantizationLayerKDR_in256_out128_alpha0.2_beta0.2_SGD_lr0.1_Sinusoid-Powder-OTA-Lab-Nodes_1770689404.h5"
+            model_name = "Spectrogram_FeatureExtractor_ResNet_QuantizationLayer_in256_out128_alpha0.5_beta0.5_SGD_lr0.1_Sinusoid-Powder-OTA-Lab-Nodes_1770695531.h5"
+            model_name = "Spectrogram_FeatureExtractor_ResNet_in256_out128_alpha0.5_beta0.5_SGD_lr0.1_Sinusoid-Powder-OTA-Lab-Nodes_2_1770738431.h5"
     else:
         # model_name = sys.argv[1]
         # 0.2,0.4,0.3,SGD

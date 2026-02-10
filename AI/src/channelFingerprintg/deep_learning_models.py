@@ -319,11 +319,11 @@ class QuadrupletNet():
         # =====================================================================
         # COMBINED LOSS
         # =====================================================================
-        loss = (
-            loss                       # Push Alice-Bob KDR → 0
-            + entropy_weight * entropy_loss         # Balanced bits
-            # + diversity_weight * diversity_loss       # Different inputs → different outputs
-        )
+        # loss = (
+        #     loss                       # Push Alice-Bob KDR → 0
+        #     + entropy_weight * entropy_loss         # Balanced bits
+        #     # + diversity_weight * diversity_loss       # Different inputs → different outputs
+        # )
         
         return loss
     
@@ -342,26 +342,44 @@ class QuadrupletNet():
         self.data = data
         self.label = label
         local_rng = random.Random(seed) if seed is not None else None
+        # Keep only complete consecutive quadruplets: [AB, AE, BA, BE]
+        usable_len = (len(data) // 4) * 4
+        if usable_len < 4:
+            raise ValueError("Dataset must contain at least one full quadruplet (4 samples).")
+        data_usable = data[:usable_len]
+        quad_starts = np.arange(0, usable_len, 4, dtype=np.int32)
         while True:
             list_a = []
             list_p = []
             list_n1 = []
             list_n2 = []
-            idx = divisible_random(0, len(data)-4, 4, rng=local_rng)
-            #batchsize_limit = batchsize+idx-1
-            #print("batchsize_limit",batchsize_limit)
-            #print("idx",idx)
             batch = 0
             while batch < batchsize:
-                a =data[idx]
-                n1 =data[idx+1]
-                p =data[idx+2]
-                n2 =data[idx+3]
+                if local_rng is not None:
+                    idx = int(quad_starts[local_rng.randrange(len(quad_starts))])
+                    swap_direction = bool(local_rng.getrandbits(1))
+                else:
+                    idx = int(random.choice(quad_starts))
+                    swap_direction = bool(random.getrandbits(1))
+
+                # Expected order within each consecutive quadruplet:
+                # idx: AB, idx+1: AE, idx+2: BA, idx+3: BE
+                # Randomly swap anchor/positive direction to balance AB->BA and BA->AB.
+                if swap_direction:
+                    a = data_usable[idx]      # AB
+                    p = data_usable[idx + 2]  # BA
+                    n1 = data_usable[idx + 1] # AE
+                    n2 = data_usable[idx + 3] # BE
+                else:
+                    a = data_usable[idx + 2]  # BA
+                    p = data_usable[idx]      # AB
+                    n1 = data_usable[idx + 3] # BE
+                    n2 = data_usable[idx + 1] # AE
+
                 list_a.append(a)
                 list_p.append(p)
                 list_n1.append(n1)
                 list_n2.append(n2)
-                idx = divisible_random(0, len(data)-4, 4, rng=local_rng)
                 batch = batch + 1
             A = np.array(list_a, dtype='float32')
             P = np.array(list_p, dtype='float32')

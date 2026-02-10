@@ -106,7 +106,7 @@ def train_channel_feature_extractor(data, labels, train_configurations, model_ty
         feature_extractor = NetObj.feature_extractor(data.shape, output_length)
     
     # Create the quadruplet net using the RFF extractor.
-    loss_type = "KDR" if quantization_layer else ""
+    loss_type = "KDR" #"KDR" if quantization_layer else ""
     net = NetObj.create_quadruplet_net(
         feature_extractor, 
         train_configurations[model_type]['alpha'], 
@@ -147,11 +147,28 @@ def train_channel_feature_extractor(data, labels, train_configurations, model_ty
     
     validation_size= train_configurations[model_type]['validation_size']
     
-    # Split the dasetset into validation and training sets.
-    data_train, data_valid, label_train, label_valid = train_test_split(data, 
-                                                                        labels, 
-                                                                        test_size=validation_size, 
-                                                                        shuffle= False)
+    # Split dataset on quadruplet boundaries so [AB, AE, BA, BE] ordering is preserved.
+    total_len = data.shape[0]
+    valid_len = int(total_len * validation_size)
+    valid_len = max(4, (valid_len // 4) * 4)
+    train_len = total_len - valid_len
+    train_len = (train_len // 4) * 4
+
+    if train_len < 4 or valid_len < 4:
+        raise ValueError(
+            f"Not enough data for quadruplet-aligned split. total={total_len}, "
+            f"train_len={train_len}, valid_len={valid_len}"
+        )
+
+    used_len = train_len + valid_len
+    if used_len < total_len:
+        dropped = total_len - used_len
+        print(f"Dropping {dropped} samples to preserve quadruplet alignment.")
+
+    data_train = data[:train_len]
+    label_train = labels[:train_len]
+    data_valid = data[train_len:train_len + valid_len]
+    label_valid = labels[train_len:train_len + valid_len]
     del data, labels
     
     batch_size = train_configurations[model_type]['batch_size']
@@ -370,7 +387,8 @@ if __name__ == "__main__":
     # Set seeds and determinism prior to any TF ops
     REPRO_SEED = 42
     set_reproducible(REPRO_SEED)
-    data, labels, rx, tx = dataset.load_data(shuffle=True, seed=REPRO_SEED)
+    shuffle_dataset = False
+    data, labels, rx, tx = dataset.load_data(shuffle=shuffle_dataset, seed=REPRO_SEED)
     
     # For every example in the data lets take the average number of samples per example
     
@@ -580,14 +598,14 @@ if __name__ == "__main__":
     factor = 0.1
     alphas = [0.5] # [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]
     betas = [0.5] # [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]
-    gammas = [0.1] # [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]
+    gammas = [0] # [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]
     FFT_lengths = [fft_len]
     output_lengths = [128] # Need to define the output length and why based on 255 constraint (bytes)
     optimizers = ["SGD"] # "RMSprop", "SGD", "Adam"
-    network_types = ["RNN"] # ["ResNet", "FeedForward", "RNN", "Transformer", "AE"]
+    network_types = ["ResNet"] # ["ResNet", "FeedForward", "RNN", "Transformer", "AE"]
     # data_types = ["IQ", "Polar", "Spectrogram"] # ["IQ", "Polar", "Spectrogram"]
     data_type = "Spectrogram" 
-    quantization_layer = True
+    quantization_layer = False
     for fft_len in FFT_lengths:
         for output_length in output_lengths:
             for network_type in network_types:
@@ -607,7 +625,7 @@ if __name__ == "__main__":
                                     "QuadrupletNet": {
                                         "alpha": a,
                                         "beta": b,
-                                        "gamma": g,
+                                        # "gamma": g,
                                         "data_type": data_type,
                                         "fft_len": fft_len,
                                         "output_length": output_length,
@@ -638,7 +656,7 @@ if __name__ == "__main__":
                                 
                                 filename_start = train_configurations[model_type]['data_type'] \
                                         +'_FeatureExtractor_'+network_type \
-                                        +('_QuantizationLayerKDR' if quantization_layer else "") \
+                                        +('_QuantizationLayer' if quantization_layer else "") \
                                         +'_in'+str(train_configurations[model_type]["fft_len"]) \
                                         +'_out'+str(train_configurations[model_type]["output_length"]) \
                                         +'_alpha'+str(train_configurations[model_type]["alpha"]) \
@@ -646,7 +664,7 @@ if __name__ == "__main__":
                                         +('_gamma'+str(train_configurations[model_type]["gamma"]) if "gamma" in train_configurations[model_type] else "") \
                                         +'_'+train_configurations[model_type]['optimizer'] \
                                         +'_lr'+str(train_configurations[model_type]["LearningRate"]) \
-                                        +'_'+configuration["config_name"]+'_'+str(6)
+                                        +'_'+configuration["config_name"]+'_'+str(4)
                                 
                                 ModelsDir = homeDir+"Models/"
                                 
