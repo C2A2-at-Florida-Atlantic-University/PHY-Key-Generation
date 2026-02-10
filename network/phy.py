@@ -114,6 +114,15 @@ class PHY:
     def setTxMPSK(self,M):
         self.mode["tx"] = str(M)+"PSK"
         self.transmitter.set_tx_M_PSK(M)
+
+    def setTxWiFiProbe(self, payload="probe_request", interval_ms=300, encoding=0, tx_amplitude=0.6):
+        self.mode["tx"] = "wifiProbe"
+        self.transmitter.set_tx_wifi_probe(
+            payload=payload,
+            interval_ms=interval_ms,
+            encoding=encoding,
+            tx_amplitude=tx_amplitude,
+        )
         
     ### RECEIVER FUNCTIONS ###
     def set_receive_data(self):
@@ -133,6 +142,23 @@ class PHY:
         if self.mode["rx"] != str(M)+"PSK":
             self.mode["rx"] = str(M)+"PSK"
             self.receiver.set_rx_MPSK(M)
+
+    def set_receive_wifi_probe(self, chan_est=0):
+        self.mode["rx"] = "wifiProbe"
+        self.receiver.set_rx_wifi_probe(chan_est=chan_est)
+
+    def record_wifi_probe_data(self, samples=1024):
+        if self.mode["rx"] != "wifiProbe":
+            self.set_receive_wifi_probe()
+        self.receiver.clear_UDP_socket()
+        self.receiver.clear_wifi_probe_sockets()
+        self.receiver.start()
+        try:
+            iq = self.receiver.retrieve_IQ(samples=samples)
+            eq = self.receiver.retrieve_wifi_probe_data(samples=samples)
+            return iq, eq
+        finally:
+            self.receiver.stop()
 
     def get_data(self):
         received = False

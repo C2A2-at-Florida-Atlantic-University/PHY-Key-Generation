@@ -9,10 +9,18 @@ if __name__ != '__main__':
     from RX.mpsk import MPSK
     from RX.pkt_rcv_gr38 import packetReceive
     from RX.sinusoid import Sinusoid
+    try:
+        from RX.wifi_probe import WiFiProbeRx
+    except Exception:
+        WiFiProbeRx = None
 else:
     from mpsk import MPSK
     from pkt_rcv_gr38 import packetReceive
     from sinusoid import Sinusoid
+    try:
+        from wifi_probe import WiFiProbeRx
+    except Exception:
+        WiFiProbeRx = None
 import time
 class Receiver():
     def __init__(self,
@@ -33,6 +41,13 @@ class Receiver():
         self.UDP_port=UDP_port
         self.UDP_IP=UDP_IP
         self.sock = self.set_UDP_socket()
+        self.wifi_probe_udp_ports = {
+            "symbols": self.UDP_port + 1,
+            "pilots": self.UDP_port + 2,
+            "csi": self.UDP_port + 3,
+            "chan_est": self.UDP_port + 4,
+        }
+        self.wifi_probe_socks = {}
         self.rx = None
         # self.set_rx_data()
         self.set_rx_IQ()
@@ -68,6 +83,7 @@ class Receiver():
         
     def set_rx_data(self):
         sps = 2 #symbols per sample
+        self._close_wifi_probe_sockets()
         del self.rx
         self.rx=packetReceive(
             samp_rate=self.samp_rate,
@@ -81,6 +97,7 @@ class Receiver():
         )
         
     def set_rx_MPSK(self,M):
+        self._close_wifi_probe_sockets()
         del self.rx
         self.rx=MPSK(
             samp_rate=self.samp_rate,
@@ -95,6 +112,7 @@ class Receiver():
         )
         
     def set_rx_IQ(self):
+        self._close_wifi_probe_sockets()
         del self.rx
         self.rx=Sinusoid(
             samp_rate=self.samp_rate,
@@ -105,14 +123,54 @@ class Receiver():
             SDR_ADDR=self.SDR_ADDR,
             UDP_port=self.UDP_port
         )
+
+    def set_rx_wifi_probe(self, chan_est=0):
+        if WiFiProbeRx is None:
+            raise RuntimeError(
+                "WiFi probe RX dependencies are missing. Install/import gr-ieee802-11 modules (ieee802_11)."
+            )
+        self._init_wifi_probe_sockets()
+        del self.rx
+        self.rx = WiFiProbeRx(
+            samp_rate=self.samp_rate,
+            gain=self.gain,
+            freq=self.freq,
+            buffer_size=self.buffer_size,
+            bandwidth=self.bandwidth,
+            SDR_ADDR=self.SDR_ADDR,
+            UDP_port=self.UDP_port,
+            symbols_udp_port=self.wifi_probe_udp_ports["symbols"],
+            pilots_udp_port=self.wifi_probe_udp_ports["pilots"],
+            csi_udp_port=self.wifi_probe_udp_ports["csi"],
+            chan_est_udp_port=self.wifi_probe_udp_ports["chan_est"],
+            chan_est=chan_est,
+        )
         
     #Set UDP_port=40860 for retrieving IQ
     def set_UDP_socket(self):
+        return self._create_udp_socket(self.UDP_port)
+
+    def _create_udp_socket(self, port):
         sock=socket.socket(socket.AF_INET, socket.SOCK_DGRAM) # UDP
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.bind((self.UDP_IP, self.UDP_port))
+        sock.bind((self.UDP_IP, port))
         sock.settimeout(0.5)
         return sock
+
+    def _init_wifi_probe_sockets(self):
+        self._close_wifi_probe_sockets()
+        self.wifi_probe_socks = {
+            key: self._create_udp_socket(port)
+            for key, port in self.wifi_probe_udp_ports.items()
+        }
+
+    def _close_wifi_probe_sockets(self):
+        for sock in self.wifi_probe_socks.values():
+            try:
+                sock.close()
+            except Exception:
+                pass
+        self.wifi_probe_socks = {}
     
     def data2IQ(self,data,bps=8):
         samples = []
@@ -144,6 +202,42 @@ class Receiver():
             pass
         print("done clearing socket")
 
+    def clear_wifi_probe_sockets(self):
+        for name, sock in self.wifi_probe_socks.items():
+            print("clearing socket", name)
+            try:
+                while True:
+                    _, _ = sock.recvfrom(4096)
+            except Exception:
+                pass
+
+    def _retrieve_complex_samples(self, sock, samples=1024, dataSize=2**16):
+        values = []
+        while len(values) < samples:
+            try:
+                data, _ = sock.recvfrom(dataSize)
+                valid_len = len(data) - (len(data) % 8)
+                for i in range(0, valid_len, 8):
+                    real, imag = struct.unpack('ff', data[i:i+8])
+                    values.append(complex(real, imag))
+                    if len(values) >= samples:
+                        break
+            except socket.timeout:
+                pass
+        return values
+
+    def retrieve_wifi_probe_data(self, samples=1024, dataSize=2**16):
+        if not self.wifi_probe_socks:
+            raise RuntimeError(
+                "WiFi probe sockets are not initialized. Call set_rx_wifi_probe() first."
+            )
+        output = {}
+        for key, sock in self.wifi_probe_socks.items():
+            output[key] = self._retrieve_complex_samples(
+                sock=sock, samples=samples, dataSize=dataSize
+            )
+        return output
+
     def retrieve_data(self,dataSize=8192):
         data, _ =self.sock.recvfrom(dataSize) 
         print(data)
@@ -162,12 +256,16 @@ class Receiver():
 
     def start(self):
         self.clear_UDP_socket()
+        if self.wifi_probe_socks:
+            self.clear_wifi_probe_sockets()
         self.rx.start()
 
     def stop(self):
         self.rx.stop()
         self.rx.wait()
         self.clear_UDP_socket()
+        if self.wifi_probe_socks:
+            self.clear_wifi_probe_sockets()
 
 def testReceiver():
     samp_rate=1e6

@@ -9,6 +9,10 @@ if __name__ != '__main__':
     from TX.pkt_xmt_gr38 import packetTransmit
     from TX.pnSequence import pnSequence
     from TX.FileSource import FileSource
+    try:
+        from TX.wifi_probe import WiFiProbeTx
+    except Exception:
+        WiFiProbeTx = None
 else:
     from mpsk import MPSK
     from sinusoid import Sinusoid
@@ -16,6 +20,10 @@ else:
     from pkt_xmt_gr38 import packetTransmit
     from pnSequence import pnSequence
     from FileSource import FileSource
+    try:
+        from wifi_probe import WiFiProbeTx
+    except Exception:
+        WiFiProbeTx = None
 
 class Transmitter():
     def __init__(self,
@@ -166,6 +174,32 @@ class Transmitter():
             bandwidth=self.bandwidth,
             SDR_ADDR=self.SDR_ADDR,
             filename=filename
+        )
+
+    def set_tx_wifi_probe(
+        self,
+        payload="probe_request",
+        interval_ms=300,
+        encoding=0,
+        tx_amplitude=0.6,
+    ):
+        if WiFiProbeTx is None:
+            raise RuntimeError(
+                "WiFi probe TX dependencies are missing. Install/import gr-ieee802-11 modules (foo, ieee802_11, wifi_phy_hier)."
+            )
+        self.type = "wifiProbe"
+        self._cleanup_tx()
+        self.tx = WiFiProbeTx(
+            samp_rate=self.samp_rate,
+            gain=self.gain,
+            freq=self.freq,
+            buffer_size=self.buffer_size,
+            bandwidth=self.bandwidth,
+            SDR_ADDR=self.SDR_ADDR,
+            encoding=encoding,
+            interval_ms=interval_ms,
+            tx_amplitude=tx_amplitude,
+            payload=payload,
         )
     
     def start(self):

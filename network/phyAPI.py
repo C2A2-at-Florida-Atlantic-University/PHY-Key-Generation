@@ -75,6 +75,22 @@ class phyAPI(FlaskView):
         callback = {"contents": "setTxFileSource" }
         return jsonify(callback), 201
 
+    @route('/tx/set/wifiProbe', methods=['POST'])
+    def tx_set_wifiProbe(self):
+        data = request.get_json() or {}
+        payload = data.get("payload", "probe_request")
+        interval_ms = data.get("interval_ms", 300)
+        encoding = data.get("encoding", 0)
+        tx_amplitude = data.get("tx_amplitude", 0.6)
+        phy.setTxWiFiProbe(
+            payload=payload,
+            interval_ms=interval_ms,
+            encoding=encoding,
+            tx_amplitude=tx_amplitude,
+        )
+        callback = {"contents": "setTxWiFiProbe"}
+        return jsonify(callback), 201
+
     @route('/tx/start', methods=['POST'])
     def tx_start(self):
         phy.transmitter.start()
@@ -129,6 +145,14 @@ class phyAPI(FlaskView):
         callback = {"contents": "done"}
         return jsonify(callback), 200
 
+    @route('/rx/set/wifiProbe', methods=['POST'])
+    def rx_set_wifiProbe(self):
+        data = request.get_json() or {}
+        chan_est = data.get("chan_est", 0)
+        phy.set_receive_wifi_probe(chan_est=chan_est)
+        callback = {"contents": "done"}
+        return jsonify(callback), 200
+
     @route('/rx/recordIQ', methods=['POST'])
     def rx_recordIQ(self):
         try:
@@ -139,6 +163,40 @@ class phyAPI(FlaskView):
             real_data = np.real(IQ_data)
             imag_data = np.imag(IQ_data)
             callback = {"real": real_data.tolist(), "imag": imag_data.tolist()}
+            return jsonify(callback), 200
+        except Exception as error:
+            callback = {"error": str(error)}
+            print("Error: ", error)
+            return jsonify(callback), 500
+
+    @route('/rx/recordWiFiProbe', methods=['POST'])
+    def rx_record_wifi_probe(self):
+        try:
+            data = request.get_json() or {}
+            samples = int(data.get("samples", 1024))
+            iq_data, eq_data = phy.record_wifi_probe_data(samples=samples)
+            callback = {
+                "iq": {
+                    "real": np.real(iq_data).tolist(),
+                    "imag": np.imag(iq_data).tolist(),
+                },
+                "symbols": {
+                    "real": np.real(eq_data["symbols"]).tolist(),
+                    "imag": np.imag(eq_data["symbols"]).tolist(),
+                },
+                "pilots": {
+                    "real": np.real(eq_data["pilots"]).tolist(),
+                    "imag": np.imag(eq_data["pilots"]).tolist(),
+                },
+                "csi": {
+                    "real": np.real(eq_data["csi"]).tolist(),
+                    "imag": np.imag(eq_data["csi"]).tolist(),
+                },
+                "chan_est_samples": {
+                    "real": np.real(eq_data["chan_est"]).tolist(),
+                    "imag": np.imag(eq_data["chan_est"]).tolist(),
+                },
+            }
             return jsonify(callback), 200
         except Exception as error:
             callback = {"error": str(error)}
