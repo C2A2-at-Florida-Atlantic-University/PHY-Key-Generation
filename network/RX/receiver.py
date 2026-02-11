@@ -31,7 +31,8 @@ class Receiver():
                 buffer_size=0x800,
                 SDR_ADDR="",
                 UDP_port=40868,
-                UDP_IP="127.0.0.1"):
+                UDP_IP="127.0.0.1",
+                socket_timeout=0.1):
         self.gain = gain
         self.samp_rate = samp_rate
         self.freq = freq
@@ -40,6 +41,7 @@ class Receiver():
         self.SDR_ADDR = SDR_ADDR
         self.UDP_port=UDP_port
         self.UDP_IP=UDP_IP
+        self.socket_timeout = socket_timeout
         self.sock = self.set_UDP_socket()
         self.wifi_probe_udp_ports = {
             "symbols": self.UDP_port + 1,
@@ -154,7 +156,7 @@ class Receiver():
         sock=socket.socket(socket.AF_INET, socket.SOCK_DGRAM) # UDP
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind((self.UDP_IP, port))
-        sock.settimeout(0.5)
+        sock.settimeout(self.socket_timeout)
         return sock
 
     def _init_wifi_probe_sockets(self):
@@ -211,30 +213,50 @@ class Receiver():
             except Exception:
                 pass
 
-    def _retrieve_complex_samples(self, sock, samples=1024, dataSize=2**16):
+    def _retrieve_complex_samples(self, sock, samples=1024, dataSize=2**16, max_wait_s=2.0):
         values = []
+        start_time = time.time()
         while len(values) < samples:
             try:
                 data, _ = sock.recvfrom(dataSize)
                 valid_len = len(data) - (len(data) % 8)
-                for i in range(0, valid_len, 8):
-                    real, imag = struct.unpack('ff', data[i:i+8])
-                    values.append(complex(real, imag))
-                    if len(values) >= samples:
+                if valid_len == 0:
+                    if time.time() - start_time > max_wait_s:
                         break
+                    continue
+                float_view = np.frombuffer(data[:valid_len], dtype=np.float32)
+                complex_view = float_view[0::2] + 1j * float_view[1::2]
+                needed = samples - len(values)
+                values.extend(complex_view[:needed])
             except socket.timeout:
-                pass
+                if time.time() - start_time > max_wait_s:
+                    break
         return values
 
-    def retrieve_wifi_probe_data(self, samples=1024, dataSize=2**16):
+    def retrieve_wifi_probe_data(self, samples=1024, dataSize=2**16, max_wait_s=2.0):
         if not self.wifi_probe_socks:
             raise RuntimeError(
                 "WiFi probe sockets are not initialized. Call set_rx_wifi_probe() first."
             )
+        if isinstance(samples, dict):
+            per_stream_samples = {
+                "symbols": int(samples.get("symbols", samples.get("iq", 96))),
+                "pilots": int(samples.get("pilots", 8)),
+                "csi": int(samples.get("csi", 104)),
+                "chan_est": int(samples.get("chan_est", samples.get("chan_est_samples", 128))),
+            }
+        else:
+            scalar_samples = int(samples)
+            per_stream_samples = {
+                "symbols": scalar_samples,
+                "pilots": scalar_samples,
+                "csi": scalar_samples,
+                "chan_est": scalar_samples,
+            }
         output = {}
         for key, sock in self.wifi_probe_socks.items():
             output[key] = self._retrieve_complex_samples(
-                sock=sock, samples=samples, dataSize=dataSize
+                sock=sock, samples=per_stream_samples[key], dataSize=dataSize, max_wait_s=max_wait_s
             )
         return output
 

@@ -173,7 +173,16 @@ class phyAPI(FlaskView):
     def rx_record_wifi_probe(self):
         try:
             data = request.get_json() or {}
-            samples = int(data.get("samples", 1024))
+            sample_counts = data.get("sample_counts", None)
+            if sample_counts is not None:
+                samples = {
+                    "iq": int(sample_counts.get("iq", 96)),
+                    "pilots": int(sample_counts.get("pilots", 8)),
+                    "csi": int(sample_counts.get("csi", 104)),
+                    "chan_est_samples": int(sample_counts.get("chan_est_samples", 128)),
+                }
+            else:
+                samples = int(data.get("samples", 1024))
             eq_data = phy.record_wifi_probe_data(samples=samples)
             callback = {
                 "iq": {

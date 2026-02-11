@@ -214,11 +214,9 @@ class Transmitter():
                 self.tx.wait()
             except Exception:
                 pass
-            try:
-                del self.tx
-            except Exception:
-                pass
-        self.tx = None
+        # Keep the configured TX block alive so repeated start/stop cycles do not
+        # pay full graph reconstruction cost. Switching TX mode still calls
+        # _cleanup_tx(), which performs full teardown.
 
 def create_data_packet(data):
     UUID=str(uuid.uuid4())
