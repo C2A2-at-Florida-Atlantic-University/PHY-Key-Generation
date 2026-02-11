@@ -31,13 +31,18 @@ def recordIQ(nodeID,port,samples):
         print("Response:",response_json)
         return None, None
 
-def recordWiFiProbe(nodeID,port,samples):
+def recordWiFiProbe(nodeID,port,samples,warmup=None):
     path = "/rx/recordWiFiProbe"
     data = {}
     if isinstance(samples, dict):
         data["sample_counts"] = samples
     else:
         data["samples"] = samples
+    if warmup:
+        data["warmup_retries"] = int(warmup.get("warmup_retries", 3))
+        data["warmup_sleep_s"] = float(warmup.get("warmup_sleep_s", 0.03))
+        data["warmup_timeout_s"] = float(warmup.get("warmup_timeout_s", 0.3))
+        data["read_timeout_s"] = float(warmup.get("read_timeout_s", 1.5))
     headers = {'Content-Type': 'application/json'}
     response = requests.post(APILink(NodeIPs[nodeID],port,path), data=json.dumps(data), headers=headers)
     response_json = response.json()
@@ -206,7 +211,7 @@ def plotTimeDomainSideBySide(I1, Q1, I2, Q2, samples=-1, id1=0, id2=0, ax1=None,
     ax2.axvline(0, color='black', linewidth=0.5)
     
     plt.tight_layout()
-    plt.pause(0.1)
+    plt.pause(1)
 
 def setTXNode(params,type,nodeID,metadata = {"pnSequence":"glfsr"}):
     print("type:",type)
@@ -268,9 +273,11 @@ def setRXNode(params,nodeID,type="IQ",metadata=None):
     print("Response SetRXNode PHY: ", response)
     _rx_config_cache[nodeID] = rx_signature
     
-def RecordNodeData(nodeID,samples,type="IQ"):
+def RecordNodeData(nodeID,samples,type="IQ",metadata=None):
     if type == "wifiProbe":
-        return recordWiFiProbe(nodeID,port["radio"],samples)
+        metadata = metadata or {}
+        warmup_cfg = metadata.get("wifiProbe", {})
+        return recordWiFiProbe(nodeID,port["radio"],samples,warmup=warmup_cfg)
     return recordIQ(nodeID,port["radio"],samples)
 
 def setRXNodesParallel(params, nodeIDs, type="IQ", metadata=None):
@@ -282,14 +289,14 @@ def setRXNodesParallel(params, nodeIDs, type="IQ", metadata=None):
         for future in futures:
             future.result()
 
-def _recordNodeDataWithTimestamp(nodeID, samples, type="IQ"):
-    return nodeID, RecordNodeData(nodeID, samples=samples, type=type), int(time.time())
+def _recordNodeDataWithTimestamp(nodeID, samples, type="IQ", metadata=None):
+    return nodeID, RecordNodeData(nodeID, samples=samples, type=type, metadata=metadata), int(time.time())
 
-def recordNodesParallel(nodeIDs, samples, type="IQ"):
+def recordNodesParallel(nodeIDs, samples, type="IQ", metadata=None):
     results = {}
     with ThreadPoolExecutor(max_workers=len(nodeIDs)) as executor:
         futures = [
-            executor.submit(_recordNodeDataWithTimestamp, nodeID, samples, type)
+            executor.submit(_recordNodeDataWithTimestamp, nodeID, samples, type, metadata)
             for nodeID in nodeIDs
         ]
         for future in futures:
@@ -346,13 +353,14 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
             
             stopTXNode(Bob)
             
-            if real2 is None or real1 is None:
+            if (not _iq_samples_valid(real1, imaginary1, min_samples=1)) or (not _iq_samples_valid(real2, imaginary2, min_samples=1)):
+                print("Retrying collection: empty/invalid IQ samples detected")
                 id = id - 1
                 i = i - 1
                 # continue
                 setRXNode(params,Eve)
             
-            if real1 is not None and real2 is not None:
+            if _iq_samples_valid(real1, imaginary1, min_samples=1) and _iq_samples_valid(real2, imaginary2, min_samples=1):
                 I.append(real1[-numberOfSamples:])
                 Q.append(imaginary1[-numberOfSamples:])
                 channel.append(channel_Labels[0])
@@ -393,14 +401,15 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
             timestamp1 = rx_results[Bob]["timestamp"]
             real2, imaginary2 = rx_results[Eve]["data"]
             timestamp2 = rx_results[Eve]["timestamp"]
-            if real2 is None or real1 is None:
+            if (not _iq_samples_valid(real1, imaginary1, min_samples=1)) or (not _iq_samples_valid(real2, imaginary2, min_samples=1)):
+                print("Retrying collection: empty/invalid IQ samples detected")
                 id = id - 1
                 i = i - 1
                 setRXNode(params,Eve)
             
             stopTXNode(Alice)
             
-            if real1 is not None and real2 is not None:
+            if _iq_samples_valid(real1, imaginary1, min_samples=1) and _iq_samples_valid(real2, imaginary2, min_samples=1):
                 I.append(real1[-numberOfSamples:])
                 Q.append(imaginary1[-numberOfSamples:])
                 channel.append(channel_Labels[0])
@@ -436,14 +445,31 @@ def _slice_samples(values, samples):
         return values
     return values[-samples:]
 
-def _wifi_probe_is_valid(probe_data):
+def _iq_samples_valid(real_values, imag_values, min_samples=1):
+    if real_values is None or imag_values is None:
+        return False
+    if len(real_values) < min_samples or len(imag_values) < min_samples:
+        return False
+    if len(real_values) != len(imag_values):
+        return False
+    return True
+
+def _wifi_probe_is_valid(probe_data, sample_counts=None):
     if probe_data is None:
         return False
     required_sections = ["iq", "pilots", "csi", "chan_est_samples"]
+    min_counts = sample_counts or {}
     for section in required_sections:
         if section not in probe_data:
             return False
         if "real" not in probe_data[section] or "imag" not in probe_data[section]:
+            return False
+        min_section_samples = int(min_counts.get(section, 1))
+        if not _iq_samples_valid(
+            probe_data[section]["real"],
+            probe_data[section]["imag"],
+            min_samples=min_section_samples
+        ):
             return False
     return True
 
@@ -523,7 +549,7 @@ def collect_data_ping_pong_3Nodes_wifi_probe(params, nodes, packages, metadata, 
             time.sleep(timeSleep)
 
             print("Recording RX Nodes: ", Alice, Eve)
-            rx_results = recordNodesParallel([Alice, Eve], samples=sample_counts, type="wifiProbe")
+            rx_results = recordNodesParallel([Alice, Eve], samples=sample_counts, type="wifiProbe", metadata=metadata)
             probe_data_1 = rx_results[Alice]["data"]
             timestamp1 = rx_results[Alice]["timestamp"]
             probe_data_2 = rx_results[Eve]["data"]
@@ -531,12 +557,13 @@ def collect_data_ping_pong_3Nodes_wifi_probe(params, nodes, packages, metadata, 
 
             stopTXNode(Bob)
 
-            if (not _wifi_probe_is_valid(probe_data_1)) or (not _wifi_probe_is_valid(probe_data_2)):
+            if (not _wifi_probe_is_valid(probe_data_1, sample_counts=sample_counts)) or (not _wifi_probe_is_valid(probe_data_2, sample_counts=sample_counts)):
+                print("Retrying collection: empty/invalid WiFi probe samples detected")
                 id = id - 1
                 i = i - 1
                 setRXNode(params, Eve, type="wifiProbe", metadata=metadata)
 
-            if _wifi_probe_is_valid(probe_data_1) and _wifi_probe_is_valid(probe_data_2):
+            if _wifi_probe_is_valid(probe_data_1, sample_counts=sample_counts) and _wifi_probe_is_valid(probe_data_2, sample_counts=sample_counts):
                 _append_wifi_probe_sample(feature_store, probe_data_1, sample_counts)
                 channel.append(channel_Labels[0])
                 instance.append(1)
@@ -575,20 +602,21 @@ def collect_data_ping_pong_3Nodes_wifi_probe(params, nodes, packages, metadata, 
             time.sleep(timeSleep)
 
             print("Recording RX Nodes: ", Bob, Eve)
-            rx_results = recordNodesParallel([Bob, Eve], samples=sample_counts, type="wifiProbe")
+            rx_results = recordNodesParallel([Bob, Eve], samples=sample_counts, type="wifiProbe", metadata=metadata)
             probe_data_1 = rx_results[Bob]["data"]
             timestamp1 = rx_results[Bob]["timestamp"]
             probe_data_2 = rx_results[Eve]["data"]
             timestamp2 = rx_results[Eve]["timestamp"]
 
-            if (not _wifi_probe_is_valid(probe_data_1)) or (not _wifi_probe_is_valid(probe_data_2)):
+            if (not _wifi_probe_is_valid(probe_data_1, sample_counts=sample_counts)) or (not _wifi_probe_is_valid(probe_data_2, sample_counts=sample_counts)):
+                print("Retrying collection: empty/invalid WiFi probe samples detected")
                 id = id - 1
                 i = i - 1
                 setRXNode(params, Eve, type="wifiProbe", metadata=metadata)
 
             stopTXNode(Alice)
 
-            if _wifi_probe_is_valid(probe_data_1) and _wifi_probe_is_valid(probe_data_2):
+            if _wifi_probe_is_valid(probe_data_1, sample_counts=sample_counts) and _wifi_probe_is_valid(probe_data_2, sample_counts=sample_counts):
                 _append_wifi_probe_sample(feature_store, probe_data_1, sample_counts)
                 channel.append(channel_Labels[0])
                 instance.append(3)
@@ -853,6 +881,10 @@ if __name__ == "__main__":
             "encoding": 0,
             "tx_amplitude": 0.6,
             "chan_est": 0,
+            "warmup_retries": 3,
+            "warmup_sleep_s": 0.03,
+            "warmup_timeout_s": 0.3,
+            "read_timeout_s": 1.5,
             "sample_counts": {
                 "iq": 96,
                 "pilots": 8,

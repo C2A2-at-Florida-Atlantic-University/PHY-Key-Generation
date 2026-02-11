@@ -147,14 +147,63 @@ class PHY:
         self.mode["rx"] = "wifiProbe"
         self.receiver.set_rx_wifi_probe(chan_est=chan_est)
 
-    def record_wifi_probe_data(self, samples=1024):
+    def _wifi_probe_data_ready(self, eq_data, required_counts):
+        if eq_data is None:
+            return False
+        for key, min_count in required_counts.items():
+            if key not in eq_data or len(eq_data[key]) < min_count:
+                return False
+        return True
+
+    def _normalize_wifi_probe_required_counts(self, samples):
+        if isinstance(samples, dict):
+            return {
+                "symbols": int(samples.get("symbols", samples.get("iq", 1))),
+                "pilots": int(samples.get("pilots", 1)),
+                "csi": int(samples.get("csi", 1)),
+                "chan_est": int(samples.get("chan_est", samples.get("chan_est_samples", 1))),
+            }
+        scalar_samples = max(1, int(samples))
+        return {
+            "symbols": scalar_samples,
+            "pilots": scalar_samples,
+            "csi": scalar_samples,
+            "chan_est": scalar_samples,
+        }
+
+    def record_wifi_probe_data(
+        self,
+        samples=1024,
+        warmup_retries=3,
+        warmup_sleep_s=0.03,
+        warmup_timeout_s=0.3,
+        read_timeout_s=1.5,
+    ):
         if self.mode["rx"] != "wifiProbe":
             self.set_receive_wifi_probe()
         self.receiver.clear_UDP_socket()
         self.receiver.clear_wifi_probe_sockets()
         self.receiver.start()
         try:
+            # Warmup: ensure each WiFi probe stream has arrived after socket flush.
+            required_counts = self._normalize_wifi_probe_required_counts(samples)
+            warmup_counts = {key: 1 for key in required_counts.keys()}
+            for _ in range(max(0, int(warmup_retries))):
+                warmup_data = self.receiver.retrieve_wifi_probe_data(
+                    samples=warmup_counts,
+                    max_wait_s=warmup_timeout_s
+                )
+                if self._wifi_probe_data_ready(warmup_data, warmup_counts):
+                    break
+                time.sleep(max(0.0, float(warmup_sleep_s)))
+
             eq = self.receiver.retrieve_wifi_probe_data(samples=samples)
+            if not self._wifi_probe_data_ready(eq, required_counts):
+                # One immediate retry after warmup if any stream is short.
+                eq = self.receiver.retrieve_wifi_probe_data(
+                    samples=samples,
+                    max_wait_s=read_timeout_s
+                )
             return eq
         finally:
             self.receiver.stop()

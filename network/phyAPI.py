@@ -174,6 +174,10 @@ class phyAPI(FlaskView):
         try:
             data = request.get_json() or {}
             sample_counts = data.get("sample_counts", None)
+            warmup_retries = int(data.get("warmup_retries", 3))
+            warmup_sleep_s = float(data.get("warmup_sleep_s", 0.03))
+            warmup_timeout_s = float(data.get("warmup_timeout_s", 0.3))
+            read_timeout_s = float(data.get("read_timeout_s", 1.5))
             if sample_counts is not None:
                 samples = {
                     "iq": int(sample_counts.get("iq", 96)),
@@ -183,7 +187,13 @@ class phyAPI(FlaskView):
                 }
             else:
                 samples = int(data.get("samples", 1024))
-            eq_data = phy.record_wifi_probe_data(samples=samples)
+            eq_data = phy.record_wifi_probe_data(
+                samples=samples,
+                warmup_retries=warmup_retries,
+                warmup_sleep_s=warmup_sleep_s,
+                warmup_timeout_s=warmup_timeout_s,
+                read_timeout_s=read_timeout_s,
+            )
             callback = {
                 "iq": {
                     "real": np.real(eq_data["symbols"]).tolist(),
