@@ -174,13 +174,9 @@ class phyAPI(FlaskView):
         try:
             data = request.get_json() or {}
             samples = int(data.get("samples", 1024))
-            iq_data, eq_data = phy.record_wifi_probe_data(samples=samples)
+            eq_data = phy.record_wifi_probe_data(samples=samples)
             callback = {
                 "iq": {
-                    "real": np.real(iq_data).tolist(),
-                    "imag": np.imag(iq_data).tolist(),
-                },
-                "symbols": {
                     "real": np.real(eq_data["symbols"]).tolist(),
                     "imag": np.imag(eq_data["symbols"]).tolist(),
                 },

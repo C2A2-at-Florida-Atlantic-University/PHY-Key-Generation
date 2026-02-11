@@ -154,9 +154,9 @@ class PHY:
         self.receiver.clear_wifi_probe_sockets()
         self.receiver.start()
         try:
-            iq = self.receiver.retrieve_IQ(samples=samples)
+            # iq = self.receiver.retrieve_IQ(samples=samples)
             eq = self.receiver.retrieve_wifi_probe_data(samples=samples)
-            return iq, eq
+            return eq
         finally:
             self.receiver.stop()
 
