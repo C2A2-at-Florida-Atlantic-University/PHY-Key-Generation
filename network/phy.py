@@ -175,8 +175,8 @@ class PHY:
         self,
         samples=1024,
         warmup_retries=3,
-        warmup_sleep_s=0.03,
-        warmup_timeout_s=0.3,
+        warmup_sleep_s=0.1,
+        warmup_timeout_s=0.5,
         read_timeout_s=1.5,
     ):
         if self.mode["rx"] != "wifiProbe":
