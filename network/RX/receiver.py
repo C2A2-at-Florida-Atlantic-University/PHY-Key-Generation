@@ -4,6 +4,7 @@ import socket
 import json
 from collections import deque
 import select
+import threading
 
 from flask import Flask, jsonify
 import numpy as np  
@@ -54,8 +55,7 @@ class Receiver():
         self.wifi_probe_socks = {}
         self.last_wifi_probe_timing = {}
         self.rx = None
-        # self.set_rx_data()
-        self.set_rx_IQ()
+        self._rx_lock = threading.Lock()
         print("Receiver Initialized")
         print("Gain: "+str(self.gain))
         print("Sampling Rate: "+str(self.samp_rate))
@@ -68,88 +68,118 @@ class Receiver():
 
     def setFreq(self,freq):
         self.freq = freq
-        self.rx.set_freq(self.freq)
+        with self._rx_lock:
+            if self.rx is not None:
+                self.rx.set_freq(self.freq)
         
     def setSamplingRate(self,samp_rate):
         self.samp_rate=samp_rate
-        self.rx.set_samp_rate(self.samp_rate)
+        with self._rx_lock:
+            if self.rx is not None:
+                self.rx.set_samp_rate(self.samp_rate)
     
     def setGain(self,gain):
         self.gain=gain
-        self.rx.set_gain(self.gain)
+        with self._rx_lock:
+            if self.rx is not None:
+                self.rx.set_gain(self.gain)
     
     def setBandwidth(self,bandwidth):
         self.bandwidth=bandwidth
-        self.rx.set_bandwidth(self.bandwidth)
+        with self._rx_lock:
+            if self.rx is not None:
+                self.rx.set_bandwidth(self.bandwidth)
     
     def set_buffer_size(self,buffer_size):
         self.buffer_size=buffer_size
-        self.rx.set_buffer_size(self.buffer_size)
+        with self._rx_lock:
+            if self.rx is not None:
+                self.rx.set_buffer_size(self.buffer_size)
         
     def set_rx_data(self):
         sps = 2 #symbols per sample
-        self._close_wifi_probe_sockets()
-        del self.rx
-        self.rx=packetReceive(
-            samp_rate=self.samp_rate,
-            sps=sps,
-            gain=self.gain,
-            freq=self.freq,
-            buffer_size=self.buffer_size,
-            bandwidth=self.bandwidth,
-            SDR_ADDR=self.SDR_ADDR,
-            UDP_port=self.UDP_port
-        )
+        with self._rx_lock:
+            self._close_wifi_probe_sockets()
+            self._cleanup_rx()
+            self.rx=packetReceive(
+                samp_rate=self.samp_rate,
+                sps=sps,
+                gain=self.gain,
+                freq=self.freq,
+                buffer_size=self.buffer_size,
+                bandwidth=self.bandwidth,
+                SDR_ADDR=self.SDR_ADDR,
+                UDP_port=self.UDP_port
+            )
         
     def set_rx_MPSK(self,M):
-        self._close_wifi_probe_sockets()
-        del self.rx
-        self.rx=MPSK(
-            samp_rate=self.samp_rate,
-            sps=4,
-            gain=self.gain,
-            freq=self.freq,
-            buffer_size=self.buffer_size,
-            bandwidth=self.bandwidth,
-            SDR_ADDR=self.SDR_ADDR,
-            UDP_port=self.UDP_port,
-            M=M
-        )
+        with self._rx_lock:
+            self._close_wifi_probe_sockets()
+            self._cleanup_rx()
+            self.rx=MPSK(
+                samp_rate=self.samp_rate,
+                sps=4,
+                gain=self.gain,
+                freq=self.freq,
+                buffer_size=self.buffer_size,
+                bandwidth=self.bandwidth,
+                SDR_ADDR=self.SDR_ADDR,
+                UDP_port=self.UDP_port,
+                M=M
+            )
         
     def set_rx_IQ(self):
-        self._close_wifi_probe_sockets()
-        del self.rx
-        self.rx=Sinusoid(
-            samp_rate=self.samp_rate,
-            gain=self.gain,
-            freq=self.freq,
-            buffer_size=self.buffer_size,
-            bandwidth=self.bandwidth,
-            SDR_ADDR=self.SDR_ADDR,
-            UDP_port=self.UDP_port
-        )
+        with self._rx_lock:
+            self._close_wifi_probe_sockets()
+            self._cleanup_rx()
+            self.rx=Sinusoid(
+                samp_rate=self.samp_rate,
+                gain=self.gain,
+                freq=self.freq,
+                buffer_size=self.buffer_size,
+                bandwidth=self.bandwidth,
+                SDR_ADDR=self.SDR_ADDR,
+                UDP_port=self.UDP_port
+            )
 
     def set_rx_wifi_probe(self, chan_est=0):
         if WiFiProbeRx is None:
             raise RuntimeError(
                 "WiFi probe RX dependencies are missing. Install/import gr-ieee802-11 modules (ieee802_11)."
             )
-        self._init_wifi_probe_sockets()
-        del self.rx
-        self.rx = WiFiProbeRx(
-            samp_rate=self.samp_rate,
-            gain=self.gain,
-            freq=self.freq,
-            buffer_size=self.buffer_size,
-            bandwidth=self.bandwidth,
-            SDR_ADDR=self.SDR_ADDR,
-            UDP_port=self.UDP_port,
-            symbols_udp_port=self.wifi_probe_udp_ports["symbols"],
-            pilots_udp_port=self.wifi_probe_udp_ports["pilots"],
-            csi_udp_port=self.wifi_probe_udp_ports["csi"],
-            chan_est_udp_port=self.wifi_probe_udp_ports["chan_est"],
-            chan_est=chan_est,
-        )
+        with self._rx_lock:
+            self._init_wifi_probe_sockets()
+            self._cleanup_rx()
+            self.rx = WiFiProbeRx(
+                samp_rate=self.samp_rate,
+                gain=self.gain,
+                freq=self.freq,
+                buffer_size=self.buffer_size,
+                bandwidth=self.bandwidth,
+                SDR_ADDR=self.SDR_ADDR,
+                UDP_port=self.UDP_port,
+                symbols_udp_port=self.wifi_probe_udp_ports["symbols"],
+                pilots_udp_port=self.wifi_probe_udp_ports["pilots"],
+                csi_udp_port=self.wifi_probe_udp_ports["csi"],
+                chan_est_udp_port=self.wifi_probe_udp_ports["chan_est"],
+                chan_est=chan_est,
+            )
+
+    def _cleanup_rx(self):
+        if self.rx is not None:
+            try:
+                self.rx.stop()
+            except Exception:
+                pass
+            try:
+                self.rx.wait()
+            except Exception:
+                pass
+            try:
+                del self.rx
+            except Exception:
+                pass
+        self.rx = None
         
     #Set UDP_port=40860 for retrieving IQ
     def set_UDP_socket(self):
@@ -343,11 +373,17 @@ class Receiver():
         return data
 
     def start(self):
-        self.rx.start()
+        with self._rx_lock:
+            if self.rx is None:
+                raise RuntimeError("Receiver type has not been set. Call set_rx_* before start().")
+            self.rx.start()
 
     def stop(self):
-        self.rx.stop()
-        self.rx.wait()
+        with self._rx_lock:
+            if self.rx is None:
+                return
+            self.rx.stop()
+            self.rx.wait()
         self.clear_UDP_socket()
         if self.wifi_probe_socks:
             self.clear_wifi_probe_sockets()

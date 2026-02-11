@@ -11,7 +11,9 @@ class phyAPI(FlaskView):
     
     def start(self,port,ip):
         phyAPI.register(self.app, route_base='/')
-        self.app.run(host=ip, port=port)
+        # GNU Radio/UHD graph teardown/recreation is not thread-safe in this app.
+        # Keep Flask single-threaded so all RX/TX graph transitions happen on one thread.
+        self.app.run(host=ip, port=port, threaded=False, use_reloader=False)
     
     def injectNode(self, injectedNode):
         global phy
