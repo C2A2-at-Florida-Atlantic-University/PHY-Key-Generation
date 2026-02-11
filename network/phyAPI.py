@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_classful import FlaskView, route
 import numpy as np
+import time
 
 phy = None
 
@@ -15,6 +16,47 @@ class phyAPI(FlaskView):
     def injectNode(self, injectedNode):
         global phy
         phy = injectedNode
+
+    def _normalize_wifi_probe_samples(self, sample_counts, scalar_samples):
+        if sample_counts is not None:
+            return {
+                "iq": int(sample_counts.get("iq", 96)),
+                "pilots": int(sample_counts.get("pilots", 8)),
+                "csi": int(sample_counts.get("csi", 104)),
+                "chan_est_samples": int(sample_counts.get("chan_est_samples", 128)),
+            }
+        samples = int(scalar_samples)
+        return samples
+
+    def _receiver_required_counts(self, samples, strict_counts=False):
+        if strict_counts:
+            if isinstance(samples, dict):
+                return {
+                    "symbols": int(samples["iq"]),
+                    "pilots": int(samples["pilots"]),
+                    "csi": int(samples["csi"]),
+                    "chan_est": int(samples["chan_est_samples"]),
+                }
+            count = max(1, int(samples))
+            return {"symbols": count, "pilots": count, "csi": count, "chan_est": count}
+        return {"symbols": 1, "pilots": 1, "csi": 1, "chan_est": 1}
+
+    def _wifi_probe_available_counts(self, eq_data):
+        if eq_data is None:
+            return {"symbols": 0, "pilots": 0, "csi": 0, "chan_est": 0}
+        return {
+            "symbols": len(eq_data.get("symbols", [])),
+            "pilots": len(eq_data.get("pilots", [])),
+            "csi": len(eq_data.get("csi", [])),
+            "chan_est": len(eq_data.get("chan_est", [])),
+        }
+
+    def _wifi_probe_has_required_counts(self, eq_data, required_counts):
+        available_counts = self._wifi_probe_available_counts(eq_data)
+        for key, min_count in required_counts.items():
+            if available_counts.get(key, 0) < int(min_count):
+                return False
+        return True
 
     @route('/tx/data', methods=['POST'])
     def tx_data(self):
@@ -178,22 +220,34 @@ class phyAPI(FlaskView):
             warmup_sleep_s = float(data.get("warmup_sleep_s", 0.03))
             warmup_timeout_s = float(data.get("warmup_timeout_s", 0.3))
             read_timeout_s = float(data.get("read_timeout_s", 1.5))
-            if sample_counts is not None:
-                samples = {
-                    "iq": int(sample_counts.get("iq", 96)),
-                    "pilots": int(sample_counts.get("pilots", 8)),
-                    "csi": int(sample_counts.get("csi", 104)),
-                    "chan_est_samples": int(sample_counts.get("chan_est_samples", 128)),
+            strict_counts = bool(data.get("strict_counts", False))
+            api_retries = int(data.get("api_retries", 2))
+            api_retry_sleep_s = float(data.get("api_retry_sleep_s", 0.02))
+            samples = self._normalize_wifi_probe_samples(sample_counts, data.get("samples", 1024))
+            required_counts = self._receiver_required_counts(samples, strict_counts=strict_counts)
+
+            eq_data = None
+            for attempt_idx in range(max(0, api_retries) + 1):
+                eq_data = phy.record_wifi_probe_data(
+                    samples=samples,
+                    warmup_retries=warmup_retries,
+                    warmup_sleep_s=warmup_sleep_s,
+                    warmup_timeout_s=warmup_timeout_s,
+                    read_timeout_s=read_timeout_s,
+                )
+                if self._wifi_probe_has_required_counts(eq_data, required_counts):
+                    break
+                if attempt_idx < api_retries:
+                    time.sleep(max(0.0, api_retry_sleep_s))
+
+            if not self._wifi_probe_has_required_counts(eq_data, required_counts):
+                callback = {
+                    "error": "Incomplete WiFi probe data; not sending empty streams",
+                    "required_counts": required_counts,
+                    "available_counts": self._wifi_probe_available_counts(eq_data),
                 }
-            else:
-                samples = int(data.get("samples", 1024))
-            eq_data = phy.record_wifi_probe_data(
-                samples=samples,
-                warmup_retries=warmup_retries,
-                warmup_sleep_s=warmup_sleep_s,
-                warmup_timeout_s=warmup_timeout_s,
-                read_timeout_s=read_timeout_s,
-            )
+                return jsonify(callback), 503
+
             callback = {
                 "iq": {
                     "real": np.real(eq_data["symbols"]).tolist(),

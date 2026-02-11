@@ -2,6 +2,7 @@
 import struct
 import socket
 import json
+from collections import deque
 
 from flask import Flask, jsonify
 import numpy as np  
@@ -182,18 +183,28 @@ class Receiver():
             samples.append(complex_num)
         return samples
     
-    def retrieve_IQ(self,dataSize=2**16,samples=2**10):
-        IQ_data=[]
-        while len(IQ_data)<samples:
+    def retrieve_IQ(self,dataSize=2**16,samples=2**10,max_wait_s=2.0):
+        target_samples = max(1, int(samples))
+        latest_samples = deque(maxlen=target_samples)
+        start_time = time.time()
+        has_received_data = False
+
+        # Drain available packets and keep only the most recent samples.
+        while time.time() - start_time < max_wait_s:
             try:
                 data = self.retrieve_raw_data(dataSize)
-                for i in range(0, len(data), 8):
-                    real, imag=struct.unpack('ff', data[i:i+8])
-                    complex_num=complex(real, imag)
-                    IQ_data.append(complex_num)
+                valid_len = len(data) - (len(data) % 8)
+                if valid_len == 0:
+                    continue
+                float_view = np.frombuffer(data[:valid_len], dtype=np.float32)
+                complex_view = float_view[0::2] + 1j * float_view[1::2]
+                latest_samples.extend(complex_view.tolist())
+                has_received_data = True
             except socket.timeout:
-                pass
-        return IQ_data
+                # Once stream goes idle after receiving data, return latest window.
+                if has_received_data:
+                    break
+        return list(latest_samples)
     
     def clear_UDP_socket(self):
         print("clearing socket")
@@ -214,24 +225,24 @@ class Receiver():
                 pass
 
     def _retrieve_complex_samples(self, sock, samples=1024, dataSize=2**16, max_wait_s=2.0):
-        values = []
+        target_samples = max(1, int(samples))
+        values = deque(maxlen=target_samples)
         start_time = time.time()
-        while len(values) < samples:
+        has_received_data = False
+        while time.time() - start_time < max_wait_s:
             try:
                 data, _ = sock.recvfrom(dataSize)
                 valid_len = len(data) - (len(data) % 8)
                 if valid_len == 0:
-                    if time.time() - start_time > max_wait_s:
-                        break
                     continue
                 float_view = np.frombuffer(data[:valid_len], dtype=np.float32)
                 complex_view = float_view[0::2] + 1j * float_view[1::2]
-                needed = samples - len(values)
-                values.extend(complex_view[:needed])
+                values.extend(complex_view.tolist())
+                has_received_data = True
             except socket.timeout:
-                if time.time() - start_time > max_wait_s:
+                if has_received_data:
                     break
-        return values
+        return list(values)
 
     def retrieve_wifi_probe_data(self, samples=1024, dataSize=2**16, max_wait_s=2.0):
         if not self.wifi_probe_socks:
@@ -277,9 +288,6 @@ class Receiver():
         return data
 
     def start(self):
-        self.clear_UDP_socket()
-        if self.wifi_probe_socks:
-            self.clear_wifi_probe_sockets()
         self.rx.start()
 
     def stop(self):

@@ -326,6 +326,7 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
     timestamp = []
     id = 0
     timeSleep = 0.1
+    maxRxRetries = int(metadata.get("rx_retries", 3))
     Alice = nodes[0]
     Bob = nodes[1]
     Eve = nodes[2]
@@ -339,28 +340,36 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
         if i%2 == 0:
             print("Setting TX Node: ", Bob)
             setTXNode(params,type,Bob,metadata)
-            
             print("Setting RX Nodes: ", Alice, Eve)
             setRXNodesParallel(params, [Alice, Eve])
             time.sleep(timeSleep)
-            
-            print("Recording RX Nodes: ", Alice, Eve)
-            rx_results = recordNodesParallel([Alice, Eve], samples=numberOfSamples)
-            real1, imaginary1 = rx_results[Alice]["data"]
-            timestamp1 = rx_results[Alice]["timestamp"]
-            real2, imaginary2 = rx_results[Eve]["data"]
-            timestamp2 = rx_results[Eve]["timestamp"]
-            
+
+            valid_capture = False
+            real1, imaginary1 = None, None
+            real2, imaginary2 = None, None
+            timestamp1, timestamp2 = None, None
+            for retry_idx in range(maxRxRetries + 1):
+                print("Recording RX Nodes: ", Alice, Eve)
+                rx_results = recordNodesParallel([Alice, Eve], samples=numberOfSamples)
+                real1, imaginary1 = rx_results[Alice]["data"]
+                timestamp1 = rx_results[Alice]["timestamp"]
+                real2, imaginary2 = rx_results[Eve]["data"]
+                timestamp2 = rx_results[Eve]["timestamp"]
+
+                valid_capture = _iq_samples_valid(real1, imaginary1, min_samples=1) and _iq_samples_valid(real2, imaginary2, min_samples=1)
+                if valid_capture:
+                    break
+                if retry_idx < maxRxRetries:
+                    print(f"Retrying read (no RX rearm): empty/invalid IQ samples detected ({retry_idx + 1}/{maxRxRetries})")
+                    time.sleep(timeSleep)
+
             stopTXNode(Bob)
-            
-            if (not _iq_samples_valid(real1, imaginary1, min_samples=1)) or (not _iq_samples_valid(real2, imaginary2, min_samples=1)):
-                print("Retrying collection: empty/invalid IQ samples detected")
-                id = id - 1
+
+            if not valid_capture:
                 i = i - 1
-                # continue
-                setRXNode(params,Eve)
-            
-            if _iq_samples_valid(real1, imaginary1, min_samples=1) and _iq_samples_valid(real2, imaginary2, min_samples=1):
+                continue
+
+            if valid_capture:
                 I.append(real1[-numberOfSamples:])
                 Q.append(imaginary1[-numberOfSamples:])
                 channel.append(channel_Labels[0])
@@ -394,22 +403,34 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
             print("Setting RX Nodes: ", Bob, Eve)
             setRXNodesParallel(params, [Bob, Eve])
             time.sleep(timeSleep)
-            
-            print("Recording RX Nodes: ", Bob, Eve)
-            rx_results = recordNodesParallel([Bob, Eve], samples=numberOfSamples)
-            real1, imaginary1 = rx_results[Bob]["data"]
-            timestamp1 = rx_results[Bob]["timestamp"]
-            real2, imaginary2 = rx_results[Eve]["data"]
-            timestamp2 = rx_results[Eve]["timestamp"]
-            if (not _iq_samples_valid(real1, imaginary1, min_samples=1)) or (not _iq_samples_valid(real2, imaginary2, min_samples=1)):
-                print("Retrying collection: empty/invalid IQ samples detected")
+
+            valid_capture = False
+            real1, imaginary1 = None, None
+            real2, imaginary2 = None, None
+            timestamp1, timestamp2 = None, None
+            for retry_idx in range(maxRxRetries + 1):
+                print("Recording RX Nodes: ", Bob, Eve)
+                rx_results = recordNodesParallel([Bob, Eve], samples=numberOfSamples)
+                real1, imaginary1 = rx_results[Bob]["data"]
+                timestamp1 = rx_results[Bob]["timestamp"]
+                real2, imaginary2 = rx_results[Eve]["data"]
+                timestamp2 = rx_results[Eve]["timestamp"]
+
+                valid_capture = _iq_samples_valid(real1, imaginary1, min_samples=1) and _iq_samples_valid(real2, imaginary2, min_samples=1)
+                if valid_capture:
+                    break
+                if retry_idx < maxRxRetries:
+                    print(f"Retrying read (no RX rearm): empty/invalid IQ samples detected ({retry_idx + 1}/{maxRxRetries})")
+                    time.sleep(timeSleep)
+
+            stopTXNode(Alice)
+
+            if not valid_capture:
                 id = id - 1
                 i = i - 1
-                setRXNode(params,Eve)
-            
-            stopTXNode(Alice)
-            
-            if _iq_samples_valid(real1, imaginary1, min_samples=1) and _iq_samples_valid(real2, imaginary2, min_samples=1):
+                continue
+
+            if valid_capture:
                 I.append(real1[-numberOfSamples:])
                 Q.append(imaginary1[-numberOfSamples:])
                 channel.append(channel_Labels[0])
@@ -519,6 +540,7 @@ def collect_data_ping_pong_3Nodes_wifi_probe(params, nodes, packages, metadata, 
     timestamp = []
     id = 0
     timeSleep = 0.1
+    maxRxRetries = int(metadata.get("wifiProbe", {}).get("rx_retries", metadata.get("rx_retries", 3)))
     Alice = nodes[0]
     Bob = nodes[1]
     Eve = nodes[2]
@@ -543,27 +565,36 @@ def collect_data_ping_pong_3Nodes_wifi_probe(params, nodes, packages, metadata, 
         if i % 2 == 0:
             print("Setting TX Node: ", Bob)
             setTXNode(params, "wifiProbe", Bob, metadata)
-
             print("Setting RX Nodes: ", Alice, Eve)
             setRXNodesParallel(params, [Alice, Eve], type="wifiProbe", metadata=metadata)
             time.sleep(timeSleep)
 
-            print("Recording RX Nodes: ", Alice, Eve)
-            rx_results = recordNodesParallel([Alice, Eve], samples=sample_counts, type="wifiProbe", metadata=metadata)
-            probe_data_1 = rx_results[Alice]["data"]
-            timestamp1 = rx_results[Alice]["timestamp"]
-            probe_data_2 = rx_results[Eve]["data"]
-            timestamp2 = rx_results[Eve]["timestamp"]
+            valid_capture = False
+            probe_data_1 = None
+            probe_data_2 = None
+            timestamp1, timestamp2 = None, None
+            for retry_idx in range(maxRxRetries + 1):
+                print("Recording RX Nodes: ", Alice, Eve)
+                rx_results = recordNodesParallel([Alice, Eve], samples=sample_counts, type="wifiProbe", metadata=metadata)
+                probe_data_1 = rx_results[Alice]["data"]
+                timestamp1 = rx_results[Alice]["timestamp"]
+                probe_data_2 = rx_results[Eve]["data"]
+                timestamp2 = rx_results[Eve]["timestamp"]
+
+                valid_capture = _wifi_probe_is_valid(probe_data_1, sample_counts=sample_counts) and _wifi_probe_is_valid(probe_data_2, sample_counts=sample_counts)
+                if valid_capture:
+                    break
+                if retry_idx < maxRxRetries:
+                    print(f"Retrying read (no RX rearm): empty/invalid WiFi probe samples detected ({retry_idx + 1}/{maxRxRetries})")
+                    time.sleep(timeSleep)
 
             stopTXNode(Bob)
 
-            if (not _wifi_probe_is_valid(probe_data_1, sample_counts=sample_counts)) or (not _wifi_probe_is_valid(probe_data_2, sample_counts=sample_counts)):
-                print("Retrying collection: empty/invalid WiFi probe samples detected")
-                id = id - 1
+            if not valid_capture:
                 i = i - 1
-                setRXNode(params, Eve, type="wifiProbe", metadata=metadata)
+                continue
 
-            if _wifi_probe_is_valid(probe_data_1, sample_counts=sample_counts) and _wifi_probe_is_valid(probe_data_2, sample_counts=sample_counts):
+            if valid_capture:
                 _append_wifi_probe_sample(feature_store, probe_data_1, sample_counts)
                 channel.append(channel_Labels[0])
                 instance.append(1)
@@ -596,27 +627,37 @@ def collect_data_ping_pong_3Nodes_wifi_probe(params, nodes, packages, metadata, 
             id = id + 1
             print(("Setting TX Node: ", Alice))
             setTXNode(params, "wifiProbe", Alice, metadata)
-
             print("Setting RX Nodes: ", Bob, Eve)
             setRXNodesParallel(params, [Bob, Eve], type="wifiProbe", metadata=metadata)
             time.sleep(timeSleep)
 
-            print("Recording RX Nodes: ", Bob, Eve)
-            rx_results = recordNodesParallel([Bob, Eve], samples=sample_counts, type="wifiProbe", metadata=metadata)
-            probe_data_1 = rx_results[Bob]["data"]
-            timestamp1 = rx_results[Bob]["timestamp"]
-            probe_data_2 = rx_results[Eve]["data"]
-            timestamp2 = rx_results[Eve]["timestamp"]
+            valid_capture = False
+            probe_data_1 = None
+            probe_data_2 = None
+            timestamp1, timestamp2 = None, None
+            for retry_idx in range(maxRxRetries + 1):
+                print("Recording RX Nodes: ", Bob, Eve)
+                rx_results = recordNodesParallel([Bob, Eve], samples=sample_counts, type="wifiProbe", metadata=metadata)
+                probe_data_1 = rx_results[Bob]["data"]
+                timestamp1 = rx_results[Bob]["timestamp"]
+                probe_data_2 = rx_results[Eve]["data"]
+                timestamp2 = rx_results[Eve]["timestamp"]
 
-            if (not _wifi_probe_is_valid(probe_data_1, sample_counts=sample_counts)) or (not _wifi_probe_is_valid(probe_data_2, sample_counts=sample_counts)):
-                print("Retrying collection: empty/invalid WiFi probe samples detected")
-                id = id - 1
-                i = i - 1
-                setRXNode(params, Eve, type="wifiProbe", metadata=metadata)
+                valid_capture = _wifi_probe_is_valid(probe_data_1, sample_counts=sample_counts) and _wifi_probe_is_valid(probe_data_2, sample_counts=sample_counts)
+                if valid_capture:
+                    break
+                if retry_idx < maxRxRetries:
+                    print(f"Retrying read (no RX rearm): empty/invalid WiFi probe samples detected ({retry_idx + 1}/{maxRxRetries})")
+                    time.sleep(timeSleep)
 
             stopTXNode(Alice)
 
-            if _wifi_probe_is_valid(probe_data_1, sample_counts=sample_counts) and _wifi_probe_is_valid(probe_data_2, sample_counts=sample_counts):
+            if not valid_capture:
+                id = id - 1
+                i = i - 1
+                continue
+
+            if valid_capture:
                 _append_wifi_probe_sample(feature_store, probe_data_1, sample_counts)
                 channel.append(channel_Labels[0])
                 instance.append(3)

@@ -181,11 +181,9 @@ class PHY:
     ):
         if self.mode["rx"] != "wifiProbe":
             self.set_receive_wifi_probe()
-        self.receiver.clear_UDP_socket()
-        self.receiver.clear_wifi_probe_sockets()
         self.receiver.start()
         try:
-            # Warmup: ensure each WiFi probe stream has arrived after socket flush.
+            # Warmup: ensure each WiFi probe stream has arrived before final read.
             required_counts = self._normalize_wifi_probe_required_counts(samples)
             warmup_counts = {key: 1 for key in required_counts.keys()}
             for _ in range(max(0, int(warmup_retries))):
