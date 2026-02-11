@@ -269,6 +269,8 @@ class phyAPI(FlaskView):
                     "imag": np.imag(eq_data["chan_est"]).tolist(),
                 },
             }
+            if "__timings__" in eq_data:
+                callback["timings"] = eq_data["__timings__"]
             return jsonify(callback), 200
         except Exception as error:
             callback = {"error": str(error)}

@@ -3,6 +3,7 @@ import struct
 import socket
 import json
 from collections import deque
+import select
 
 from flask import Flask, jsonify
 import numpy as np  
@@ -51,6 +52,7 @@ class Receiver():
             "chan_est": self.UDP_port + 4,
         }
         self.wifi_probe_socks = {}
+        self.last_wifi_probe_timing = {}
         self.rx = None
         # self.set_rx_data()
         self.set_rx_IQ()
@@ -244,7 +246,7 @@ class Receiver():
                     break
         return list(values)
 
-    def retrieve_wifi_probe_data(self, samples=1024, dataSize=2**16, max_wait_s=2.0):
+    def retrieve_wifi_probe_data(self, samples=1024, dataSize=2**16, max_wait_s=None):
         if not self.wifi_probe_socks:
             raise RuntimeError(
                 "WiFi probe sockets are not initialized. Call set_rx_wifi_probe() first."
@@ -264,12 +266,65 @@ class Receiver():
                 "csi": scalar_samples,
                 "chan_est": scalar_samples,
             }
-        output = {}
-        for key, sock in self.wifi_probe_socks.items():
-            output[key] = self._retrieve_complex_samples(
-                sock=sock, samples=per_stream_samples[key], dataSize=dataSize, max_wait_s=max_wait_s
+        stream_buffers = {
+            key: deque(maxlen=max(1, int(per_stream_samples[key])))
+            for key in self.wifi_probe_socks.keys()
+        }
+        sock_to_key = {sock: key for key, sock in self.wifi_probe_socks.items()}
+        stream_ready_time = {key: None for key in self.wifi_probe_socks.keys()}
+        t0 = time.time()
+
+        while True:
+            ready_socks, _, _ = select.select(
+                list(self.wifi_probe_socks.values()),
+                [],
+                [],
+                None,
             )
-        return output
+
+            for sock in ready_socks:
+                try:
+                    data, _ = sock.recvfrom(dataSize)
+                except socket.timeout:
+                    continue
+
+                valid_len = len(data) - (len(data) % 8)
+                if valid_len <= 0:
+                    continue
+                float_view = np.frombuffer(data[:valid_len], dtype=np.float32)
+                complex_view = float_view[0::2] + 1j * float_view[1::2]
+                key = sock_to_key[sock]
+                stream_buffers[key].extend(complex_view.tolist())
+                if (
+                    stream_ready_time[key] is None and
+                    len(stream_buffers[key]) >= max(1, int(per_stream_samples[key]))
+                ):
+                    stream_ready_time[key] = time.time() - t0
+
+            if all(
+                len(stream_buffers[key]) >= max(1, int(per_stream_samples[key]))
+                for key in stream_buffers.keys()
+            ):
+                break
+
+        total_elapsed = time.time() - t0
+        self.last_wifi_probe_timing = {
+            "required_samples": {key: int(per_stream_samples[key]) for key in per_stream_samples.keys()},
+            "available_samples": {key: len(stream_buffers[key]) for key in stream_buffers.keys()},
+            "stream_ready_s": stream_ready_time,
+            "total_elapsed_s": total_elapsed,
+        }
+
+        print(
+            "[WiFiProbe RX timings] "
+            + ", ".join(
+                f"{key}: {stream_ready_time[key]:.3f}s" if stream_ready_time[key] is not None else f"{key}: n/a"
+                for key in ["symbols", "pilots", "csi", "chan_est"]
+            )
+            + f", total: {total_elapsed:.3f}s"
+        )
+
+        return {key: list(values) for key, values in stream_buffers.items()}
 
     def retrieve_data(self,dataSize=8192):
         data, _ =self.sock.recvfrom(dataSize) 

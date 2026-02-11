@@ -929,7 +929,7 @@ if __name__ == "__main__":
             "warmup_sleep_s": 1,
             "warmup_timeout_s": 1,
             "read_timeout_s": 1.5,
-            "poll_interval_s": 0.02,
+            "poll_interval_s": 0.5,
             "api_retries": 0,
             "strict_counts": False,
             "sample_counts": {
