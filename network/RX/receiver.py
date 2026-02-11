@@ -301,7 +301,10 @@ class Receiver():
             for key in self.wifi_probe_socks.keys()
         }
         sock_to_key = {sock: key for key, sock in self.wifi_probe_socks.items()}
-        stream_ready_time = {key: None for key in self.wifi_probe_socks.keys()}
+        stream_ready_time = {
+            key: (0.0 if int(per_stream_samples[key]) <= 0 else None)
+            for key in self.wifi_probe_socks.keys()
+        }
         t0 = time.time()
 
         while True:
@@ -325,14 +328,18 @@ class Receiver():
                 complex_view = float_view[0::2] + 1j * float_view[1::2]
                 key = sock_to_key[sock]
                 stream_buffers[key].extend(complex_view.tolist())
+                target = int(per_stream_samples[key])
+                if target <= 0:
+                    continue
                 if (
                     stream_ready_time[key] is None and
-                    len(stream_buffers[key]) >= max(1, int(per_stream_samples[key]))
+                    len(stream_buffers[key]) >= target
                 ):
                     stream_ready_time[key] = time.time() - t0
 
             if all(
-                len(stream_buffers[key]) >= max(1, int(per_stream_samples[key]))
+                (int(per_stream_samples[key]) <= 0) or
+                (len(stream_buffers[key]) >= int(per_stream_samples[key]))
                 for key in stream_buffers.keys()
             ):
                 break

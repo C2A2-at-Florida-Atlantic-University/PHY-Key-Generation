@@ -34,13 +34,20 @@ class phyAPI(FlaskView):
         if strict_counts:
             if isinstance(samples, dict):
                 return {
-                    "symbols": int(samples["iq"]),
-                    "pilots": int(samples["pilots"]),
-                    "csi": int(samples["csi"]),
-                    "chan_est": int(samples["chan_est_samples"]),
+                    "symbols": max(0, int(samples["iq"])),
+                    "pilots": max(0, int(samples["pilots"])),
+                    "csi": max(0, int(samples["csi"])),
+                    "chan_est": max(0, int(samples["chan_est_samples"])),
                 }
             count = max(1, int(samples))
             return {"symbols": count, "pilots": count, "csi": count, "chan_est": count}
+        if isinstance(samples, dict):
+            return {
+                "symbols": 1 if int(samples["iq"]) > 0 else 0,
+                "pilots": 1 if int(samples["pilots"]) > 0 else 0,
+                "csi": 1 if int(samples["csi"]) > 0 else 0,
+                "chan_est": 1 if int(samples["chan_est_samples"]) > 0 else 0,
+            }
         return {"symbols": 1, "pilots": 1, "csi": 1, "chan_est": 1}
 
     def _wifi_probe_available_counts(self, eq_data):

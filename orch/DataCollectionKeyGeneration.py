@@ -465,6 +465,8 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
     return I, Q, channel, instance, ids, tx, rx, timestamp
 
 def _slice_samples(values, samples):
+    if samples <= 0:
+        return []
     if samples == -1:
         return values
     return values[-samples:]
@@ -520,6 +522,8 @@ def _append_wifi_probe_sample(feature_store, probe_data, sample_counts):
 
 def _plot_wifi_probe_sections_side_by_side(probe_data_1, probe_data_2, sample_counts, id1, id2, ax1=None, ax2=None, fig=None):
     for section in ["iq", "pilots", "csi", "chan_est_samples"]:
+        if int(sample_counts.get(section, 0)) <= 0:
+            continue
         plotTimeDomainSideBySide(
             _slice_samples(probe_data_1[section]["real"], sample_counts[section]),
             _slice_samples(probe_data_1[section]["imag"], sample_counts[section]),
@@ -934,7 +938,7 @@ if __name__ == "__main__":
             "strict_counts": False,
             "sample_counts": {
                 "iq": 96,
-                "pilots": 8,
+                "pilots": 0,
                 "csi": 104,
                 "chan_est_samples": 128
             }
