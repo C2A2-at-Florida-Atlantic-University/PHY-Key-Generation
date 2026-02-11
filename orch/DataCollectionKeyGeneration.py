@@ -43,6 +43,9 @@ def recordWiFiProbe(nodeID,port,samples,warmup=None):
         data["warmup_sleep_s"] = float(warmup.get("warmup_sleep_s", 0.03))
         data["warmup_timeout_s"] = float(warmup.get("warmup_timeout_s", 0.3))
         data["read_timeout_s"] = float(warmup.get("read_timeout_s", 1.5))
+        data["poll_interval_s"] = float(warmup.get("poll_interval_s", 0.02))
+        data["api_retries"] = int(warmup.get("api_retries", 0))
+        data["strict_counts"] = bool(warmup.get("strict_counts", False))
     headers = {'Content-Type': 'application/json'}
     response = requests.post(APILink(NodeIPs[nodeID],port,path), data=json.dumps(data), headers=headers)
     response_json = response.json()
@@ -923,9 +926,12 @@ if __name__ == "__main__":
             "tx_amplitude": 0.6,
             "chan_est": 0,
             "warmup_retries": 3,
-            "warmup_sleep_s": 0.03,
-            "warmup_timeout_s": 0.3,
+            "warmup_sleep_s": 1,
+            "warmup_timeout_s": 1,
             "read_timeout_s": 1.5,
+            "poll_interval_s": 0.02,
+            "api_retries": 0,
+            "strict_counts": False,
             "sample_counts": {
                 "iq": 96,
                 "pilots": 8,

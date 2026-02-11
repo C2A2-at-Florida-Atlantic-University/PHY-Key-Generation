@@ -171,6 +171,14 @@ class PHY:
             "chan_est": scalar_samples,
         }
 
+    def _merge_wifi_probe_streams(self, merged_data, new_data, required_counts):
+        for key in required_counts.keys():
+            incoming = new_data.get(key, [])
+            if len(incoming) > 0:
+                keep_count = max(1, int(required_counts[key]))
+                merged_data[key] = incoming[-keep_count:]
+        return merged_data
+
     def record_wifi_probe_data(
         self,
         samples=1024,
@@ -178,31 +186,51 @@ class PHY:
         warmup_sleep_s=0.1,
         warmup_timeout_s=0.5,
         read_timeout_s=1.5,
+        poll_interval_s=0.02,
     ):
         if self.mode["rx"] != "wifiProbe":
             self.set_receive_wifi_probe()
         self.receiver.start()
         try:
-            # Warmup: ensure each WiFi probe stream has arrived before final read.
             required_counts = self._normalize_wifi_probe_required_counts(samples)
+            # Streams can arrive at different times; collect them independently
+            # and keep latest samples per stream until all requirements are met.
+            merged_eq_data = {key: [] for key in required_counts.keys()}
             warmup_counts = {key: 1 for key in required_counts.keys()}
+
+            # Quick warmup reads first.
             for _ in range(max(0, int(warmup_retries))):
                 warmup_data = self.receiver.retrieve_wifi_probe_data(
                     samples=warmup_counts,
                     max_wait_s=warmup_timeout_s
                 )
-                if self._wifi_probe_data_ready(warmup_data, warmup_counts):
+                merged_eq_data = self._merge_wifi_probe_streams(
+                    merged_data=merged_eq_data,
+                    new_data=warmup_data,
+                    required_counts=required_counts
+                )
+                if self._wifi_probe_data_ready(merged_eq_data, warmup_counts):
                     break
                 time.sleep(max(0.0, float(warmup_sleep_s)))
 
-            eq = self.receiver.retrieve_wifi_probe_data(samples=samples)
-            if not self._wifi_probe_data_ready(eq, required_counts):
-                # One immediate retry after warmup if any stream is short.
-                eq = self.receiver.retrieve_wifi_probe_data(
-                    samples=samples,
-                    max_wait_s=read_timeout_s
+            # Continue polling and merging until all required streams are complete
+            # or timeout expires.
+            deadline = time.time() + max(0.0, float(read_timeout_s))
+            while time.time() < deadline:
+                poll_data = self.receiver.retrieve_wifi_probe_data(
+                    samples=required_counts,
+                    max_wait_s=min(0.2, max(0.02, float(poll_interval_s)))
                 )
-            return eq
+                merged_eq_data = self._merge_wifi_probe_streams(
+                    merged_data=merged_eq_data,
+                    new_data=poll_data,
+                    required_counts=required_counts
+                )
+                if self._wifi_probe_data_ready(merged_eq_data, required_counts):
+                    break
+                time.sleep(max(0.0, float(poll_interval_s)))
+
+            return merged_eq_data
         finally:
             self.receiver.stop()
 

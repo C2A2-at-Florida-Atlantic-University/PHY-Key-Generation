@@ -220,8 +220,10 @@ class phyAPI(FlaskView):
             warmup_sleep_s = float(data.get("warmup_sleep_s", 0.03))
             warmup_timeout_s = float(data.get("warmup_timeout_s", 0.3))
             read_timeout_s = float(data.get("read_timeout_s", 1.5))
+            poll_interval_s = float(data.get("poll_interval_s", 0.02))
             strict_counts = bool(data.get("strict_counts", False))
-            api_retries = int(data.get("api_retries", 2))
+            # Keep this at 0 by default to avoid restarting RX capture sessions.
+            api_retries = int(data.get("api_retries", 0))
             api_retry_sleep_s = float(data.get("api_retry_sleep_s", 0.02))
             samples = self._normalize_wifi_probe_samples(sample_counts, data.get("samples", 1024))
             required_counts = self._receiver_required_counts(samples, strict_counts=strict_counts)
@@ -234,6 +236,7 @@ class phyAPI(FlaskView):
                     warmup_sleep_s=warmup_sleep_s,
                     warmup_timeout_s=warmup_timeout_s,
                     read_timeout_s=read_timeout_s,
+                    poll_interval_s=poll_interval_s,
                 )
                 if self._wifi_probe_has_required_counts(eq_data, required_counts):
                     break
