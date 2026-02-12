@@ -5,24 +5,68 @@ import time
 import matplotlib.pyplot as plt
 import h5py
 from concurrent.futures import ThreadPoolExecutor
+from requests.exceptions import RequestException
 
 _tx_config_cache = {}
 _rx_config_cache = {}
+REQUEST_RETRY_DELAY_S = 1
+REQUEST_TIMEOUT_S = 10
 
 def APILink(IP,port,path):
     return "http://"+IP+":"+port+path    
+
+def _wait_for_node_health(nodeID, port):
+    health_url = APILink(NodeIPs[nodeID], port, "/health")
+    while True:
+        try:
+            response = requests.get(health_url, timeout=3)
+            if response.status_code == 200:
+                print(f"[INFO] Node {nodeID} API is back online.")
+                return
+        except RequestException:
+            pass
+        print(f"[INFO] Waiting for node {nodeID} API health check...")
+        time.sleep(REQUEST_RETRY_DELAY_S)
+
+def _request_with_recovery(method, nodeID, port, path, data=None, retry_on_5xx=True, timeout_s=REQUEST_TIMEOUT_S):
+    headers = {'Content-Type': 'application/json'}
+    url = APILink(NodeIPs[nodeID],port,path)
+    payload = json.dumps(data) if data is not None else None
+
+    while True:
+        try:
+            if method == "POST":
+                response = requests.post(url, data=payload, headers=headers, timeout=timeout_s)
+            elif method == "GET":
+                response = requests.get(url, data=payload, headers=headers, timeout=timeout_s)
+            else:
+                raise ValueError(f"Unsupported HTTP method: {method}")
+
+            # Retry on transient server-side failures.
+            if response.status_code >= 500 and retry_on_5xx:
+                print(
+                    f"[WARN] Node {nodeID} returned {response.status_code} for {method} {path}. "
+                    f"Waiting {REQUEST_RETRY_DELAY_S}s before retry..."
+                )
+                time.sleep(REQUEST_RETRY_DELAY_S)
+                continue
+
+            return response
+        except RequestException as error:
+            print(
+                f"[WARN] Node {nodeID} unavailable for {method} {path}: {error}. "
+                f"Waiting {REQUEST_RETRY_DELAY_S}s for node recovery..."
+            )
+            _wait_for_node_health(nodeID, port)
 
 def recordIQ(nodeID,port,samples):
     path = "/rx/recordIQ"
     data = {
         "samples": samples
     }
-    headers = {'Content-Type': 'application/json'}
-    response = requests.post(APILink(NodeIPs[nodeID],port,path), data=json.dumps(data), headers=headers)
-    # response_rx = requests.get(APILink(NodeIPs[nodeID],port,path))
-    # print("Response:",response)
-    response_json = response.json()
     try:
+        response = _request_with_recovery("POST", nodeID, port, path, data=data, timeout_s=None)
+        response_json = response.json()
         imag = response_json["imag"]
         real = response_json["real"]
         return real,imag
@@ -39,17 +83,14 @@ def recordWiFiProbe(nodeID,port,samples,warmup=None):
     else:
         data["samples"] = samples
     if warmup:
-        data["warmup_retries"] = int(warmup.get("warmup_retries", 3))
-        data["warmup_sleep_s"] = float(warmup.get("warmup_sleep_s", 0.03))
-        data["warmup_timeout_s"] = float(warmup.get("warmup_timeout_s", 0.3))
-        data["read_timeout_s"] = float(warmup.get("read_timeout_s", 1.5))
-        data["poll_interval_s"] = float(warmup.get("poll_interval_s", 0.02))
         data["api_retries"] = int(warmup.get("api_retries", 0))
         data["strict_counts"] = bool(warmup.get("strict_counts", False))
-    headers = {'Content-Type': 'application/json'}
-    response = requests.post(APILink(NodeIPs[nodeID],port,path), data=json.dumps(data), headers=headers)
-    response_json = response.json()
+        record_timeout_s = warmup.get("record_timeout_s", None)
+    else:
+        record_timeout_s = None
     try:
+        response = _request_with_recovery("POST", nodeID, port, path, data=data, timeout_s=record_timeout_s)
+        response_json = response.json()
         required_sections = ["iq", "pilots", "csi", "chan_est_samples"]
         for section in required_sections:
             if section not in response_json:
@@ -67,8 +108,7 @@ def setRxIQ(nodeID,port):
     data = {
         "contents": "IQ"
     }
-    headers = {'Content-Type': 'application/json'}
-    response = requests.get(APILink(NodeIPs[nodeID],port,path), data=json.dumps(data), headers=headers)
+    response = _request_with_recovery("GET", nodeID, port, path, data=data)
     return response
 
 def setRxWiFiProbe(nodeID,port,chan_est=0):
@@ -76,8 +116,7 @@ def setRxWiFiProbe(nodeID,port,chan_est=0):
     data = {
         "chan_est": chan_est
     }
-    headers = {'Content-Type': 'application/json'}
-    response = requests.post(APILink(NodeIPs[nodeID],port,path), data=json.dumps(data), headers=headers)
+    response = _request_with_recovery("POST", nodeID, port, path, data=data)
     return response
 
 def setPHY(nodeID,port,params):
@@ -88,8 +127,7 @@ def setPHY(nodeID,port,params):
         "SamplingRate": params["SamplingRate"],
         "gain": params["gain"][nodeID][params["x"]]
     }
-    headers = {'Content-Type': 'application/json'}
-    response = requests.post(APILink(NodeIPs[nodeID],port,path), data=json.dumps(data), headers=headers)
+    response = _request_with_recovery("POST", nodeID, port, path, data=data)
     return response
     
 def set_tx_sinusoid(nodeID,port):
@@ -97,8 +135,7 @@ def set_tx_sinusoid(nodeID,port):
     data = {
         "message": "sinusoid"
     }
-    headers = {'Content-Type': 'application/json'}
-    response = requests.post(APILink(NodeIPs[nodeID],port,path), data=json.dumps(data), headers=headers)
+    response = _request_with_recovery("POST", nodeID, port, path, data=data)
     return response
 
 def set_tx_deltaPulse(nodeID,port,metadata):
@@ -111,8 +148,7 @@ def set_tx_deltaPulse(nodeID,port,metadata):
         "window": metadata["window"],
         "num_pulses": metadata["num_pulses"]
     }
-    headers = {'Content-Type': 'application/json'}
-    response = requests.post(APILink(NodeIPs[nodeID],port,path), data=json.dumps(data), headers=headers)
+    response = _request_with_recovery("POST", nodeID, port, path, data=data)
     return response
 
 def set_tx_MPSK(nodeID,port,M):
@@ -120,8 +156,7 @@ def set_tx_MPSK(nodeID,port,M):
     data = {
         "M": M
     }
-    headers = {'Content-Type': 'application/json'}
-    response = requests.post(APILink(NodeIPs[nodeID],port,path), data=json.dumps(data), headers=headers)
+    response = _request_with_recovery("POST", nodeID, port, path, data=data)
     return response
 
 def set_tx_pnSequence(nodeID,port,sequence):
@@ -129,8 +164,7 @@ def set_tx_pnSequence(nodeID,port,sequence):
     data = {
         "sequence": sequence
     }
-    headers = {'Content-Type': 'application/json'}
-    response = requests.post(APILink(NodeIPs[nodeID],port,path), data=json.dumps(data), headers=headers)
+    response = _request_with_recovery("POST", nodeID, port, path, data=data)
     return response
 
 def set_tx_wifiProbe(nodeID,port,metadata):
@@ -141,17 +175,15 @@ def set_tx_wifiProbe(nodeID,port,metadata):
         "encoding": metadata.get("encoding", 0),
         "tx_amplitude": metadata.get("tx_amplitude", 0.6)
     }
-    headers = {'Content-Type': 'application/json'}
-    response = requests.post(APILink(NodeIPs[nodeID],port,path), data=json.dumps(data), headers=headers)
+    response = _request_with_recovery("POST", nodeID, port, path, data=data)
     return response
 
-def start_tx(nodeID,port):
+def start_tx(nodeID,port,retry_on_5xx=True):
     path = "/tx/start"
     data = {
         "message": "TX Start"
     }
-    headers = {'Content-Type': 'application/json'}
-    response = requests.post(APILink(NodeIPs[nodeID],port,path), data=json.dumps(data), headers=headers)
+    response = _request_with_recovery("POST", nodeID, port, path, data=data, retry_on_5xx=retry_on_5xx)
     return response
     
 def stop_tx(nodeID,port):
@@ -159,13 +191,12 @@ def stop_tx(nodeID,port):
     data = {
         "message": "sinusoid"
     }
-    headers = {'Content-Type': 'application/json'}
-    response = requests.post(APILink(NodeIPs[nodeID],port,path), data=json.dumps(data), headers=headers)
+    response = _request_with_recovery("POST", nodeID, port, path, data=data)
     return response
 
-def plotTimeDomain(I,Q,samples=-1,id=0):
-    plt.plot(I[0:samples], color='red')
-    plt.plot(Q[0:samples], color='blue')
+def plotTimeDomain(i_samples,q_samples,samples=-1,id=0):
+    plt.plot(i_samples[0:samples], color='red')
+    plt.plot(q_samples[0:samples], color='blue')
     plt.xlabel('Time')
     plt.ylabel('IQ')
     plt.title('Time Domain Plot Node: '+str(id))
@@ -214,7 +245,7 @@ def plotTimeDomainSideBySide(I1, Q1, I2, Q2, samples=-1, id1=0, id2=0, ax1=None,
     ax2.axvline(0, color='black', linewidth=0.5)
     
     plt.tight_layout()
-    plt.pause(1)
+    plt.pause(0.1)
 
 def setTXNode(params,type,nodeID,metadata = {"pnSequence":"glfsr"}):
     print("type:",type)
@@ -233,25 +264,38 @@ def setTXNode(params,type,nodeID,metadata = {"pnSequence":"glfsr"}):
         time.sleep(0.02)  # Keep transition delay short to reduce collection latency
     except Exception as e:
         print(f"Warning: Could not stop existing transmitter: {e}")
-
+    
     # Node switched to TX mode, so RX cache for this node is now stale.
     _rx_config_cache.pop(nodeID, None)
 
-    if _tx_config_cache.get(nodeID) != tx_signature:
+    def _configure_tx():
         if type == "sinusoid":
-            response = set_tx_sinusoid(nodeID,port["radio"])
+            set_tx_sinusoid(nodeID,port["radio"])
         elif type == "pnSequence":
-            response = set_tx_pnSequence(nodeID,port["radio"],metadata[type])
+            set_tx_pnSequence(nodeID,port["radio"],metadata[type])
         elif type == "deltaPulse":
-            response = set_tx_deltaPulse(nodeID,port["radio"],metadata[type])
+            set_tx_deltaPulse(nodeID,port["radio"],metadata[type])
         elif type == "wifiProbe":
-            response = set_tx_wifiProbe(nodeID,port["radio"],metadata.get(type, {}))
+            set_tx_wifiProbe(nodeID,port["radio"],metadata.get(type, {}))
         else:
             raise ValueError(f"Unsupported TX type: {type}")
-        response = setPHY(nodeID,port["radio"],params["tx"])
+        setPHY(nodeID,port["radio"],params["tx"])
         _tx_config_cache[nodeID] = tx_signature
 
-    response = start_tx(nodeID,port["radio"])
+    if _tx_config_cache.get(nodeID) != tx_signature:
+        _configure_tx()
+
+    while True:
+        response = start_tx(nodeID,port["radio"],retry_on_5xx=False)
+        if response.status_code < 500:
+            break
+        print(
+            f"[WARN] Node {nodeID} returned {response.status_code} for /tx/start. "
+            "Reconfiguring transmitter before retry..."
+        )
+        _tx_config_cache.pop(nodeID, None)
+        _configure_tx()
+        time.sleep(REQUEST_RETRY_DELAY_S)
     
 def setRXNode(params,nodeID,type="IQ",metadata=None):
     metadata = metadata or {}
@@ -293,7 +337,12 @@ def setRXNodesParallel(params, nodeIDs, type="IQ", metadata=None):
             future.result()
 
 def _recordNodeDataWithTimestamp(nodeID, samples, type="IQ", metadata=None):
-    return nodeID, RecordNodeData(nodeID, samples=samples, type=type, metadata=metadata), int(time.time())
+    try:
+        data = RecordNodeData(nodeID, samples=samples, type=type, metadata=metadata)
+    except Exception as error:
+        print(f"[WARN] recordNodeData failed for node {nodeID}: {error}")
+        data = None
+    return nodeID, data, int(time.time())
 
 def recordNodesParallel(nodeIDs, samples, type="IQ", metadata=None):
     results = {}
@@ -308,7 +357,7 @@ def recordNodesParallel(nodeIDs, samples, type="IQ", metadata=None):
     return results
     
 def stopTXNode(nodeID):
-    response = stop_tx(nodeID,port["radio"])
+    stop_tx(nodeID,port["radio"])
 
 def setupNodesPingPong(RX1,RX2,TX,params,type,metadata = {"pnSequence":"glfsr"}):
     setRXNode(params,TX,type=type,metadata=metadata)    
@@ -318,9 +367,8 @@ def setupNodesPingPong(RX1,RX2,TX,params,type,metadata = {"pnSequence":"glfsr"})
     
 def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels = [1,2,3],metadata = {"pnSequence":"glfsr"}):
     i = 1
-    # IQ_Samples = np.array([])
-    I = []
-    Q = []
+    i_samples = []
+    q_samples = []
     channel = []
     instance = []
     ids = []
@@ -329,7 +377,6 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
     timestamp = []
     id = 0
     timeSleep = 0.1
-    maxRxRetries = int(metadata.get("rx_retries", 3))
     Alice = nodes[0]
     Bob = nodes[1]
     Eve = nodes[2]
@@ -346,12 +393,13 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
             print("Setting RX Nodes: ", Alice, Eve)
             setRXNodesParallel(params, [Alice, Eve])
             time.sleep(timeSleep)
-
+            
             valid_capture = False
             real1, imaginary1 = None, None
             real2, imaginary2 = None, None
             timestamp1, timestamp2 = None, None
-            for retry_idx in range(maxRxRetries + 1):
+            retry_idx = 0
+            while True:
                 print("Recording RX Nodes: ", Alice, Eve)
                 rx_results = recordNodesParallel([Alice, Eve], samples=numberOfSamples)
                 real1, imaginary1 = rx_results[Alice]["data"]
@@ -362,19 +410,15 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
                 valid_capture = _iq_samples_valid(real1, imaginary1, min_samples=1) and _iq_samples_valid(real2, imaginary2, min_samples=1)
                 if valid_capture:
                     break
-                if retry_idx < maxRxRetries:
-                    print(f"Retrying read (no RX rearm): empty/invalid IQ samples detected ({retry_idx + 1}/{maxRxRetries})")
-                    time.sleep(timeSleep)
-
+                retry_idx += 1
+                print(f"Retrying read (no RX rearm): empty/invalid IQ samples detected (attempt {retry_idx})")
+                time.sleep(timeSleep)
+            
             stopTXNode(Bob)
-
-            if not valid_capture:
-                i = i - 1
-                continue
-
+            
             if valid_capture:
-                I.append(real1[-numberOfSamples:])
-                Q.append(imaginary1[-numberOfSamples:])
+                i_samples.append(real1[-numberOfSamples:])
+                q_samples.append(imaginary1[-numberOfSamples:])
                 channel.append(channel_Labels[0])
                 instance.append(1)
                 ids.append(id)
@@ -382,8 +426,8 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
                 rx.append(Alice)
                 timestamp.append(timestamp1)
                 
-                I.append(real2[-numberOfSamples:])
-                Q.append(imaginary2[-numberOfSamples:])
+                i_samples.append(real2[-numberOfSamples:])
+                q_samples.append(imaginary2[-numberOfSamples:])
                 channel.append(channel_Labels[1])  
                 instance.append(2)   
                 ids.append(id)
@@ -394,11 +438,11 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
                 if(generatePlots):
                     plotTimeDomainSideBySide(
                         real1[-numberOfSamples:], 
-                        imaginary1[-numberOfSamples:],
+                        imaginary1[-numberOfSamples:], 
                         real2[-numberOfSamples:], 
                         imaginary2[-numberOfSamples:], 
                         samples=numberOfSamples, id1=Alice, id2=Eve, ax1=ax1, ax2=ax2, fig=fig)
-                time.sleep(timeSleep)
+                    time.sleep(timeSleep)
         else:
             id = id + 1
             print(("Setting TX Node: ", Alice))
@@ -406,12 +450,13 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
             print("Setting RX Nodes: ", Bob, Eve)
             setRXNodesParallel(params, [Bob, Eve])
             time.sleep(timeSleep)
-
+            
             valid_capture = False
             real1, imaginary1 = None, None
             real2, imaginary2 = None, None
             timestamp1, timestamp2 = None, None
-            for retry_idx in range(maxRxRetries + 1):
+            retry_idx = 0
+            while True:
                 print("Recording RX Nodes: ", Bob, Eve)
                 rx_results = recordNodesParallel([Bob, Eve], samples=numberOfSamples)
                 real1, imaginary1 = rx_results[Bob]["data"]
@@ -422,20 +467,15 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
                 valid_capture = _iq_samples_valid(real1, imaginary1, min_samples=1) and _iq_samples_valid(real2, imaginary2, min_samples=1)
                 if valid_capture:
                     break
-                if retry_idx < maxRxRetries:
-                    print(f"Retrying read (no RX rearm): empty/invalid IQ samples detected ({retry_idx + 1}/{maxRxRetries})")
-                    time.sleep(timeSleep)
+                retry_idx += 1
+                print(f"Retrying read (no RX rearm): empty/invalid IQ samples detected (attempt {retry_idx})")
+                time.sleep(timeSleep)
 
             stopTXNode(Alice)
 
-            if not valid_capture:
-                id = id - 1
-                i = i - 1
-                continue
-
             if valid_capture:
-                I.append(real1[-numberOfSamples:])
-                Q.append(imaginary1[-numberOfSamples:])
+                i_samples.append(real1[-numberOfSamples:])
+                q_samples.append(imaginary1[-numberOfSamples:])
                 channel.append(channel_Labels[0])
                 instance.append(3)
                 ids.append(id)
@@ -443,8 +483,8 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
                 rx.append(Bob)
                 timestamp.append(timestamp1)
                 
-                I.append(real2[-numberOfSamples:])
-                Q.append(imaginary2[-numberOfSamples:])
+                i_samples.append(real2[-numberOfSamples:])
+                q_samples.append(imaginary2[-numberOfSamples:])
                 channel.append(channel_Labels[2]) # Changed from "labels" to "channel"
                 instance.append(4)
                 ids.append(id)
@@ -455,14 +495,14 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
                     
                     plotTimeDomainSideBySide(
                         real1[-numberOfSamples:], 
-                        imaginary1[-numberOfSamples:],
+                        imaginary1[-numberOfSamples:], 
                         real2[-numberOfSamples:], 
                         imaginary2[-numberOfSamples:], 
                         samples=numberOfSamples, id1=Bob, id2=Eve, ax1=ax1, ax2=ax2, fig=fig)
                 time.sleep(timeSleep)
         
         i = i + 1
-    return I, Q, channel, instance, ids, tx, rx, timestamp
+    return i_samples, q_samples, channel, instance, ids, tx, rx, timestamp
 
 def _slice_samples(values, samples):
     if samples <= 0:
@@ -521,21 +561,48 @@ def _append_wifi_probe_sample(feature_store, probe_data, sample_counts):
         feature_store[section]["Q"].append(_slice_samples(probe_data[section]["imag"], section_samples))
 
 def _plot_wifi_probe_sections_side_by_side(probe_data_1, probe_data_2, sample_counts, id1, id2, ax1=None, ax2=None, fig=None):
-    for section in ["iq", "pilots", "csi", "chan_est_samples"]:
+    sections = ["iq", "csi", "chan_est_samples"]
+    if fig is None:
+        fig = plt.figure(figsize=(12, 10))
+
+    # Reuse the same figure and redraw a 3x2 grid every time.
+    fig.clf()
+    axes = fig.subplots(len(sections), 2)
+    if len(sections) == 1:
+        axes = np.array([axes])
+
+    for row_idx, section in enumerate(sections):
         if int(sample_counts.get(section, 0)) <= 0:
             continue
-        plotTimeDomainSideBySide(
-            _slice_samples(probe_data_1[section]["real"], sample_counts[section]),
-            _slice_samples(probe_data_1[section]["imag"], sample_counts[section]),
-            _slice_samples(probe_data_2[section]["real"], sample_counts[section]),
-            _slice_samples(probe_data_2[section]["imag"], sample_counts[section]),
-            samples=sample_counts[section],
-            id1=f"{id1} {section}",
-            id2=f"{id2} {section}",
-            ax1=ax1,
-            ax2=ax2,
-            fig=fig
-        )
+
+        node1_i = _slice_samples(probe_data_1[section]["real"], sample_counts[section])
+        node1_q = _slice_samples(probe_data_1[section]["imag"], sample_counts[section])
+        node2_i = _slice_samples(probe_data_2[section]["real"], sample_counts[section])
+        node2_q = _slice_samples(probe_data_2[section]["imag"], sample_counts[section])
+
+        left_ax = axes[row_idx, 0]
+        right_ax = axes[row_idx, 1]
+
+        left_ax.plot(node1_i, color='red')
+        left_ax.plot(node1_q, color='blue')
+        left_ax.set_xlabel('Time')
+        left_ax.set_ylabel('IQ')
+        left_ax.set_title(f'Node {id1} - {section}')
+        left_ax.grid(True)
+        left_ax.axhline(0, color='black', linewidth=0.5)
+        left_ax.axvline(0, color='black', linewidth=0.5)
+
+        right_ax.plot(node2_i, color='red')
+        right_ax.plot(node2_q, color='blue')
+        right_ax.set_xlabel('Time')
+        right_ax.set_ylabel('IQ')
+        right_ax.set_title(f'Node {id2} - {section}')
+        right_ax.grid(True)
+        right_ax.axhline(0, color='black', linewidth=0.5)
+        right_ax.axvline(0, color='black', linewidth=0.5)
+
+    plt.tight_layout()
+    plt.pause(0.1)
 
 def collect_data_ping_pong_3Nodes_wifi_probe(params, nodes, packages, metadata, channel_Labels=[1,2,3]):
     i = 1
@@ -546,8 +613,7 @@ def collect_data_ping_pong_3Nodes_wifi_probe(params, nodes, packages, metadata, 
     rx = []
     timestamp = []
     id = 0
-    timeSleep = 0.1
-    maxRxRetries = int(metadata.get("wifiProbe", {}).get("rx_retries", metadata.get("rx_retries", 3)))
+    timeSleep = 0.05
     Alice = nodes[0]
     Bob = nodes[1]
     Eve = nodes[2]
@@ -565,7 +631,7 @@ def collect_data_ping_pong_3Nodes_wifi_probe(params, nodes, packages, metadata, 
     ax1 = None
     ax2 = None
     if generatePlots:
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+        fig = plt.figure(figsize=(12, 10))
 
     while i < packages * 2 + 1:
         print(i)
@@ -580,7 +646,8 @@ def collect_data_ping_pong_3Nodes_wifi_probe(params, nodes, packages, metadata, 
             probe_data_1 = None
             probe_data_2 = None
             timestamp1, timestamp2 = None, None
-            for retry_idx in range(maxRxRetries + 1):
+            retry_idx = 0
+            while True:
                 print("Recording RX Nodes: ", Alice, Eve)
                 rx_results = recordNodesParallel([Alice, Eve], samples=sample_counts, type="wifiProbe", metadata=metadata)
                 probe_data_1 = rx_results[Alice]["data"]
@@ -591,15 +658,11 @@ def collect_data_ping_pong_3Nodes_wifi_probe(params, nodes, packages, metadata, 
                 valid_capture = _wifi_probe_is_valid(probe_data_1, sample_counts=sample_counts) and _wifi_probe_is_valid(probe_data_2, sample_counts=sample_counts)
                 if valid_capture:
                     break
-                if retry_idx < maxRxRetries:
-                    print(f"Retrying read (no RX rearm): empty/invalid WiFi probe samples detected ({retry_idx + 1}/{maxRxRetries})")
-                    time.sleep(timeSleep)
+                retry_idx += 1
+                print(f"Retrying read (no RX rearm): empty/invalid WiFi probe samples detected (attempt {retry_idx})")
+                time.sleep(timeSleep)
 
             stopTXNode(Bob)
-
-            if not valid_capture:
-                i = i - 1
-                continue
 
             if valid_capture:
                 _append_wifi_probe_sample(feature_store, probe_data_1, sample_counts)
@@ -642,7 +705,8 @@ def collect_data_ping_pong_3Nodes_wifi_probe(params, nodes, packages, metadata, 
             probe_data_1 = None
             probe_data_2 = None
             timestamp1, timestamp2 = None, None
-            for retry_idx in range(maxRxRetries + 1):
+            retry_idx = 0
+            while True:
                 print("Recording RX Nodes: ", Bob, Eve)
                 rx_results = recordNodesParallel([Bob, Eve], samples=sample_counts, type="wifiProbe", metadata=metadata)
                 probe_data_1 = rx_results[Bob]["data"]
@@ -653,16 +717,11 @@ def collect_data_ping_pong_3Nodes_wifi_probe(params, nodes, packages, metadata, 
                 valid_capture = _wifi_probe_is_valid(probe_data_1, sample_counts=sample_counts) and _wifi_probe_is_valid(probe_data_2, sample_counts=sample_counts)
                 if valid_capture:
                     break
-                if retry_idx < maxRxRetries:
-                    print(f"Retrying read (no RX rearm): empty/invalid WiFi probe samples detected ({retry_idx + 1}/{maxRxRetries})")
-                    time.sleep(timeSleep)
-
+                retry_idx += 1
+                print(f"Retrying read (no RX rearm): empty/invalid WiFi probe samples detected (attempt {retry_idx})")
+                time.sleep(timeSleep)
+                
             stopTXNode(Alice)
-
-            if not valid_capture:
-                id = id - 1
-                i = i - 1
-                continue
 
             if valid_capture:
                 _append_wifi_probe_sample(feature_store, probe_data_1, sample_counts)
@@ -693,7 +752,7 @@ def collect_data_ping_pong_3Nodes_wifi_probe(params, nodes, packages, metadata, 
                         fig=fig
                     )
                 time.sleep(timeSleep)
-
+        
         i = i + 1
 
     if fig is not None:
@@ -716,16 +775,16 @@ def collect_data_ping_pong_3Nodes_wifi_probe(params, nodes, packages, metadata, 
         timestamp,
     )
 
-def create_dataset(filename, I, Q, channel, instance, ids, tx, rx, timestamp):
+def create_dataset(filename, i_samples, q_samples, channel, instance, ids, tx, rx, timestamp):
     with h5py.File(filename, "w") as data_file:
-        dset = data_file.create_dataset("I", data=I)
-        dset = data_file.create_dataset("Q", data=Q)
-        dset = data_file.create_dataset("ids", data=[ids])
-        dset = data_file.create_dataset("instance", data=[instance])
-        dset = data_file.create_dataset("channel", data=[channel])
-        dset = data_file.create_dataset("tx", data=[tx])
-        dset = data_file.create_dataset("rx", data=[rx])
-        dset = data_file.create_dataset("timestamp", data=[timestamp])
+        data_file.create_dataset("I", data=i_samples)
+        data_file.create_dataset("Q", data=q_samples)
+        data_file.create_dataset("ids", data=[ids])
+        data_file.create_dataset("instance", data=[instance])
+        data_file.create_dataset("channel", data=[channel])
+        data_file.create_dataset("tx", data=[tx])
+        data_file.create_dataset("rx", data=[rx])
+        data_file.create_dataset("timestamp", data=[timestamp])
     # Save dataset to file
     print("Dataset saved to", filename)
 
@@ -929,11 +988,6 @@ if __name__ == "__main__":
             "encoding": 0,
             "tx_amplitude": 0.6,
             "chan_est": 0,
-            "warmup_retries": 3,
-            "warmup_sleep_s": 1,
-            "warmup_timeout_s": 1,
-            "read_timeout_s": 1.5,
-            "poll_interval_s": 0.5,
             "api_retries": 0,
             "strict_counts": False,
             "sample_counts": {
@@ -944,16 +998,6 @@ if __name__ == "__main__":
             }
         }
     }
-    
-    # Lets test a single node setting it up, then starting the transmitter and then stopping it after 10 seconds
-    # print("Testing single node setup")
-    # nodeID = 3
-    # port = {'orch':'5001','radio':'5002','ai':'5003'}
-    # setTXNode(params,type,nodeID,metadata)
-    # time.sleep(10)
-    # stopTXNode(nodeID)
-    # print("Transmitter stopped")
-    # exit()
     
     for nodes in nodeConfigs:
         print(f"Collecting data for node config: Alice={nodes[0]}, Bob={nodes[1]}, Eve={nodes[2]}")
@@ -986,24 +1030,24 @@ if __name__ == "__main__":
                 np.array(timestamp)
             )
         else:
-            I, Q, channel, instance, ids, tx, rx, timestamp = collect_data_ping_pong_3Nodes(
-                                                params, 
-                                                nodes, 
-                                                examples, 
-                                                type,
-                                                metadata = metadata
-                                            )
-            create_dataset(
+            i_samples, q_samples, channel, instance, ids, tx, rx, timestamp = collect_data_ping_pong_3Nodes(
+                                            params, 
+                                            nodes, 
+                                            examples, 
+                                            type,
+                                            metadata = metadata
+                                        )
+        create_dataset(
                 dataset_name,
-                np.array(I),
-                np.array(Q),
+                np.array(i_samples),
+                np.array(q_samples),
                 np.array(channel), 
                 np.array(instance), 
                 np.array(ids),
                 np.array(tx),
                 np.array(rx),
                 np.array(timestamp)
-            )
+        )
 
     # ###############
 

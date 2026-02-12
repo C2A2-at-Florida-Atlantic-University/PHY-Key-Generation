@@ -147,14 +147,6 @@ class PHY:
         self.mode["rx"] = "wifiProbe"
         self.receiver.set_rx_wifi_probe(chan_est=chan_est)
 
-    def _wifi_probe_data_ready(self, eq_data, required_counts):
-        if eq_data is None:
-            return False
-        for key, min_count in required_counts.items():
-            if key not in eq_data or len(eq_data[key]) < min_count:
-                return False
-        return True
-
     def _normalize_wifi_probe_required_counts(self, samples):
         if isinstance(samples, dict):
             return {
@@ -171,23 +163,7 @@ class PHY:
             "chan_est": scalar_samples,
         }
 
-    def _merge_wifi_probe_streams(self, merged_data, new_data, required_counts):
-        for key in required_counts.keys():
-            incoming = new_data.get(key, [])
-            if len(incoming) > 0:
-                keep_count = max(1, int(required_counts[key]))
-                merged_data[key] = incoming[-keep_count:]
-        return merged_data
-
-    def record_wifi_probe_data(
-        self,
-        samples=1024,
-        warmup_retries=3,
-        warmup_sleep_s=0.1,
-        warmup_timeout_s=0.5,
-        read_timeout_s=1.5,
-        poll_interval_s=0.02,
-    ):
+    def record_wifi_probe_data(self, samples=1024):
         if self.mode["rx"] != "wifiProbe":
             self.set_receive_wifi_probe()
         self.receiver.start()

@@ -1,7 +1,6 @@
 from flask import Flask, request, jsonify
 from flask_classful import FlaskView, route
 import numpy as np
-import time
 
 phy = None
 
@@ -18,6 +17,10 @@ class phyAPI(FlaskView):
     def injectNode(self, injectedNode):
         global phy
         phy = injectedNode
+
+    @route('/health', methods=['GET'])
+    def health(self):
+        return jsonify({"status": "ok"}), 200
 
     def _normalize_wifi_probe_samples(self, sample_counts, scalar_samples):
         if sample_counts is not None:
@@ -225,32 +228,16 @@ class phyAPI(FlaskView):
         try:
             data = request.get_json() or {}
             sample_counts = data.get("sample_counts", None)
-            warmup_retries = int(data.get("warmup_retries", 3))
-            warmup_sleep_s = float(data.get("warmup_sleep_s", 0.03))
-            warmup_timeout_s = float(data.get("warmup_timeout_s", 0.3))
-            read_timeout_s = float(data.get("read_timeout_s", 1.5))
-            poll_interval_s = float(data.get("poll_interval_s", 0.02))
             strict_counts = bool(data.get("strict_counts", False))
-            # Keep this at 0 by default to avoid restarting RX capture sessions.
             api_retries = int(data.get("api_retries", 0))
-            api_retry_sleep_s = float(data.get("api_retry_sleep_s", 0.02))
             samples = self._normalize_wifi_probe_samples(sample_counts, data.get("samples", 1024))
             required_counts = self._receiver_required_counts(samples, strict_counts=strict_counts)
 
             eq_data = None
             for attempt_idx in range(max(0, api_retries) + 1):
-                eq_data = phy.record_wifi_probe_data(
-                    samples=samples,
-                    warmup_retries=warmup_retries,
-                    warmup_sleep_s=warmup_sleep_s,
-                    warmup_timeout_s=warmup_timeout_s,
-                    read_timeout_s=read_timeout_s,
-                    poll_interval_s=poll_interval_s,
-                )
+                eq_data = phy.record_wifi_probe_data(samples=samples)
                 if self._wifi_probe_has_required_counts(eq_data, required_counts):
                     break
-                if attempt_idx < api_retries:
-                    time.sleep(max(0.0, api_retry_sleep_s))
 
             if not self._wifi_probe_has_required_counts(eq_data, required_counts):
                 callback = {
