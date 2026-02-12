@@ -9,6 +9,10 @@ from requests.exceptions import RequestException
 
 _tx_config_cache = {}
 _rx_config_cache = {}
+_node_active_role = {}
+_last_tx_setup = {}
+_last_rx_setup = {}
+_recovery_in_progress = set()
 REQUEST_RETRY_DELAY_S = 1
 REQUEST_TIMEOUT_S = 10
 
@@ -27,6 +31,31 @@ def _wait_for_node_health(nodeID, port):
             pass
         print(f"[INFO] Waiting for node {nodeID} API health check...")
         time.sleep(REQUEST_RETRY_DELAY_S)
+
+def _reconfigure_node_after_reconnect(nodeID, role_hint=None):
+    if nodeID in _recovery_in_progress:
+        return
+
+    role = role_hint or _node_active_role.get(nodeID)
+    if role not in ("tx", "rx"):
+        return
+
+    _recovery_in_progress.add(nodeID)
+    try:
+        # Force reapply because node process restart invalidates previous config.
+        _tx_config_cache.pop(nodeID, None)
+        _rx_config_cache.pop(nodeID, None)
+
+        if role == "tx" and nodeID in _last_tx_setup:
+            setup = _last_tx_setup[nodeID]
+            print(f"[INFO] Reconfiguring node {nodeID} as TX after reconnect...")
+            setTXNode(setup["params"], setup["type"], nodeID, setup["metadata"])
+        elif role == "rx" and nodeID in _last_rx_setup:
+            setup = _last_rx_setup[nodeID]
+            print(f"[INFO] Reconfiguring node {nodeID} as RX after reconnect...")
+            setRXNode(setup["params"], nodeID, type=setup["type"], metadata=setup["metadata"])
+    finally:
+        _recovery_in_progress.discard(nodeID)
 
 def _request_with_recovery(method, nodeID, port, path, data=None, retry_on_5xx=True, timeout_s=REQUEST_TIMEOUT_S):
     headers = {'Content-Type': 'application/json'}
@@ -58,6 +87,12 @@ def _request_with_recovery(method, nodeID, port, path, data=None, retry_on_5xx=T
                 f"Waiting {REQUEST_RETRY_DELAY_S}s for node recovery..."
             )
             _wait_for_node_health(nodeID, port)
+            if path.startswith("/tx"):
+                _reconfigure_node_after_reconnect(nodeID, role_hint="tx")
+            elif path.startswith("/rx"):
+                _reconfigure_node_after_reconnect(nodeID, role_hint="rx")
+            else:
+                _reconfigure_node_after_reconnect(nodeID)
 
 def recordIQ(nodeID,port,samples):
     path = "/rx/recordIQ"
@@ -249,6 +284,8 @@ def plotTimeDomainSideBySide(I1, Q1, I2, Q2, samples=-1, id1=0, id2=0, ax1=None,
 
 def setTXNode(params,type,nodeID,metadata = {"pnSequence":"glfsr"}):
     print("type:",type)
+    _node_active_role[nodeID] = "tx"
+    _last_tx_setup[nodeID] = {"params": params, "type": type, "metadata": metadata}
     tx_gain = params["tx"]["gain"][nodeID]["tx"]
     tx_signature = (
         type,
@@ -299,6 +336,8 @@ def setTXNode(params,type,nodeID,metadata = {"pnSequence":"glfsr"}):
     
 def setRXNode(params,nodeID,type="IQ",metadata=None):
     metadata = metadata or {}
+    _node_active_role[nodeID] = "rx"
+    _last_rx_setup[nodeID] = {"params": params, "type": type, "metadata": metadata}
     rx_gain = params["rx"]["gain"][nodeID]["rx"]
     rx_signature = (
         type,
@@ -843,8 +882,8 @@ def generateNodeConfigs(nodeIDs):
 
 def loadOTALabConfig(
         gainConfigs={
-            "x310":{"tx":31,"rx":31},
-            "b210":{"tx":80,"rx":70}
+            "x310":{"tx":80,"rx":80},
+            "b210":{"tx":90,"rx":80}
             },
         nodeIDs = None
     ):
@@ -912,7 +951,7 @@ def loadOTADenseConfig(
 def loadOTARooftopConfig(
         gainConfigs={
             "x310":{"tx":31,"rx":31},
-            "b210":{"tx":80,"rx":70}
+            "b210":{"tx":80,"rx":80}
             },
         nodeIDs = None
     ):
@@ -946,8 +985,8 @@ if __name__ == "__main__":
     NodeIPs, NodeGains, nodeConfigs = loadOTALabConfig(nodeIDs = nodeIDs)
     # NodeIPs, NodeGains, nodeConfigs = loadOTADenseConfig()
     # Removing certain nodes that data has been collected
-    # configsToRemove = [[5, 6, 2], [5, 6, 3], [5, 6, 4], [5, 6, 7], [5, 6, 8], [5, 7, 2], [5, 7, 3], [5, 7, 4]]
-    # nodeConfigs = [config for config in nodeConfigs if config not in configsToRemove]
+    configsToRemove = [[5, 6, 2], [5, 6, 3], [5, 6, 4], [5, 6, 7], [5, 6, 8]]#, [5, 7, 2], [5, 7, 3], [5, 7, 4]]
+    nodeConfigs = [config for config in nodeConfigs if config not in configsToRemove]
     print("Node configs: ", nodeConfigs)
     print(len(nodeConfigs))
     # exit()
@@ -1037,7 +1076,7 @@ if __name__ == "__main__":
                                             type,
                                             metadata = metadata
                                         )
-        create_dataset(
+            create_dataset(
                 dataset_name,
                 np.array(i_samples),
                 np.array(q_samples),
@@ -1047,7 +1086,7 @@ if __name__ == "__main__":
                 np.array(tx),
                 np.array(rx),
                 np.array(timestamp)
-        )
+            )
 
     # ###############
 

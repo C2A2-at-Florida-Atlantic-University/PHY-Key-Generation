@@ -53,6 +53,11 @@ class WiFiProbeRx(gr.top_block):
         self.usrp_source.set_center_freq(self.freq, 0)
         self.usrp_source.set_gain(self.gain, 0)
         self.usrp_source.set_antenna("RX2", 0)
+        # Increase USRP source buffer to reduce underruns
+        # Note: GNU Radio may still cap internal block buffers, causing warnings
+        # These warnings are usually harmless but monitor for data quality issues
+        self.max_buf = 1024 * 1024  # 1MB buffer
+        self.usrp_source.set_max_output_buffer(self.max_buf)
 
         # Stream raw IQ through UDP so existing API retrieve_IQ()/rx_recordIQ continue working.
         self.udp_sink = network.udp_sink(
