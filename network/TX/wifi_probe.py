@@ -60,7 +60,7 @@ class WiFiProbeTx(gr.top_block):
         self.interval_ms = int(interval_ms)
         self.tx_amplitude = float(tx_amplitude)
         self.payload = payload
-
+        self.max_buf = 1024 * 1024  # Request 1MB, but GNU Radio will cap to 8192
         self.wifi_phy_hier_0 = wifi_phy_hier(
             bandwidth=self.samp_rate,
             chan_est=ieee802_11.LS,
@@ -82,10 +82,6 @@ class WiFiProbeTx(gr.top_block):
         self.usrp_sink.set_center_freq(self.freq, 0)
         self.usrp_sink.set_gain(self.gain, 0)
         self.usrp_sink.set_antenna("TX/RX", 0)
-        # Increase USRP sink buffer to reduce overruns
-        # Note: GNU Radio may still cap internal block buffers, causing warnings
-        # These warnings are usually harmless but monitor for data quality issues
-        self.max_buf = 1024 * 1024  # 1MB buffer
         self.usrp_sink.set_max_output_buffer(self.max_buf)
 
         self.ieee802_11_mac_0 = ieee802_11.mac(
