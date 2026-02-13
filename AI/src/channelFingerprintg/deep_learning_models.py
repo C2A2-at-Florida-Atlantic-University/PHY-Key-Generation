@@ -201,7 +201,7 @@ class TripletNet_Channel():
             label = np.ones(int(batchsize))
             #print("label",label.shape)
             #print("A",A.shape)
-            yield [A, P, N], label 
+            yield (A, P, N), label 
 
 class QuadrupletNet():
     def __init__(self):
@@ -225,9 +225,13 @@ class QuadrupletNet():
         N2 = embedding_net(input_4)
         
         if loss_type == "KDR":
-            loss = Lambda(self.quadruplet_loss_KDR)([A, P, N1, N2]) 
+            # loss = Lambda(self.quadruplet_loss_KDR)([A, P, N1, N2]) 
+            print("Using targeted KDR quadruplet loss")
+            loss = Lambda(self.targeted_kdr_quadruplet_loss)([A, P, N1, N2]) 
         else:
-            loss = Lambda(self.quadruplet_loss)([A, P, N1, N2]) 
+            # loss = Lambda(self.quadruplet_loss)([A, P, N1, N2]) 
+            print("Using quadruplet target band loss")
+            loss = Lambda(self.quadruplet_target_band_loss)([A, P, N1, N2]) 
             
         return Model(inputs=[input_1, input_2, input_3, input_4], outputs=loss)
 
@@ -251,26 +255,37 @@ class QuadrupletNet():
             loss = K.maximum(D1 - D2 + self.alpha,0.0) + K.maximum(D1 - D3 + self.beta,0.0)
         return loss    
     
+    def quadruplet_target_band_loss(self, x, pos_max=0.1, neg_min=0.5, w_neg=1.0, w_nn=0.2, eps=1e-12):
+        anchor, positive, negative1, negative2 = x
+
+        # squared L2 distances
+        D1 = K.sum(K.square(anchor - positive), axis=1)  # a-p
+        D2 = K.sum(K.square(anchor - negative1), axis=1) # a-n1
+        D3 = K.sum(K.square(positive - negative2), axis=1) # p-n2
+        D4 = K.sum(K.square(negative1 - negative2), axis=1) # n1-n2
+
+        # convert target thresholds to squared-distance thresholds
+        pos_max2 = pos_max ** 2
+        neg_min2 = neg_min ** 2
+
+        pos_term = K.square(K.maximum(D1 - pos_max2, 0.0))               # penalize if too far
+        neg_term = K.square(K.maximum(neg_min2 - D2, 0.0)) + K.square(K.maximum(neg_min2 - D3, 0.0))
+        nn_term  = K.square(K.maximum(neg_min2 - D4, 0.0))
+
+        loss = pos_term + w_neg * neg_term + w_nn * nn_term
+        return loss
+    
+    def kdr_xor(self, a, b):
+        # a,b in [0,1]; expected bit disagreement per bit
+        # XOR for Bernoulli bits: a + b - 2ab
+        return tf.reduce_mean(a + b - 2.0*a*b, axis=1)
+
     def quadruplet_loss_KDR(self, x, entropy_weight=0.5, diversity_weight=0.5):
         """Simple KDR-based quadruplet loss.
-        
-        Goals:
-        1. Minimize KDR(anchor, positive) - Alice & Bob should match
-        2. Maximize KDR(anchor, negative) - Eve should differ (~0.5)
-        3. Entropy: ~50% ones in each embedding
-        4. Diversity: Different inputs → different outputs
-        
-        Args:
-            x: List of [anchor, positive, negative1, negative2] embeddings
-            entropy_weight: Weight for entropy loss (default 0.5)
-            diversity_weight: Weight for diversity loss (default 0.5)
-            separation_weight: Weight for Eve separation loss (default 2.0)
         """
-        def diff_xor(a, b):
-            return a + b - 2.0 * a * b
         
         def kdr(a, b):
-            return tf.reduce_mean(diff_xor(a, b), axis=1)
+            return self.kdr_xor(a, b)
         
         # Unpack
         anchor, positive, negative1, negative2 = x
@@ -327,6 +342,32 @@ class QuadrupletNet():
         
         return loss
     
+    def targeted_kdr_quadruplet_loss(self,x,pos_max=0.10,   # want KDR_AP <= 0.10
+                                            neg_min=0.50,   # want KDR_AN, KDR_PN >= 0.40
+                                            w_nn=0.0,       # optional: enforce neg1-neg2 also far
+                                            nn_min=0.20,
+                                            squared=False):
+        anchor, positive, neg1, neg2 = x
+        KDR_AP = self.kdr_xor(anchor, positive)
+        KDR_AN = self.kdr_xor(anchor, neg1)
+        KDR_PN = self.kdr_xor(positive, neg2)
+        KDR_NN = self.kdr_xor(neg1, neg2)
+
+        # violations
+        v_pos = tf.nn.relu(KDR_AP - pos_max)         # positive too large
+        v_an  = tf.nn.relu(neg_min - KDR_AN)         # negative too small
+        v_pn  = tf.nn.relu(neg_min - KDR_PN)         # negative too small
+        v_nn  = tf.nn.relu(nn_min  - KDR_NN)         # optional
+
+        if squared:
+            base = v_pos**2 + v_an**2 + v_pn**2 + w_nn*(v_nn**2)
+        else:
+            base = v_pos + v_an + v_pn + w_nn*v_nn
+
+        loss = tf.reduce_mean(base)
+
+        return loss
+
     def quantization_layer(self,x):
         ones = tf.ones_like(x)
         zeros = tf.zeros_like(x)
@@ -388,7 +429,7 @@ class QuadrupletNet():
             label = np.ones(int(batchsize))
             #print("label",label.shape)
             #print("A",A.shape)
-            yield [A, P, N1, N2], label 
+            yield (A, P, N1, N2), label
 
 class ResNet_QuadrupletNet_Channel(QuadrupletNet):
     def __init__(self):
@@ -822,8 +863,153 @@ class AE_QuadrupletNet_Channel(QuadrupletNet):
         autoencoder = Model(enc_in, ae_out, name="CAE_Pretrain")
 
         return encoder, autoencoder
+
+class SiammeseHashNet():
     
+    def __init__(self):
+        pass
     
+    def siammese_net(self, embedding_net, m=0.2):
+        
+        self.m = m # Margin threshold
+        
+        input_1 = Input([self.datashape[1],self.datashape[2],self.datashape[3]])
+        input_2 = Input([self.datashape[1],self.datashape[2],self.datashape[3]])
+        label_1 = Input(shape=(1,))
+        label_2 = Input(shape=(1,))
+        
+        A = embedding_net(input_1)
+        P = embedding_net(input_2)
+        
+        
+        loss = Lambda(self.siammese_hamming_loss)([A, P, label_1, label_2])
+        
+        return Model(inputs=[input_1, input_2], outputs=loss)
+
+    # Siammese Hamming Loss function.
+    def siammese_hamming_loss(self,x):
+        # getting Quadruplet
+        anchor,positive,label_1,label_2 = x
+        # Hamming distance between the anchor and positive features
+        # Loss is 1/2 * (1 - y) D(anchor,positive) + 1/2 * y * max(m-D(anchor,positive),0)
+        # y is set to 0 if label_1 == label_2, otherwise 1
+        y = 1.0 - K.cast(label_1 == label_2, tf.float32)
+        # D is the Hamming distance between the anchor and positive features
+        D = K.sum(K.square(anchor-positive),axis=1)
+        # Loss is 1/2 * (1 - y) D + 1/2 * y * max(m-D,0)
+        loss = 0.5 * (1 - y) * D + 0.5 * y * K.maximum(self.m-D,0)
+        return loss
+    
+    def create_generator_channel(self, batchsize, data, label, seed: int = None):
+        """Generate a siammese pairs generator for training."""
+        self.data = data
+        self.label = label
+        local_rng = random.Random(seed) if seed is not None else None
+        # Keep only complete consecutive quadruplets: [AB, AE, BA, BE]
+        usable_len = (len(data) // 4) * 4
+        if usable_len < 4:
+            raise ValueError("Dataset must contain at least one full quadruplet (4 samples).")
+        data_usable = data[:usable_len]
+        quad_starts = np.arange(0, usable_len, 4, dtype=np.int32)
+        while True:
+            list_a = []
+            list_p = []
+            label_1 = []
+            label_2 = []
+            batch = 0
+            while batch < batchsize:
+                if local_rng is not None:
+                    idx = int(quad_starts[local_rng.randrange(len(quad_starts))])
+                    swap_direction = bool(local_rng.getrandbits(1))
+                else:
+                    idx = int(random.choice(quad_starts))
+                    swap_direction = bool(random.getrandbits(1))
+
+                # Expected order within each consecutive quadruplet:
+                # idx: AB, idx+1: AE, idx+2: BA, idx+3: BE
+                # Randomly swap anchor/positive direction to balance AB->BA and BA->AB.
+                if swap_direction:
+                    a = data_usable[idx]      # AB
+                    p = data_usable[idx + 2]  # BA
+                    n1 = data_usable[idx + 1] # AE
+                    n2 = data_usable[idx + 3] # BE
+                else:
+                    a = data_usable[idx + 2]  # BA
+                    p = data_usable[idx]      # AB
+                    n1 = data_usable[idx + 3] # BE
+                    n2 = data_usable[idx + 1] # AE
+
+                list_a.append(a)
+                label_1.append(1)
+                list_p.append(p)
+                label_2.append(1)
+                list_a.append(a)
+                label_1.append(1)
+                list_p.append(n1)
+                label_2.append(0)
+                list_a.append(p)
+                label_1.append(1)
+                list_p.append(n2)
+                label_2.append(0)
+                batch = batch + 1
+            A = np.array(list_a, dtype='float32')
+            P = np.array(list_p, dtype='float32')
+            label_1 = np.array(label_1, dtype='float32')
+            label_2 = np.array(label_2, dtype='float32')
+            yield (A, P, label_1, label_2), np.ones(int(batchsize))
+
+class ResNet_HashNet_Channel(SiammeseHashNet):
+    def __init__(self):
+        pass
+    
+    def resblock(self, x, kernelsize, filters, first_layer = False):
+        reg = l2(0.001)  # Define L2 regularizer
+        if first_layer:
+            fx = Conv2D(filters, kernelsize, padding='same', kernel_regularizer=reg)(x)
+            fx = BatchNormalization()(fx)
+            fx = ReLU()(fx)
+            fx = Conv2D(filters, kernelsize, padding='same', kernel_regularizer=reg)(fx)
+            fx = BatchNormalization()(fx)
+            x = Conv2D(filters, 1, padding='same', kernel_regularizer=reg)(x)
+            fx = BatchNormalization()(fx)
+            out = Add()([x,fx])
+            out = ReLU()(out)
+        else:
+            fx = Conv2D(filters, kernelsize, padding='same', kernel_regularizer=reg)(x)
+            fx = BatchNormalization()(fx)
+            fx = ReLU()(fx)
+            fx = Conv2D(filters, kernelsize, padding='same', kernel_regularizer=reg)(fx)
+            fx = BatchNormalization()(fx)
+            out = Add()([x,fx])
+            out = ReLU()(out)
+
+        return out 
+
+    def feature_extractor(self, datashape, output_length):
+        self.datashape = datashape
+        reg = l2(0.001)  # Define L2 regularizer
+        inputs = Input(shape=([self.datashape[1],self.datashape[2],self.datashape[3]]))
+        x = Conv2D(32, 7, strides = 2, activation='relu', padding='same', kernel_regularizer=reg)(inputs)
+        x =  Dropout(0.3)(x)
+        x = self.resblock(x, 3, 32, first_layer = True)
+        for _ in range(1):
+            x = self.resblock(x, 3, 32)
+        x = self.resblock(x, 3, 64, first_layer = True)
+        for _ in range(1):
+            x = self.resblock(x, 3, 64)
+        x = AveragePooling2D(pool_size=2)(x)
+        x = Flatten()(x)
+        x = Dense(output_length)(x)
+        x = Lambda(lambda  x: K.l2_normalize(x,axis=1))(x)
+        # x = Lambda(lambda x: tf.cast(x > 0.5, dtype=tf.float32))(x) # Quantization layer
+        x = Dense(units=output_length, activation='sigmoid', kernel_initializer="lecun_normal")(x)
+        
+        # Lets add a quantization layer that sets outputs to +1 and -1
+        x = Lambda(lambda x: tf.cast(x > 0.5, dtype=tf.float32))(x)
+        
+        model = Model(inputs=inputs, outputs=x)
+        return model
+
 if __name__ == "__main__":
     
     

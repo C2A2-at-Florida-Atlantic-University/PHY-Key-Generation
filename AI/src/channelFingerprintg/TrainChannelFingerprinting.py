@@ -19,6 +19,29 @@ if os.environ.get("POWDER_FORCE_CPU") == "1":
 import tensorflow as tf
 import matplotlib.pyplot as plt
 
+def export_feature_extractor_to_onnx(model, onnx_output_path: str):
+    """Export a Keras feature extractor to ONNX format."""
+    try:
+        import tf2onnx
+    except ImportError as exc:
+        raise ImportError(
+            "tf2onnx is required to export ONNX models. "
+            "Install it with: pip install tf2onnx"
+        ) from exc
+
+    input_shape = model.input_shape
+    if isinstance(input_shape, list):
+        input_shape = input_shape[0]
+
+    signature_shape = [None] + list(input_shape[1:])
+    input_signature = (tf.TensorSpec(signature_shape, tf.float32, name="input"),)
+    tf2onnx.convert.from_keras(
+        model,
+        input_signature=input_signature,
+        opset=13,
+        output_path=onnx_output_path,
+    )
+
 def set_reproducible(seed: int, deterministic: bool = True, max_threads: int = 1):
     """Set seeds and deterministic execution for reproducibility.
 
@@ -88,32 +111,34 @@ def train_channel_feature_extractor(data, labels, train_configurations, model_ty
     
     # NetObj = ResNet_QuadrupletNet_Channel()
     output_length = train_configurations[model_type]['output_length']
-    # Create an RFF extractor.
-    if network_type == "ResNet":
-        NetObj = ResNet_QuadrupletNet_Channel()
-    elif network_type == "FeedForward":
-        NetObj = FeedForward_QuadrupletNet_Channel()
-    elif network_type == "RNN":
-        NetObj = RNN_QuadrupletNet_Channel()
-    elif network_type == "Transformer":
-        NetObj = Transformer_QuadrupletNet_Channel()
-    elif network_type == "AE":
-        NetObj = AE_QuadrupletNet_Channel()
-    
-    if quantization_layer:
-        feature_extractor = NetObj.build_quantized_extractor(data.shape, output_length)
-    else:
-        feature_extractor = NetObj.feature_extractor(data.shape, output_length)
-    
-    # Create the quadruplet net using the RFF extractor.
-    loss_type = "KDR" #"KDR" if quantization_layer else ""
-    net = NetObj.create_quadruplet_net(
-        feature_extractor, 
-        train_configurations[model_type]['alpha'], 
-        train_configurations[model_type]['beta'], 
-        train_configurations[model_type]['gamma'] if 'gamma' in train_configurations[model_type] else None,
-        loss_type=loss_type
-    )
+    # Build model graph/variables on CPU to avoid H200 PTX JIT init failures.
+    with tf.device('/CPU:0'):
+        # Create an RFF extractor.
+        if network_type == "ResNet":
+            NetObj = ResNet_QuadrupletNet_Channel()
+        elif network_type == "FeedForward":
+            NetObj = FeedForward_QuadrupletNet_Channel()
+        elif network_type == "RNN":
+            NetObj = RNN_QuadrupletNet_Channel()
+        elif network_type == "Transformer":
+            NetObj = Transformer_QuadrupletNet_Channel()
+        elif network_type == "AE":
+            NetObj = AE_QuadrupletNet_Channel()
+        
+        if quantization_layer:
+            feature_extractor = NetObj.build_quantized_extractor(data.shape, output_length)
+        else:
+            feature_extractor = NetObj.feature_extractor(data.shape, output_length)
+        
+        # Create the quadruplet net using the RFF extractor.
+        loss_type = "KDR" if quantization_layer else ""
+        net = NetObj.create_quadruplet_net(
+            feature_extractor, 
+            train_configurations[model_type]['alpha'], 
+            train_configurations[model_type]['beta'], 
+            train_configurations[model_type]['gamma'] if 'gamma' in train_configurations[model_type] else None,
+            loss_type=loss_type
+        )
 
     # Create callbacks during training. The training stops when validation loss 
     # does not decrease for 30 epochs.
@@ -134,7 +159,7 @@ def train_channel_feature_extractor(data, labels, train_configurations, model_ty
     ResultsDir = homeDir+"Results/"
     
     # Model checkpoint
-    checkpoint_filename = os.path.join(ResultsDir, f"model_checkpoint_{model_name}.h5")
+    checkpoint_filename = os.path.join(ResultsDir, f"model_checkpoint_{model_name}.weights.h5")
     checkpoint = ModelCheckpoint(checkpoint_filename, 
                                  monitor='val_loss', 
                                  verbose=1, 
@@ -187,17 +212,18 @@ def train_channel_feature_extractor(data, labels, train_configurations, model_ty
     # Use the RMSprop optimizer for training.
     LearningRate = train_configurations[model_type]['LearningRate']
     optimizer = train_configurations[model_type]['optimizer']
-    if optimizer == "Adam":
-        opt = Adam(learning_rate=LearningRate)
-    elif optimizer == "RMSprop":
-        opt = RMSprop(learning_rate=LearningRate)
-    elif optimizer == "SGD":
-        opt = SGD(learning_rate=LearningRate)
+    with tf.device('/CPU:0'):
+        if optimizer == "Adam":
+            opt = Adam(learning_rate=LearningRate)
+        elif optimizer == "RMSprop":
+            opt = RMSprop(learning_rate=LearningRate)
+        elif optimizer == "SGD":
+            opt = SGD(learning_rate=LearningRate)
 
-    net.compile(
-        loss = identity_loss,
-        #metrics=['accuracy'],
-        optimizer = opt)
+        net.compile(
+            loss = identity_loss,
+            #metrics=['accuracy'],
+            optimizer = opt)
 
     print("Training data:", data_train.shape)
     print("Validation data:", data_valid.shape)
@@ -216,10 +242,16 @@ def train_channel_feature_extractor(data, labels, train_configurations, model_ty
                         f.close()
                         
     timestamp = int(time.time())
-    filename = model_name +'_'+str(timestamp)+'.h5'
+    # filename = model_name +'_'+str(timestamp)+'.h5'
+    onnx_filename = model_name +'_'+str(timestamp)+'.onnx'
     
-    feature_extractor.save(ModelsDir+filename)
-    print("Saving file: ", filename)
+    # feature_extractor.save(ModelsDir+filename)
+    # print("Saving file: ", filename)
+    try:
+        export_feature_extractor_to_onnx(feature_extractor, ModelsDir + onnx_filename)
+        print("Saving ONNX file: ", onnx_filename)
+    except Exception as exc:
+        print("WARNING: ONNX export failed:", exc)
     
     return feature_extractor
 
@@ -387,7 +419,7 @@ if __name__ == "__main__":
     # Set seeds and determinism prior to any TF ops
     REPRO_SEED = 42
     set_reproducible(REPRO_SEED)
-    shuffle_dataset = False
+    shuffle_dataset = True
     data, labels, rx, tx = dataset.load_data(shuffle=shuffle_dataset, seed=REPRO_SEED)
     
     # For every example in the data lets take the average number of samples per example
@@ -601,11 +633,11 @@ if __name__ == "__main__":
     gammas = [0] # [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]
     FFT_lengths = [fft_len]
     output_lengths = [128] # Need to define the output length and why based on 255 constraint (bytes)
-    optimizers = ["SGD"] # "RMSprop", "SGD", "Adam"
+    optimizers = ["RMSprop"] # "RMSprop", "SGD", "Adam"
     network_types = ["ResNet"] # ["ResNet", "FeedForward", "RNN", "Transformer", "AE"]
     # data_types = ["IQ", "Polar", "Spectrogram"] # ["IQ", "Polar", "Spectrogram"]
     data_type = "Spectrogram" 
-    quantization_layer = False
+    quantization_layer = True
     for fft_len in FFT_lengths:
         for output_length in output_lengths:
             for network_type in network_types:
@@ -615,7 +647,7 @@ if __name__ == "__main__":
                             for o in optimizers:
                                 # b = a
                                 if o == "RMSprop":
-                                    lr = 0.0001
+                                    lr = 0.001
                                 elif o == "SGD":
                                     lr = 0.1
                                 elif o == "Adam":
@@ -664,7 +696,7 @@ if __name__ == "__main__":
                                         +('_gamma'+str(train_configurations[model_type]["gamma"]) if "gamma" in train_configurations[model_type] else "") \
                                         +'_'+train_configurations[model_type]['optimizer'] \
                                         +'_lr'+str(train_configurations[model_type]["LearningRate"]) \
-                                        +'_'+configuration["config_name"]+'_'+str(4)
+                                        +'_'+configuration["config_name"]+'_'+str(3)
                                 
                                 ModelsDir = homeDir+"Models/"
                                 

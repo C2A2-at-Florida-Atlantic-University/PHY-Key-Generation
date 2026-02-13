@@ -1,5 +1,6 @@
+import os
+
 import tensorflow as tf
-import deep_learning_models  # ensure Lambda deserialization finds this module
 import pandas as pd
 tf.keras.backend.clear_session()
 
@@ -19,8 +20,6 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 import time
-from tensorflow.keras.models import load_model
-import os
 from scipy.stats import entropy
 import h5py
 import sys
@@ -43,6 +42,51 @@ legend_font_size = 16
 tick_font_size = 13
 
 img_type = ".png" # png, eps, pdf
+
+class ONNXFeatureExtractor:
+    """Minimal wrapper to match Keras .predict API using ONNX Runtime."""
+    def __init__(self, onnx_path: str):
+        try:
+            import onnxruntime as ort
+        except ImportError as exc:
+            raise ImportError(
+                "onnxruntime is required for ONNX inference. "
+                "Install it with: pip install onnxruntime"
+            ) from exc
+        available_providers = ort.get_available_providers()
+        preferred_order = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        providers = [p for p in preferred_order if p in available_providers]
+        if not providers:
+            providers = available_providers
+
+        self.session = ort.InferenceSession(onnx_path, providers=providers)
+        input_meta = self.session.get_inputs()[0]
+        self.input_name = input_meta.name
+        self.output_name = self.session.get_outputs()[0].name
+        # Mimic Keras model API used elsewhere in this script.
+        shape = [None if isinstance(d, str) else d for d in input_meta.shape]
+        self.input_shape = tuple(shape)
+
+    def predict(self, data, batch_size=None, verbose=0):
+        data = np.asarray(data, dtype=np.float32)
+        return self.session.run([self.output_name], {self.input_name: data})[0]
+
+
+def load_trusted_feature_extractor(model_path):
+    """Load feature extractor from ONNX (primary runtime for testing)."""
+    if model_path.endswith(".onnx"):
+        onnx_path = model_path
+    elif model_path.endswith(".h5"):
+        onnx_path = model_path[:-3] + ".onnx"
+    else:
+        raise ValueError(f"Unsupported model extension for inference: {model_path}")
+
+    if not os.path.exists(onnx_path):
+        raise FileNotFoundError(
+            f"ONNX model not found: {onnx_path}. "
+            f"Export ONNX from training first."
+        )
+    return ONNXFeatureExtractor(onnx_path)
 
 def KDR(A,B):
     kdr = np.bitwise_xor(A,B)
@@ -171,7 +215,7 @@ def test_model(feature_extractor_name, node_configurations, home="/home/Research
     #                 dataset.add_dataset(dataset_name, node_config_name, repo_name)
     #             idx = idx + 1
     
-    dataset_type = "OTA-Dense"  # "OTA-Lab", "OTA-Dense", "Sionna-Ray-Tracing"
+    dataset_type = "OTA-Lab"  # "OTA-Lab", "OTA-Dense", "Sionna-Ray-Tracing"
     dataset_name = node_configurations[dataset_type]["dataset_name"]
     repo_name = node_configurations[dataset_type]['repo_name']
     node_Ids = node_configurations[dataset_type]['node_Ids']
@@ -240,11 +284,7 @@ def test_model(feature_extractor_name, node_configurations, home="/home/Research
         # with tf.device('/CPU:0'):
         #     print("loading model")
         feature_extractor_path = home+"Models/"+feature_extractor_name
-        feature_extractor = load_model(
-            feature_extractor_path,
-            custom_objects={"K": tf.keras.backend, "tf": tf},
-            compile=False
-        )
+        feature_extractor = load_trusted_feature_extractor(feature_extractor_path)
         # Infer fft_len from the model input shape if available
         try:
             inferred_fft_len = int(feature_extractor.input_shape[1]) if feature_extractor.input_shape is not None else 256
@@ -1065,11 +1105,7 @@ def find_best_model(configuration, homeDir, node_configurations):
                                                         print("Model found for filename: ", filename_start)
                                                         fileFound = True
                                                         complete_filename = ModelsDir+file
-                                                        feature_extractor = load_model(
-                                                            complete_filename,
-                                                            custom_objects={"K": tf.keras.backend, "tf": tf},
-                                                            compile=False
-                                                        )
+                                                        feature_extractor = load_trusted_feature_extractor(complete_filename)
                                                         features = extract_features_data(data, feature_extractor, model_configurations[model_type]["fft_len"], model_configurations[model_type]["data_type"])
                                                         quantized_data = quantize_data(features, quantization_method)
                                                         quantized_data = quantized_data[:]
@@ -1824,13 +1860,13 @@ if __name__ == "__main__":
     signal_type = "Sinusoid" # Sinusoid, PN-Sequence, deltaPulse
     
     node_Ids = {"Sinusoid":
-                    {"OTA-Lab": [#[1,2,3],
+                    {"OTA-Lab": [[1,2,3],
                             # [1,4,5],[1,4,8],[2,4,3],
                             # [4,2,5],[4,2,8],[4,8,5],
                             # [5,7,8],[5,8,7],[8,4,1],
                             # [8,5,1],[8,5,4]
                             ],
-                    "OTA-Dense": [[1,2,3],
+                    "OTA-Dense": [#[1,2,3],
                                 # [1,2,5],
                                 # [1,3,2],
                                 # [4,3,5]
@@ -1957,7 +1993,7 @@ if __name__ == "__main__":
             model_name = "Spectrogram_FeatureExtractor_ResNet_QuantizationLayerKDR_in256_out128_alpha0.1_beta0.1_SGD_lr0.1_Sinusoid-Powder-OTA-Lab-Nodes_1770686013.h5"
             model_name = "Spectrogram_FeatureExtractor_ResNet_QuantizationLayerKDR_in256_out128_alpha0.2_beta0.2_SGD_lr0.1_Sinusoid-Powder-OTA-Lab-Nodes_1770689404.h5"
             model_name = "Spectrogram_FeatureExtractor_ResNet_QuantizationLayer_in256_out128_alpha0.5_beta0.5_SGD_lr0.1_Sinusoid-Powder-OTA-Lab-Nodes_1770695531.h5"
-            model_name = "Spectrogram_FeatureExtractor_ResNet_in256_out128_alpha0.5_beta0.5_SGD_lr0.1_Sinusoid-Powder-OTA-Lab-Nodes_2_1770738431.h5"
+            model_name = "Spectrogram_FeatureExtractor_ResNet_in256_out128_alpha0.5_beta0.5_RMSprop_lr0.001_Sinusoid-Powder-OTA-Lab-Nodes_3_1770758541.onnx"
     else:
         # model_name = sys.argv[1]
         # 0.2,0.4,0.3,SGD
