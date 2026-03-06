@@ -75,6 +75,38 @@ install_python_packages() {
     python3 -m pip install --user "${pip_args[@]}"
 }
 
+generate_wifi_phy_hier() {
+    local grc_file="${DEPS_DIR}/gr-ieee802-11/examples/wifi_phy_hier.grc"
+
+    if ! command -v grcc >/dev/null 2>&1; then
+        log "grcc not found; skipping wifi_phy_hier.py generation"
+        return 0
+    fi
+
+    if [[ ! -f "${grc_file}" ]]; then
+        log "Missing ${grc_file}; skipping wifi_phy_hier.py generation"
+        return 0
+    fi
+
+    local grc_state_dir
+    grc_state_dir="$(python3 - <<'PY'
+from pathlib import Path
+try:
+    from gnuradio.gr import paths
+    p = Path(paths.persistent())
+except Exception:
+    p = Path.home() / ".local" / "state" / "gnuradio"
+legacy = Path.home() / ".grc_gnuradio"
+target = legacy if legacy.is_dir() else p
+target.mkdir(parents=True, exist_ok=True)
+print(target)
+PY
+)"
+
+    log "Generating wifi_phy_hier.py in ${grc_state_dir}"
+    grcc -o "${grc_state_dir}" "${grc_file}"
+}
+
 detect_host_ip() {
     if [[ -n "${POWDERKEYGEN_NODE_IP:-}" ]]; then
         echo "${POWDERKEYGEN_NODE_IP}"
@@ -170,6 +202,7 @@ main() {
     build_and_install_module "${DEPS_DIR}/gr-foo"
     build_and_install_module "${DEPS_DIR}/gr-ieee802-11"
     build_and_install_module "${DEPS_DIR}/gr-delta_pulse"
+    generate_wifi_phy_hier
     update_config_ip
 
     log "Dependency setup complete."

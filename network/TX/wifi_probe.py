@@ -3,10 +3,68 @@
 
 import os
 import sys
+import shutil
+import subprocess
 import pmt
 from gnuradio import blocks, gr, uhd
 import foo
 import ieee802_11
+
+
+def _get_grc_state_directory():
+    old_path = os.path.expanduser("~/.grc_gnuradio")
+    try:
+        from gnuradio.gr import paths  # type: ignore
+
+        state_path = paths.persistent()
+    except (ImportError, NameError, AttributeError):
+        state_path = os.path.join(
+            os.getenv("XDG_STATE_HOME", os.path.expanduser("~/.local/state")),
+            "gnuradio",
+        )
+
+    os.makedirs(state_path, exist_ok=True)
+    if os.path.isdir(old_path):
+        return old_path
+    return state_path
+
+
+def _ensure_wifi_phy_hier_generated():
+    grcc_path = shutil.which("grcc")
+    if not grcc_path:
+        return
+
+    candidate_grc_files = [
+        os.path.abspath(
+            os.path.join(
+                os.path.dirname(__file__),
+                "../../external/gr-ieee802-11/examples/wifi_phy_hier.grc",
+            )
+        ),
+        os.path.abspath(
+            os.path.join(
+                os.path.dirname(__file__),
+                "../../../external/gr-ieee802-11/examples/wifi_phy_hier.grc",
+            )
+        ),
+    ]
+    grc_file = next((path for path in candidate_grc_files if os.path.isfile(path)), "")
+    if not grc_file:
+        return
+
+    out_dir = os.environ.get("WIFI_GRC_HIER_PATH", "") or os.environ.get(
+        "GRC_HIER_PATH", ""
+    )
+    if not out_dir:
+        out_dir = _get_grc_state_directory()
+    os.makedirs(out_dir, exist_ok=True)
+
+    subprocess.run(
+        [grcc_path, "-o", out_dir, grc_file],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
 
 def _import_wifi_phy_hier():
@@ -19,17 +77,34 @@ def _import_wifi_phy_hier():
     candidate_paths = [
         os.environ.get("WIFI_GRC_HIER_PATH", ""),
         os.environ.get("GRC_HIER_PATH", ""),
-        os.path.expanduser("~/.grc_gnuradio"),
+        _get_grc_state_directory(),
         os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "../../../gr-ieee802-11/examples")
+            os.path.join(
+                os.path.dirname(__file__), "../../external/gr-ieee802-11/examples"
+            )
+        ),
+        os.path.abspath(
+            os.path.join(
+                os.path.dirname(__file__), "../../../external/gr-ieee802-11/examples"
+            )
         ),
     ]
     for path in candidate_paths:
         if path and path not in sys.path and os.path.isdir(path):
             sys.path.append(path)
 
-    from wifi_phy_hier import wifi_phy_hier  # type: ignore
-    return wifi_phy_hier
+    try:
+        from wifi_phy_hier import wifi_phy_hier  # type: ignore
+
+        return wifi_phy_hier
+    except ImportError:
+        _ensure_wifi_phy_hier_generated()
+        for path in candidate_paths:
+            if path and path not in sys.path and os.path.isdir(path):
+                sys.path.append(path)
+        from wifi_phy_hier import wifi_phy_hier  # type: ignore
+
+        return wifi_phy_hier
 
 
 class WiFiProbeTx(gr.top_block):
