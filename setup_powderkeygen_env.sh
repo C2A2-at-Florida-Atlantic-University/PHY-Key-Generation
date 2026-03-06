@@ -8,6 +8,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEPS_DIR="${SCRIPT_DIR}/external"
 PY_REQUIREMENTS_FILE="${SCRIPT_DIR}/requirements.txt"
+CONFIG_FILE="${SCRIPT_DIR}/config.json"
 NPROC="$(nproc)"
 
 run_as_root() {
@@ -74,6 +75,55 @@ install_python_packages() {
     python3 -m pip install --user "${pip_args[@]}"
 }
 
+detect_host_ip() {
+    if [[ -n "${POWDERKEYGEN_NODE_IP:-}" ]]; then
+        echo "${POWDERKEYGEN_NODE_IP}"
+        return 0
+    fi
+
+    local route_ip
+    route_ip="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')"
+    if [[ -n "${route_ip}" ]]; then
+        echo "${route_ip}"
+        return 0
+    fi
+
+    hostname -I 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i !~ /^127\./){print $i; exit}}'
+}
+
+update_config_ip() {
+    if [[ ! -f "${CONFIG_FILE}" ]]; then
+        log "No config file found at ${CONFIG_FILE}; skipping node.ip update"
+        return 0
+    fi
+
+    local host_ip
+    host_ip="$(detect_host_ip)"
+    if [[ -z "${host_ip}" ]]; then
+        log "Could not determine host IPv4 address; leaving config.json unchanged"
+        return 0
+    fi
+
+    log "Updating config node.ip to ${host_ip}"
+    python3 - "${CONFIG_FILE}" "${host_ip}" <<'PY'
+import json
+import sys
+
+config_path = sys.argv[1]
+host_ip = sys.argv[2]
+
+with open(config_path, "r", encoding="utf-8") as fh:
+    config = json.load(fh)
+
+config.setdefault("node", {})
+config["node"]["ip"] = host_ip
+
+with open(config_path, "w", encoding="utf-8") as fh:
+    json.dump(config, fh, indent=4)
+    fh.write("\n")
+PY
+}
+
 main() {
     require_cmd git
 
@@ -120,6 +170,7 @@ main() {
     build_and_install_module "${DEPS_DIR}/gr-foo"
     build_and_install_module "${DEPS_DIR}/gr-ieee802-11"
     build_and_install_module "${DEPS_DIR}/gr-delta_pulse"
+    update_config_ip
 
     log "Dependency setup complete."
     echo "Run GNU Radio Companion after this: gnuradio-companion"
