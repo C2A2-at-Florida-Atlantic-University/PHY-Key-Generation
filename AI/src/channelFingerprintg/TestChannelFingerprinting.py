@@ -1368,13 +1368,13 @@ if __name__ == "__main__":
     signal_type = "Sinusoid" # Sinusoid, PN-Sequence, deltaPulse
     
     node_Ids = {"Sinusoid":
-                    {"OTA-Lab": [#[1,2,3],
+                    {"OTA-Lab": [[1,2,3],
                              #[1,4,5]
                             #,[1,4,8],[2,4,3],
                             #[4,2,5],[4,2,8],[4,8,5],
                             #[5,7,8],[5,8,7],[8,4,1],
                             #[8,5,1],
-                            [8,5,4]
+                            # [8,5,4]
                             ],
                     "OTA-Dense": [[1,2,3],
                                 #[1,2,5],

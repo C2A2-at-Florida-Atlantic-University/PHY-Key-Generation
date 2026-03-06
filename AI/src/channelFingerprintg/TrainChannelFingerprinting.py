@@ -272,18 +272,25 @@ if __name__ == "__main__":
     ModelsDir = homeDir+"Models/"
     # Central seed for full reproducibility of data shuffling, initialization, and training
     
-    signal_type = "deltaPulse" # Sinusoid, PN-Sequence, deltaPulse
+    signal_type = "Sinusoid" # Sinusoid, PN-Sequence, deltaPulse
     
     node_Ids = {"Sinusoid":
-                    {"OTA-Lab": [# [1,2,3],
+                    {"OTA-Lab": [[1,2,3],
                             [1,4,5],
                             [1,4,8],
                             [2,4,3],
                             [4,2,5],
                             [4,2,8],
                             [4,8,5],
+                            #[5,7,6],
                             [5,7,8],
+                            [5,8,2],
+                            [5,8,3],
+                            [5,8,4],
+                            [5,8,6],
                             [5,8,7],
+                            [6,7,2],
+                            [6,7,3],
                             [8,4,1],
                             [8,5,1],
                             [8,5,4]]
@@ -671,7 +678,7 @@ if __name__ == "__main__":
                                             +'_margin'+str(train_configurations[model_type]["margin"]) \
                                             +'_'+train_configurations[model_type]['optimizer'] \
                                             +'_lr'+str(train_configurations[model_type]["LearningRate"]) \
-                                            +'_'+configuration["config_name"]+'_'+str(2)
+                                            +'_'+configuration["config_name"]+'_'+str(3)
                                 else:
                                     spec_suffix = ""
                                     if train_configurations[model_type]["data_type"] == "Spectrogram":
