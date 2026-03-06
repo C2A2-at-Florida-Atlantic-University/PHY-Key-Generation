@@ -18,7 +18,6 @@ from datetime import datetime
 import numpy as np
 from tqdm import tqdm
 import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
 import time
 from scipy.stats import entropy
 import h5py
@@ -27,66 +26,60 @@ from DatasetHandler import DatasetHandler, ChannelSpectrogram, ChannelIQ, Channe
 from reconciliation import ReedSolomonReconciliation, BitToSymbolTransformation
 from Quantization import Quantization
 from privacy_amplification import PrivacyAmplification
-from matplotlib.ticker import MultipleLocator, FormatStrFormatter, AutoMinorLocator
-
-
-# Define the font size for the plot
-title_font_size = 25
-label_font_size = 25
-legend_font_size = 16
-
-# title_font_size = 18
-# label_font_size = 18
-# legend_font_size = 12
-
-tick_font_size = 13
+from dataset_visualization import (
+    plot_data_scenario,
+    plot_avg_min_max_power_scenario,
+    plot_bdr_results_CSV,
+    plot_bdr_results_CSV_for_scenario,
+    plot_rec_rate_by_S,
+    plot_rec_rate_by_S_for_L,
+)
 
 img_type = ".png" # png, eps, pdf
 
-class ONNXFeatureExtractor:
-    """Minimal wrapper to match Keras .predict API using ONNX Runtime."""
-    def __init__(self, onnx_path: str):
-        try:
-            import onnxruntime as ort
-        except ImportError as exc:
-            raise ImportError(
-                "onnxruntime is required for ONNX inference. "
-                "Install it with: pip install onnxruntime"
-            ) from exc
-        available_providers = ort.get_available_providers()
-        preferred_order = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-        providers = [p for p in preferred_order if p in available_providers]
-        if not providers:
-            providers = available_providers
-
-        self.session = ort.InferenceSession(onnx_path, providers=providers)
-        input_meta = self.session.get_inputs()[0]
-        self.input_name = input_meta.name
-        self.output_name = self.session.get_outputs()[0].name
-        # Mimic Keras model API used elsewhere in this script.
-        shape = [None if isinstance(d, str) else d for d in input_meta.shape]
-        self.input_shape = tuple(shape)
-
-    def predict(self, data, batch_size=None, verbose=0):
-        data = np.asarray(data, dtype=np.float32)
-        return self.session.run([self.output_name], {self.input_name: data})[0]
-
-
 def load_trusted_feature_extractor(model_path):
-    """Load feature extractor from ONNX (primary runtime for testing)."""
-    if model_path.endswith(".onnx"):
-        onnx_path = model_path
+    """Load trusted local feature extractor from native .keras format."""
+    candidate_paths = []
+    if model_path.endswith(".keras"):
+        candidate_paths.append(model_path)
     elif model_path.endswith(".h5"):
-        onnx_path = model_path[:-3] + ".onnx"
+        candidate_paths.append(model_path[:-3] + ".keras")
     else:
-        raise ValueError(f"Unsupported model extension for inference: {model_path}")
+        # Support extensionless model names produced by History_* parsing.
+        candidate_paths.append(model_path + ".keras")
+        candidate_paths.append(model_path)
 
-    if not os.path.exists(onnx_path):
+    keras_path = next((p for p in candidate_paths if os.path.exists(p)), None)
+    if keras_path is None:
         raise FileNotFoundError(
-            f"ONNX model not found: {onnx_path}. "
-            f"Export ONNX from training first."
+            f"Keras model not found for path: {model_path}. "
+            f"Tried: {candidate_paths}"
         )
-    return ONNXFeatureExtractor(onnx_path)
+
+    custom_objects = {}
+    try:
+        # Ensure custom quantization layer is registered for .keras deserialization.
+        from deep_learning_models import STEQuantizationLayer
+        custom_objects["STEQuantizationLayer"] = STEQuantizationLayer
+        custom_objects["channelFingerprintg>STEQuantizationLayer"] = STEQuantizationLayer
+    except Exception:
+        # Leave custom_objects empty; load_model will raise a clear error if required.
+        pass
+
+    try:
+        return tf.keras.models.load_model(
+            keras_path,
+            compile=False,
+            safe_mode=False,
+            custom_objects=custom_objects,
+        )
+    except TypeError:
+        # Backward compatibility for older tf.keras without safe_mode kwarg.
+        return tf.keras.models.load_model(
+            keras_path,
+            compile=False,
+            custom_objects=custom_objects,
+        )
 
 def KDR(A,B):
     kdr = np.bitwise_xor(A,B)
@@ -140,7 +133,7 @@ def get_latest_results_file(results_directory, results_file):
     results_files.sort(key=lambda x: os.path.getmtime(os.path.join(results_directory, x)))
     return results_files[-1]
 
-def extract_features_data(data, feature_extractor, fft_len, data_type="Spectrogram"):
+def extract_features_data(data, feature_extractor, fft_len, data_type="Spectrogram", spectrogram_processing="magnitude"):
     data = np.array(data)
     if data_type == "IQ":
         ChannelIQObj = ChannelIQ()
@@ -152,7 +145,8 @@ def extract_features_data(data, feature_extractor, fft_len, data_type="Spectrogr
         ChannelSpectrogramObj = ChannelSpectrogram()
         data = ChannelSpectrogramObj.channel_spectrogram(
             data,
-            fft_len
+            fft_len,
+            processing=spectrogram_processing,
         )
     features = feature_extractor.predict(data)
     return features
@@ -192,7 +186,7 @@ def avg_KDR_data_RayTracing(quantized_data, quantized_dataRayTracing):
     KDR_BB_average = np.sum(KDR_BB)/(len(KDR_BB))
     return KDR_AA_average, KDR_BB_average, KDR_AA, KDR_BB
         
-def test_model(feature_extractor_name, node_configurations, home="/home/Research/POWDER/", generate_results=True):
+def test_model(feature_extractor_name, node_configurations, home="/home/Research/POWDER/", generate_results=True, signal_type="Sinusoid"):
     node_configs_names = ""
     idx = 0
     # for dataset_type in node_configurations.keys():
@@ -239,9 +233,39 @@ def test_model(feature_extractor_name, node_configurations, home="/home/Research
     dataset.get_dataframe_Info()
     data, _, _, _ = dataset.load_data()
     
-    min_num_samples = 8192
+    if signal_type == "deltaPulse":
+        min_num_samples = int(8192*2)
+    else:
+        min_num_samples = int(8192)
     # Resize the data in examples to the least number of samples
     data = np.array([example[-min_num_samples:] for example in data])
+
+    # Plot test dataset scenarios using the same visualization utilities as training.
+    data_per_scenario = 400
+    if data.shape[0] >= data_per_scenario:
+        number_of_scenarios = data.shape[0] // data_per_scenario
+        test_plot_directory = os.path.join(results_directory, "TestDatasetPlots")
+        os.makedirs(test_plot_directory, exist_ok=True)
+        for i in range(number_of_scenarios):
+            scenario_start_index = int(i * data_per_scenario)
+            plot_data_scenario(
+                data,
+                scenario_start_index,
+                os.path.join(test_plot_directory, f"TEST_IQ_Spectrogram_scenario_{i}.png"),
+                show_plot=False,
+            )
+            plot_avg_min_max_power_scenario(
+                data,
+                scenario_start_index,
+                data_per_scenario,
+                os.path.join(test_plot_directory, f"TEST_Avg_Min_Max_Power_scenario_{i}"),
+                show_plot=False,
+            )
+        print(f"Saved test dataset visualizations to: {test_plot_directory}")
+    else:
+        print(
+            f"Skipping test dataset plots: expected at least {data_per_scenario} samples, got {data.shape[0]}"
+        )
     
     # Load the Sionna-Ray-Tracing dataset
     dataRayTracing = False
@@ -290,9 +314,38 @@ def test_model(feature_extractor_name, node_configurations, home="/home/Research
             inferred_fft_len = int(feature_extractor.input_shape[1]) if feature_extractor.input_shape is not None else 256
         except Exception:
             inferred_fft_len = 256
-        features = extract_features_data(data, feature_extractor, inferred_fft_len)
+        # Keep test preprocessing aligned with training-time spectrogram construction.
+        model_name_l = feature_extractor_name.lower()
+        expected_channels = 2
+        try:
+            expected_channels = int(feature_extractor.input_shape[-1])
+        except Exception:
+            expected_channels = 1
+        spectrogram_processing = "magnitude_phase"
+        if "_speccomplex" in model_name_l:
+            spectrogram_processing = "complex"
+        elif "_specmagnitude_phase" in model_name_l or "_specmag_phase" in model_name_l:
+            spectrogram_processing = "magnitude_phase"
+        elif expected_channels == 2:
+            # Backward-compatible fallback when older filenames do not include spectrogram mode.
+            spectrogram_processing = "magnitude_phase"
+        print(f"Using spectrogram processing mode: {spectrogram_processing}")
+
+        features = extract_features_data(
+            data,
+            feature_extractor,
+            inferred_fft_len,
+            data_type="Spectrogram",
+            spectrogram_processing=spectrogram_processing,
+        )
         if dataRayTracing:
-            featuresRayTracing = extract_features_data(dataRayTracing, feature_extractor, inferred_fft_len)
+            featuresRayTracing = extract_features_data(
+                dataRayTracing,
+                feature_extractor,
+                inferred_fft_len,
+                data_type="Spectrogram",
+                spectrogram_processing=spectrogram_processing,
+            )
         
         # =====================================================================
         # DIAGNOSTIC: Analyze raw embeddings before any test-time quantization
@@ -1250,551 +1303,6 @@ def find_best_model(configuration, homeDir, node_configurations):
     
     return results["Models"][best_KDR_ratio_index]
 
-def plot_bdr_results_CSV(csv_file, title, save_path, EveRayTracing=False):
-    """Create grouped bar charts of BDR vs key size L for each input type.
-
-    For each input type (IQ, Polar, Spectrogram), generates a plot where:
-      - X-axis: key size L
-      - Y-axis: BDR (KDR_AB, KDR_AC, KDR_BC)
-      - Within each L group, bars are grouped by metric color (AB/AC/BC) and
-        subdivided by quantization method using distinct hatches.
-
-    Saves three figures using save_path as a base, e.g.,
-    base+'_IQ'+img_type, base+'_Polar'+img_type, base+'_Spectrogram'+img_type.
-    """
-    from matplotlib.patches import Patch
-
-    results = pd.read_csv(csv_file)    
-    # Normalize data_type naming to a canonical set
-    def normalize_dtype(x):
-        if isinstance(x, str):
-            xl = x.strip().lower()
-            if xl == "iq":
-                return "IQ"
-            if xl == "polar":
-                return "Polar"
-            if xl in ("spectrogram", "spectogram"):
-                return "Spectrogram"
-        return x
-
-    if "data_type" not in results.columns:
-        raise ValueError("CSV missing required column 'data_type'.")
-    results["data_type_norm"] = results["data_type"].apply(normalize_dtype)
-    
-    # Ensure L exists; if missing, attempt extracting from Models (pattern '_out{L}')
-    if "L" not in results.columns or results["L"].dropna().empty:
-        if "Models" in results.columns:
-            extracted = results["Models"].str.extract(r"_out(\d+)")[0]
-            results["L"] = pd.to_numeric(extracted, errors="coerce")
-        else:
-            raise ValueError("CSV missing 'L' and 'Models' to derive L.")
-    else:
-        results["L"] = pd.to_numeric(results["L"], errors="coerce")
-    results = results.dropna(subset=["L"]).copy()
-    results["L"] = results["L"].astype(int)
-    
-    # Required columns
-    required_cols = {"quantization_method", "KDR_AB", "KDR_AC", "KDR_BC"}
-    missing = required_cols.difference(results.columns)
-    if missing:
-        raise ValueError(f"CSV missing required columns: {sorted(missing)}")
-
-    metric_names = ["KDR_AB", "KDR_AC", "KDR_BC"]
-    metric_labels = {"KDR_AB": "Alice-Bob", "KDR_AC": "Alice-Eve", "KDR_BC": "Bob-Eve"}
-    metric_colors = {"KDR_AB": "#d62728", "KDR_AC": "#1f77b4", "KDR_BC": "#2ca02c"}
-    if EveRayTracing:
-        metric_names.append("KDR_AA")
-        metric_names.append("KDR_BB")
-        metric_labels["KDR_AA"] = "Alice-Eve (Ray Tracing)"
-        metric_labels["KDR_BB"] = "Bob-Eve (Ray Tracing)"
-        metric_colors["KDR_AA"] = "#ff7f0e" # orange
-        metric_colors["KDR_BB"] = "#800080" # purple
-    hatch_styles = ["", "//", "x", "-", ".", "o", "*", "+", "O"]
-
-    base, ext = os.path.splitext(save_path)
-    if not ext:
-        ext = img_type
-
-    desired_types = ["IQ", "Polar", "Spectrogram"]
-    present_types = [t for t in desired_types if t in results["data_type_norm"].unique().tolist()]
-    print("Present types: ", present_types)
-    for dtype in present_types:
-        sub = results[results["data_type_norm"] == dtype].copy()
-        if sub.empty:
-            continue
-
-        # Axis keys
-        L_values = sorted(sub["L"].unique().tolist())
-        quant_methods = list(dict.fromkeys(sub["quantization_method"].astype(str).tolist()))
-        num_L = len(L_values)
-        num_metrics = len(metric_names)
-        num_quants = max(1, len(quant_methods))
-
-        # Aggregate mean per L and quantization
-        grouped = sub.groupby(["L", "quantization_method"], as_index=False)[metric_names].mean()
-        hatch_map = {qm: hatch_styles[i % len(hatch_styles)] for i, qm in enumerate(quant_methods)}
-        # Make the plot tighter
-        # Geometry
-        x_base = np.arange(num_L)
-        group_width = 0.8
-        metric_slot_width = group_width / (num_metrics-2) if EveRayTracing else num_metrics
-        bar_width = metric_slot_width / num_quants
-
-        fig, ax = plt.subplots(figsize=(10, 6))
-        for m_idx, metric in enumerate(metric_names):
-            for q_idx, qname in enumerate(quant_methods):
-                x_offsets = -group_width / 2 + ((m_idx - 2) if EveRayTracing and metric in ["KDR_AA", "KDR_BB"] else m_idx) * metric_slot_width + q_idx * bar_width + bar_width / 2
-                xs = x_base + x_offsets
-                heights = []
-                for Lval in L_values:
-                    row = grouped[(grouped["L"] == Lval) & (grouped["quantization_method"].astype(str) == qname)]
-                    if not row.empty:
-                        heights.append(float(row.iloc[0][metric]))
-                    else:
-                        heights.append(0.0)
-                ax.bar(
-                    xs,
-                    heights,
-                    width=bar_width,
-                    color=metric_colors[metric],
-                    hatch=hatch_map[qname],
-                    edgecolor="black",
-                    label=None,
-                    alpha=1,
-                )
-        ax.yaxis.set_major_locator(MultipleLocator(0.02))
-        ax.yaxis.set_minor_locator(MultipleLocator(0.01))
-        ax.yaxis.set_major_formatter(FormatStrFormatter('%.2f'))
-        ax.grid(which="major", axis="both", linestyle="--", alpha=0.5)
-        ax.grid(which="minor", axis="both", linestyle=":", alpha=0.3)
-        ax.set_xticks(x_base)
-        ax.set_xticklabels([str(Lv) for Lv in L_values], fontsize=tick_font_size)
-        # y axis tick size
-        ax.yaxis.set_tick_params(labelsize=tick_font_size)
-        # Set the size of the x axis ticks
-        # ax.xaxis.set_tick_params(labelsize=tick_font_size*2)
-        ax.set_xlabel("Binary Feature Vector Length (B)", fontsize=label_font_size)
-        ax.set_ylabel(r'$\overline{\mathrm{BDR}}$', fontsize=label_font_size)
-        # plot_title = title if title else "Key Dissagreement Ratio vs Key Size L"
-        # ax.set_title(f"{dtype} - {plot_title}", fontsize=title_font_size)
-        # ax.set_title(plot_title, fontsize=title_font_size)
-        
-        ax.grid(axis="y", linestyle="--", alpha=0.3)
-
-        color_handles = [
-            Patch(facecolor=metric_colors[m], edgecolor="black", label=metric_labels[m])
-            for m in metric_names
-        ]
-        hatch_handles = [
-            Patch(facecolor="#cccccc", edgecolor="black", hatch=hatch_map[q], label=str(q))
-            for q in quant_methods
-        ]
-        legend1 = ax.legend(handles=color_handles, loc="upper left", fontsize=legend_font_size)
-        ax.add_artist(legend1)
-        # ax.legend(handles=hatch_handles, title="Quantization", loc="upper right")
-
-        plt.tight_layout()
-        out_path = f"{base}_{dtype}{ext}"
-        print("Saving BDR plot to: ", out_path)
-        plt.savefig(out_path)
-        
-        plt.close(fig)
-        
-def plot_bdr_results_CSV_for_scenario(csv_files, title, save_path, EveRayTracing=False):
-    
-    from matplotlib.patches import Patch
-    
-    def normalize_dtype(x):
-        if isinstance(x, str):
-            xl = x.strip().lower()
-            if xl == "iq":
-                return "IQ"
-            if xl == "polar":
-                return "Polar"
-            if xl in ("spectrogram", "spectogram"):
-                return "Spectrogram"
-        return x
-    # plot the BDR results per scenario in three different subplots
-    
-    # Create single figure with three subplots (share x-axis ticks)
-    fig, axs = plt.subplots(3, 1, figsize=(15, 15), sharex=True)
-    
-    # Plot the BDR results for each scenario in each subplot
-    Titles = ["Indoor Scenario", "Outdoor Scenario 1", "Outdoor Scenario 2"]
-    for i, csv_file in enumerate(csv_files):
-        results = pd.read_csv(csv_file)    
-
-        if "data_type" not in results.columns:
-            raise ValueError("CSV missing required column 'data_type'.")
-        results["data_type_norm"] = results["data_type"].apply(normalize_dtype)
-        
-        # Ensure L exists; if missing, attempt extracting from Models (pattern '_out{L}')
-        if "L" not in results.columns or results["L"].dropna().empty:
-            if "Models" in results.columns:
-                extracted = results["Models"].str.extract(r"_out(\d+)")[0]
-                results["L"] = pd.to_numeric(extracted, errors="coerce")
-            else:
-                raise ValueError("CSV missing 'L' and 'Models' to derive L.")
-        else:
-            results["L"] = pd.to_numeric(results["L"], errors="coerce")
-        results = results.dropna(subset=["L"]).copy()
-        results["L"] = results["L"].astype(int)
-        
-        # Required columns
-        required_cols = {"quantization_method", "KDR_AB", "KDR_AC", "KDR_BC"}
-        missing = required_cols.difference(results.columns)
-        if missing:
-            raise ValueError(f"CSV missing required columns: {sorted(missing)}")
-
-        metric_names = ["KDR_AB", "KDR_AC", "KDR_BC"]
-        metric_labels = {"KDR_AB": "Alice-Bob", "KDR_AC": "Alice-Eve", "KDR_BC": "Bob-Eve"}
-        metric_colors = {"KDR_AB": "#d62728", "KDR_AC": "#1f77b4", "KDR_BC": "#2ca02c"}
-        hatch_styles = ["", "//", "x", "-", ".", "o", "*", "+", "O"]
-        if EveRayTracing and i > 0:
-            metric_names.append("KDR_AA")
-            metric_names.append("KDR_BB")
-            metric_labels["KDR_AA"] = "Alice-Eve (Ray Tracing)"
-            metric_labels["KDR_BB"] = "Bob-Eve (Ray Tracing)"
-            metric_colors["KDR_AA"] = "#ff7f0e" # orange
-            metric_colors["KDR_BB"] = "#800080" # purple
-
-        base, ext = os.path.splitext(save_path)
-        if not ext:
-            ext = img_type
-
-        desired_types = ["IQ", "Polar", "Spectrogram"]
-        present_types = [t for t in desired_types if t in results["data_type_norm"].unique().tolist()]
-        print("Present types: ", present_types)
-        if not present_types:
-            continue
-        dtype = "Spectrogram" if "Spectrogram" in present_types else present_types[0]
-        
-        for dtype in [dtype]:
-            sub = results[results["data_type_norm"] == dtype].copy()
-            if sub.empty:
-                continue
-
-            # Axis keys
-            L_values = sorted(sub["L"].unique().tolist())
-            quant_methods = list(dict.fromkeys(sub["quantization_method"].astype(str).tolist()))
-            num_L = len(L_values)
-            num_metrics = len(metric_names)
-            num_quants = max(1, len(quant_methods))
-
-            # Aggregate mean per L and quantization
-            grouped = sub.groupby(["L", "quantization_method"], as_index=False)[metric_names].mean()
-            hatch_map = {qm: hatch_styles[i % len(hatch_styles)] for i, qm in enumerate(quant_methods)}
-            # Make the plot tighter
-            # Geometry
-            x_base = np.arange(num_L)
-            group_width = 0.8
-            if EveRayTracing and i > 0:
-                metric_slot_width = group_width / max(1, (num_metrics - 2))
-            else:
-                metric_slot_width = group_width / max(1, num_metrics)
-            bar_width = metric_slot_width / num_quants
-
-            # Define the axis for the subplot
-            ax = axs[i]
-            # Lets set the title for the subplot to the right side of the subplot 
-            ax.set_title(Titles[i], fontsize=title_font_size, loc="right")
-            for m_idx, metric in enumerate(metric_names):
-                for q_idx, qname in enumerate(quant_methods):
-                    x_offsets = (
-                        -group_width / 2
-                        + ((m_idx - 2) if (EveRayTracing and i > 0 and metric in ["KDR_AA", "KDR_BB"]) else m_idx) * metric_slot_width
-                        + q_idx * bar_width
-                        + bar_width / 2
-                    )
-                    xs = x_base + x_offsets
-                    heights = []
-                    for Lval in L_values:
-                        row = grouped[(grouped["L"] == Lval) & (grouped["quantization_method"].astype(str) == qname)]
-                        if not row.empty:
-                            heights.append(float(row.iloc[0][metric]))
-                        else:
-                            heights.append(0.0)
-                    ax.bar(
-                        xs,
-                        heights,
-                        width=bar_width,
-                        color=metric_colors[metric],
-                        hatch=hatch_map[qname],
-                        edgecolor="black",
-                        label=None,
-                        alpha=1
-                    )
-            ax.yaxis.set_major_locator(MultipleLocator(0.02))
-            ax.yaxis.set_minor_locator(MultipleLocator(0.01))
-            ax.yaxis.set_major_formatter(FormatStrFormatter('%.2f'))
-            ax.grid(which="major", axis="both", linestyle="--", alpha=0.5)
-            ax.grid(which="minor", axis="both", linestyle=":", alpha=0.3)
-            ax.set_xticks(x_base)
-            ax.set_xticklabels([str(Lv) for Lv in L_values], fontsize=tick_font_size)
-            # y axis tick size
-            ax.yaxis.set_tick_params(labelsize=tick_font_size)
-            # Only show x-axis label on bottom subplot
-            if i == len(csv_files) - 1:
-                ax.set_xlabel("Binary Feature Vector Length (B)", fontsize=label_font_size)
-                # Set the size of the x axis ticks
-                ax.xaxis.set_tick_params(labelsize=label_font_size*0.9)
-            else:
-                # Hide x-axis tick labels on top subplots (they share x-axis with bottom)
-                ax.tick_params(labelbottom=False)
-            ax.set_ylabel(r'$\overline{\mathrm{BDR}}$', fontsize=label_font_size)
-            # plot_title = title if title else "Key Dissagreement Ratio vs Key Size L"
-            # ax.set_title(f"{dtype} - {plot_title}", fontsize=title_font_size)
-            # ax.set_title(plot_title, fontsize=title_font_size)
-            # Set the y axis to always end at 0.5
-            ax.set_ylim(0, 0.5)
-            ax.grid(axis="y", linestyle="--", alpha=0.3)
-
-            color_handles = [
-                Patch(facecolor=metric_colors[m], edgecolor="black", label=metric_labels[m])
-                for m in metric_names
-            ]
-            hatch_handles = [
-                Patch(facecolor="#cccccc", edgecolor="black", hatch=hatch_map[q], label=str(q))
-                for q in quant_methods
-            ]
-            legend1 = ax.legend(handles=color_handles, loc="upper left", fontsize=legend_font_size)
-            ax.add_artist(legend1)
-    
-    plt.tight_layout()
-    if save_path is not None:
-        plt.savefig(save_path)
-    plt.show()
-    plt.close(fig)
-    print("Saved figure to: ", save_path)
-
-def plot_rec_rate_by_S(csv_path, title=None, save_path=None):
-    """Plot rec_rate_AB vs S for each unique (L,bps,K) line from a results CSV.
-
-    - X axis: S
-    - Y axis: rec_rate_AB
-    - One line per (L,bps,K)
-    """
-    df = pd.read_csv(csv_path)
-    required_cols = {"S", "rec_rate_AB", "rec_rate_AC", "rec_rate_BC", "L", "bps", "K"}
-    missing = required_cols.difference(df.columns)
-    if missing:
-        raise ValueError(f"Missing required columns in CSV: {sorted(missing)}")
-
-    # Filter to spectrogram-only rows if data_type column exists
-    if "data_type" in df.columns:
-        mask = df["data_type"].astype(str).str.strip().str.lower().isin(["spectrogram", "spectogram"])
-        df = df[mask].copy()
-        if df.empty:
-            raise ValueError("No rows with data_type equal to 'spectrogram'/'spectogram' found in the CSV.")
-
-    # Ensure numeric types
-    df["S"] = pd.to_numeric(df["S"], errors="coerce")
-    df["rec_rate_AB"] = pd.to_numeric(df["rec_rate_AB"], errors="coerce")
-    df["rec_rate_AC"] = pd.to_numeric(df["rec_rate_AC"], errors="coerce")
-    df["rec_rate_BC"] = pd.to_numeric(df["rec_rate_BC"], errors="coerce")
-    df["L"] = pd.to_numeric(df["L"], errors="coerce")
-    df["bps"] = pd.to_numeric(df["bps"], errors="coerce")
-    df["K"] = pd.to_numeric(df["K"], errors="coerce")
-    df = df.dropna(subset=["S", "rec_rate_AB", "rec_rate_AC", "rec_rate_BC", "L", "bps", "K"]).copy()
-
-    # Aggregate in case there are multiple rows per S within a (L,bps,K)
-    agg = (
-        df.groupby(["L", "bps", "K", "S"], as_index=False)[["rec_rate_AB", "rec_rate_AC", "rec_rate_BC"]].mean()
-        .sort_values(["L", "bps", "K", "S"])  # sort for consistent lines
-    )
-
-    fig, ax = plt.subplots(figsize=(10, 6))
-    # Color per (L,bps,K), styles per pair
-    from matplotlib import cm
-    from matplotlib.lines import Line2D
-    groups = agg[["L", "bps", "K"]].drop_duplicates().reset_index(drop=True)
-    cmap = cm.get_cmap("tab20", len(groups))
-    group_to_color = {tuple(groups.loc[i, ["L", "bps", "K"]].astype(int)): cmap(i) for i in range(len(groups))}
-
-    pair_to_col = {
-        "Alice-Bob": "rec_rate_AB",
-        "Alice-Eve": "rec_rate_AC",
-        "Bob-Eve": "rec_rate_BC",
-    }
-    pair_to_style = {"Alice-Bob": "-", "Alice-Eve": "--", "Bob-Eve": ":"}
-
-    for (L_val, bps_val, K_val), sub in agg.groupby(["L", "bps", "K"], sort=False):
-        color = group_to_color[(int(L_val), int(bps_val), int(K_val))]
-        # Plot three lines with same color and different styles
-        for pair, col_name in pair_to_col.items():
-            label = f"L={int(L_val)}, bps={int(bps_val)}, K={int(K_val)}" if pair == "Alice-Bob" else None
-            ax.plot(
-                sub["S"].values,
-                sub[col_name].values,
-                marker="o" if pair == "Alice-Bob" else None,
-                linestyle=pair_to_style[pair],
-                color=color,
-                label=label,
-            )
-
-    ax.set_xlabel("Parity Symbol Length S")
-    ax.set_ylabel("Reconciliation Rate")
-    # if title is None:
-    title = "Reconciliation Rate for Parity Symbol Length S"
-    ax.set_title(title)
-    ax.grid(True, linestyle="--", alpha=0.4)
-    # First legend for groups (labels set only on AB lines)
-    group_legend = ax.legend(loc="best", title="Groups (L,bps,K)")
-    ax.add_artist(group_legend)
-    # Second legend for pair linestyles
-    style_handles = [
-        Line2D([0], [0], color="black", linestyle=pair_to_style[pair], label=pair)
-        for pair in ["Alice-Bob", "Alice-Eve", "Bob-Eve"]
-    ]
-    ax.legend(handles=style_handles, title="Node Pair", loc="upper right")
-    plt.tight_layout()
-
-    if save_path is not None:
-        plt.savefig(save_path)
-    plt.show()
-
-def plot_rec_rate_by_S_for_L(csv_path, title=None, save_path=None, L=512, quantization_method="threshold"):
-    """Plot rec_rate vs RS code rate for a single key size L from a results CSV.
-
-    - X axis: RS code rate S/(K+S)
-    - Y axis: reconciliation rate
-    - One line per (bps,K), with three linestyles for AB/AC/BC
-    """
-    df = pd.read_csv(csv_path)
-    required_cols = {"S", "rec_rate_AB", "rec_rate_AC", "rec_rate_BC", "L", "bps", "K"}
-    missing = required_cols.difference(df.columns)
-    if missing:
-        raise ValueError(f"Missing required columns in CSV: {sorted(missing)}")
-
-    # Filter to spectrogram-only rows if data_type column exists
-    if "data_type" in df.columns:
-        mask = df["data_type"].astype(str).str.strip().str.lower().isin(["spectrogram", "spectogram"])
-        df = df[mask].copy()
-        if df.empty:
-            raise ValueError("No rows with data_type equal to 'spectrogram'/'spectogram' found in the CSV.")
-
-    # Ensure numeric types
-    df["S"] = pd.to_numeric(df["S"], errors="coerce")
-    df["rec_rate_AB"] = pd.to_numeric(df["rec_rate_AB"], errors="coerce")
-    df["rec_rate_AC"] = pd.to_numeric(df["rec_rate_AC"], errors="coerce")
-    df["rec_rate_BC"] = pd.to_numeric(df["rec_rate_BC"], errors="coerce")
-    df["L"] = pd.to_numeric(df["L"], errors="coerce")
-    df["bps"] = pd.to_numeric(df["bps"], errors="coerce")
-    df["K"] = pd.to_numeric(df["K"], errors="coerce")
-    df = df.dropna(subset=["S", "rec_rate_AB", "rec_rate_AC", "rec_rate_BC", "L", "bps", "K"]).copy()
-
-    # Filter by the requested L
-    target_L = int(L)
-    df = df[df["L"] == target_L].copy()
-    if df.empty:
-        raise ValueError(f"No rows found for L={target_L} after filtering.")
-
-    # Filter for specific quantization method
-    df = df[df["quantization_method"] == quantization_method].copy()
-    # Aggregate in case there are multiple rows per S within a (bps,K)
-    agg = (
-        df.groupby(["bps", "K", "S"], as_index=False)[["rec_rate_AB", "rec_rate_AC", "rec_rate_BC"]].mean()
-        .sort_values(["bps", "K", "S"])  # sort for consistent lines
-    )
-
-    fig, ax = plt.subplots(figsize=(12, 7))
-    # Color per (bps,K), styles per pair
-    from matplotlib import cm
-    from matplotlib.lines import Line2D
-    groups = agg[["bps", "K"]].drop_duplicates().reset_index(drop=True)
-    cmap = cm.get_cmap("tab20", len(groups))
-    group_to_color = {tuple(groups.loc[i, ["bps", "K"]].astype(int)): cmap(i) for i in range(len(groups))}
-
-    pair_to_col = {
-        "Alice-Bob": "rec_rate_AB",
-        "Alice-Eve": "rec_rate_AC",
-        "Bob-Eve": "rec_rate_BC",
-    }
-    pair_to_style = {"Alice-Bob": "-", "Alice-Eve": "--", "Bob-Eve": ":"}
-    for (bps_val, K_val), sub in agg.groupby(["bps", "K"], sort=False):
-        color = group_to_color[(int(bps_val), int(K_val))]
-        # Plot three lines with same color and different styles
-        for pair, col_name in pair_to_col.items():
-            # label = f"bps={int(bps_val)}, K={int(K_val)}" if pair == "Alice-Bob" else None
-            label = f"Z={int(bps_val)}" if pair == "Alice-Bob" else None
-            # Increase line width and marker size
-            linewidth = 2
-            marker_size = 8
-            ax.plot(
-                (K_val) / (K_val + sub["S"].values),
-                sub[col_name].values,
-                marker="o" if pair == "Alice-Bob" else None,
-                linestyle=pair_to_style[pair],
-                color=color,
-                label=label,
-                linewidth=linewidth,
-                markersize=marker_size,
-            )
-            # Annotate (N,K) above each marker for Alice-Bob line
-            if pair == "Alice-Bob":
-                x_vals = (K_val) / (K_val + sub["S"].values)
-                y_vals = sub[col_name].values
-                n_vals = (K_val + sub["S"].values).astype(int)
-                for xv, yv, nv in zip(x_vals, y_vals, n_vals):
-                    ax.annotate(
-                        f"RS({int(nv)},{int(K_val)})",
-                        xy=(xv, yv),
-                        xytext=(0, 6),
-                        textcoords="offset points",
-                        ha="center",
-                        va="bottom",
-                        fontsize=legend_font_size,
-                        color=color,
-                        zorder=5,
-                    )
-
-    ax.set_xlabel("RS Code Rate K/N")
-    # Increase the font size of the x axis label
-    ax.xaxis.label.set_fontsize(label_font_size)
-    ax.set_ylabel("Average Reconciliation Rate")
-    # Increase the font size of the y axis label
-    ax.yaxis.label.set_fontsize(label_font_size)
-    plot_title = title if title is not None else f"Average Reconciliation Rate vs RS Code Rate (B={target_L})"
-    ax.set_title(plot_title)
-    # Increase the font size of the title
-    ax.title.set_fontsize(title_font_size)
-    # Configure ticks and grid for precise value reading
-    ax.set_xlim(0.5, 1.0)
-    ax.set_ylim(0, 1.0)
-    ax.xaxis.set_major_locator(MultipleLocator(0.02))
-    ax.xaxis.set_minor_locator(MultipleLocator(0.01))
-    ax.yaxis.set_major_locator(MultipleLocator(0.05))
-    ax.yaxis.set_minor_locator(MultipleLocator(0.025))
-    ax.xaxis.set_major_formatter(FormatStrFormatter('%.2f'))
-    ax.yaxis.set_major_formatter(FormatStrFormatter('%.2f'))
-    # Make the x axis to tilt 45 degrees
-    ax.xaxis.set_tick_params(rotation=45)
-    ax.grid(which="major", axis="both", linestyle="--", alpha=0.5)
-    ax.grid(which="minor", axis="both", linestyle=":", alpha=0.3)
-    
-    # Size of text x and y axis ticks
-    ax.tick_params(axis='x', labelsize=tick_font_size)
-    ax.tick_params(axis='y', labelsize=tick_font_size)
-    
-    # First legend for groups (labels set only on AB lines)
-    group_legend = ax.legend(loc="upper left", title="Bits per Symbol", fontsize=legend_font_size, bbox_to_anchor=(0, 0.78))
-    ax.add_artist(group_legend)
-    # Second legend for pair linestyles
-    style_handles = [
-        Line2D([0], [0], color="black", linestyle=pair_to_style[pair], label=pair)
-        for pair in ["Alice-Bob", "Alice-Eve", "Bob-Eve"]
-    ]
-    # Move the leggend down so that it does not overlap with previous legend
-    ax.legend(handles=style_handles, title="Node Pair", loc="upper left", fontsize=legend_font_size)
-    # ax.legend(handles=style_handles, title="Node Pair", loc="upper left", fontsize=12)
-    # Invert x-axis so higher code rate appears on the left
-    ax.invert_xaxis()
-    plt.tight_layout()
-
-    if save_path is not None:
-        plt.savefig(save_path)
-    plt.show()
-    
 if __name__ == "__main__":
     '''
     Results file:  /home/Research/POWDER/Results/results_BDR_models_Sinusoid-Powder-OTA-Lab-Nodes-123_Sinusoid-Powder-OTA-Dense-Nodes-123_RNN.csv
@@ -1860,15 +1368,17 @@ if __name__ == "__main__":
     signal_type = "Sinusoid" # Sinusoid, PN-Sequence, deltaPulse
     
     node_Ids = {"Sinusoid":
-                    {"OTA-Lab": [[1,2,3],
-                            # [1,4,5],[1,4,8],[2,4,3],
-                            # [4,2,5],[4,2,8],[4,8,5],
-                            # [5,7,8],[5,8,7],[8,4,1],
-                            # [8,5,1],[8,5,4]
+                    {"OTA-Lab": [#[1,2,3],
+                             #[1,4,5]
+                            #,[1,4,8],[2,4,3],
+                            #[4,2,5],[4,2,8],[4,8,5],
+                            #[5,7,8],[5,8,7],[8,4,1],
+                            #[8,5,1],
+                            [8,5,4]
                             ],
-                    "OTA-Dense": [#[1,2,3],
-                                # [1,2,5],
-                                # [1,3,2],
+                    "OTA-Dense": [[1,2,3],
+                                #[1,2,5],
+                                  [1,3,2],
                                 # [4,3,5]
                                 ],
                     "Sionna-Ray-Tracing":[
@@ -1881,14 +1391,17 @@ if __name__ == "__main__":
                     "OTA-Dense": []
                 },
                 "deltaPulse": {
-                    "OTA-Lab": [[5,6,1],[5,6,2],[5,6,3],
-                                [5,6,4],[5,6,7],[5,6,8]],
+                    "OTA-Lab": [[5,6,1],
+                                # [5,6,2],[5,6,3],
+                                # [5,6,4],[5,6,7],[5,6,8]
                                 # [5,7,1],[5,7,2],[5,7,3],
                                 # [5,7,4]
+                                ],
                     "OTA-Dense": [[1,2,3],[1,2,4],[1,3,2],
                                   [1,3,4],[1,4,2],[1,4,3],
                                   [2,3,1],[2,3,4],[2,4,1],
-                                  [2,4,3],[3,4,1],[3,4,2]],
+                                  [2,4,3],[3,4,1],[3,4,2]
+                                  ],
                     "Sionna-Ray-Tracing":[]
                 }         
     }
@@ -1983,17 +1496,22 @@ if __name__ == "__main__":
             # shutil.copy(ModelsDir+model_name, ModelsDir+"Best_Model.h5")
         else:
             print("Using default model name")
-            # model_name = "Spectrogram_FeatureExtractor_RNN_in2048_out128_alpha0.5_beta0.5_gamma0.1_RMSprop_lr0.0001_deltaPulse-Powder-OTA-Lab-Nodes_2_1769443104.h5"
-            # model_name = "Spectrogram_FeatureExtractor_RNN_in2048_out128_alpha0.5_beta0.5_gamma0.1_RMSprop_lr0.0001_deltaPulse-Powder-OTA-Lab-Nodes_4_1769628988.h5"
-            # model_name = "Spectrogram_FeatureExtractor_RNN_QuantizationLayer_in2048_out128_alpha0.5_beta0.5_SGD_lr0.1_deltaPulse-Powder-OTA-Lab-Nodes_1_1769639369.h5"
-            # model_name = "Spectrogram_FeatureExtractor_RNN_QuantizationLayer_in2048_out2040_alpha0.5_beta0.5_gamma0.1_RMSprop_lr0.0001_deltaPulse-Powder-OTA-Lab-Nodes_1_1770149385.h5"
-            # model_name = "Spectrogram_FeatureExtractor_RNN_QuantizationLayerKDR_in2048_out2040_alpha0.5_beta0.5_gamma0.1_RMSprop_lr0.0001_deltaPulse-Powder-OTA-Lab-Nodes_1_1770153686.h5"
-            # model_name = "Spectrogram_FeatureExtractor_RNN_QuantizationLayerKDR_in2048_out2040_alpha0.5_beta0.5_gamma0.1_RMSprop_lr0.001_deltaPulse-Powder-OTA-Lab-Nodes_3_1770221691.h5"
-            # model_name = "Spectrogram_FeatureExtractor_RNN_QuantizationLayerKDR_in256_out128_alpha0.5_beta0.5_gamma0.1_SGD_lr0.1_Sinusoid-Powder-OTA-Lab-Nodes_6_1770314341.h5"
-            model_name = "Spectrogram_FeatureExtractor_ResNet_QuantizationLayerKDR_in256_out128_alpha0.1_beta0.1_SGD_lr0.1_Sinusoid-Powder-OTA-Lab-Nodes_1770686013.h5"
-            model_name = "Spectrogram_FeatureExtractor_ResNet_QuantizationLayerKDR_in256_out128_alpha0.2_beta0.2_SGD_lr0.1_Sinusoid-Powder-OTA-Lab-Nodes_1770689404.h5"
-            model_name = "Spectrogram_FeatureExtractor_ResNet_QuantizationLayer_in256_out128_alpha0.5_beta0.5_SGD_lr0.1_Sinusoid-Powder-OTA-Lab-Nodes_1770695531.h5"
-            model_name = "Spectrogram_FeatureExtractor_ResNet_in256_out128_alpha0.5_beta0.5_RMSprop_lr0.001_Sinusoid-Powder-OTA-Lab-Nodes_3_1770758541.onnx"
+            model_name_deltaPulse = "HashNet_Spectrogram_FeatureExtractor_RNN_QuantizationLayer_specmagnitude_phase_in2048_out128_margin0.3_Adam_lr0.0001_deltaPulse-Powder-OTA-Lab-Nodes_2_1771886380.keras"
+            model_name_Sinusoid = "HashNet_Spectrogram_FeatureExtractor_RNN_QuantizationLayer_specmagnitude_phase_in256_out128_margin0.3_Adam_lr0.0001_Sinusoid-Powder-OTA-Lab-Nodes_2_1771884478.keras"
+            # Find the latest file in the models directory by date
+            if signal_type == "deltaPulse":
+                model_name = model_name_deltaPulse
+            elif signal_type == "Sinusoid":
+                model_name = model_name_Sinusoid
+            getLatest = False
+            if getLatest:
+                model_files = [f for f in os.listdir(ModelsDir) if f.endswith(".keras")]
+                if not model_files:
+                    raise FileNotFoundError(f"No .keras models found in {ModelsDir}")
+                model_name = sorted(model_files, key=lambda x: os.path.getmtime(os.path.join(ModelsDir, x)))[-1]
+                print("Model name: ", model_name)
+            # print("Model name: ", model_name)
+            # exit()
     else:
         # model_name = sys.argv[1]
         # 0.2,0.4,0.3,SGD
@@ -2054,7 +1572,8 @@ if __name__ == "__main__":
     # model_name = "FeatureExtractor_512_alpha0.5_beta0.5_SGD_lr0.1_Sinusoid-Powder-OTA-Lab-Nodes_1758225804"
     # model_name = "Spectrogram_FeatureExtractor_RNN_in256_out128_alpha0.5_beta0.5_gamma0.1_RMSprop_lr0.0001_Sinusoid-Powder-OTA-Lab-Nodes_1761276429.h5"
     
+    print("Testing model name: ", model_name)
     feature_extractor_name = ModelsDir+model_name
-    test_model(model_name, test_node_configurations[data_collection_type_test], home=homeDir, generate_results=True)
+    test_model(model_name, test_node_configurations[data_collection_type_test], home=homeDir, generate_results=True, signal_type=signal_type)
     
     # Spectrogram_FeatureExtractor_RNN_in2048_out128_alpha0.5_beta0.5_gamma0.1_RMSprop_lr0.0001_deltaPulse-Powder-OTA-Lab-Nodes_1769122091.h5

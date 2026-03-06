@@ -404,7 +404,7 @@ class ChannelSpectrogram():
     
         return x_cropped
 
-    def _gen_single_channel_spectrogram(self, sig, win_len=256, overlap=128):
+    def _gen_single_channel_spectrogram(self, sig, win_len=256, overlap=128, processing="magnitude"):
         '''
         _gen_single_channel_ind_spectrogram converts the IQ samples to a channel
         independent spectrogram according to set window and overlap length.
@@ -434,8 +434,21 @@ class ChannelSpectrogram():
         # FFT shift to adjust the central frequency.
         spec = np.fft.fftshift(spec, axes=0)
         
-        # Take the logarithm of the magnitude.      
-        chan_spec_amp = np.log10(np.abs(spec)**2)
+        mode = str(processing).strip().lower()
+        eps = 1e-12
+        # Take the logarithm of the magnitude.
+        if mode == "magnitude":
+            chan_spec_amp = np.log10(np.abs(spec) ** 2 + eps).astype(np.float32)
+        elif mode == "complex":
+            # Two-channel tensor [real, imag], analogous to multi-channel images.
+            chan_spec_amp = np.stack([spec.real, spec.imag], axis=-1).astype(np.float32)
+        elif mode in ("magnitude_phase", "mag_phase"):
+            chan_spec_log_mag = np.log10(np.abs(spec) ** 2 + eps).astype(np.float32)
+            chan_spec_phase = np.angle(spec).astype(np.float32)
+            # Two-channel tensor [magnitude, phase].
+            chan_spec_amp = np.stack([chan_spec_log_mag, chan_spec_phase], axis=-1)
+        else:
+            raise ValueError(f"Invalid processing: {processing}")
         return chan_spec_amp
     
     def normalize_data(self, data):
@@ -447,7 +460,7 @@ class ChannelSpectrogram():
         normalized_data = (data - min_val) / (max_val - min_val)
         return normalized_data
         
-    def channel_spectrogram(self, data, FFTwindow=512):
+    def channel_spectrogram(self, data, FFTwindow=512, processing="magnitude"):
         '''
         channel_ind_spectrogram converts IQ samples to channel independent 
         spectrograms.
@@ -460,24 +473,39 @@ class ChannelSpectrogram():
         '''
         data = np.stack([np.asarray(pkt, dtype=np.complex64) for pkt in data])
         # Normalize the IQ samples.
-        data = self._normalization(data)
+        # data = self._normalization(data)
             
         # Calculate the size of channel independent spectrograms.
         win_len=FFTwindow # 128 | 256 | 512 --Smaller window will give better time resolution but worse freq. resolution and vice versa. 128 for N=8192 is the most balanced
-        overlap=win_len/2
+        overlap = int(win_len / 2)
         
         num_sample = data.shape[0]
-        # num_row = int(np.floor(win_len*0.4))
-        num_row = int(win_len)
-        num_column = int(np.ceil((data.shape[1]-win_len)/overlap + 1))
-        data_channel_spec = np.zeros([num_sample, num_row, num_column, 1])
+        # Probe first sample to determine output dimensions/channels for the selected mode.
+        first_spec = self._gen_single_channel_spectrogram(
+            data[0], win_len, overlap, processing=processing
+        )
+        if first_spec.ndim == 2:
+            num_row, num_column = first_spec.shape
+            num_channels = 1
+        elif first_spec.ndim == 3:
+            num_row, num_column, num_channels = first_spec.shape
+        else:
+            raise ValueError(
+                f"Unsupported spectrogram tensor rank {first_spec.ndim} for processing={processing}"
+            )
+        data_channel_spec = np.zeros([num_sample, num_row, num_column, num_channels], dtype=np.float32)
         
         # Convert each packet (IQ samples) to a channel independent spectrogram.
         for i in range(num_sample):
-            chan_spec_amp = self._gen_single_channel_spectrogram(data[i],win_len, overlap)
+            chan_spec_amp = self._gen_single_channel_spectrogram(
+                data[i], win_len, overlap, processing=processing
+            )
             # chan_spec_amp = self._spec_crop(chan_spec_amp)
             # chan_spec_amp = self.normalize_data(chan_spec_amp)
-            data_channel_spec[i,:,:,0] = chan_spec_amp
+            if chan_spec_amp.ndim == 2:
+                data_channel_spec[i, :, :, 0] = chan_spec_amp
+            else:
+                data_channel_spec[i, :, :, :] = chan_spec_amp
             
         return data_channel_spec
 

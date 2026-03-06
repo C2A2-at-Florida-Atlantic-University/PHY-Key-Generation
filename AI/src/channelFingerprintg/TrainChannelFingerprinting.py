@@ -2,8 +2,9 @@ import math
 from sklearn.model_selection import train_test_split
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
 from tensorflow.keras.optimizers import RMSprop, Adam, SGD
-from deep_learning_models import identity_loss, ResNet_QuadrupletNet_Channel, FeedForward_QuadrupletNet_Channel, RNN_QuadrupletNet_Channel, Transformer_QuadrupletNet_Channel, AE_QuadrupletNet_Channel
+from deep_learning_models import identity_loss, ResNet_QuadrupletNet_Channel, FeedForward_QuadrupletNet_Channel, RNN_QuadrupletNet_Channel, Transformer_QuadrupletNet_Channel, AE_QuadrupletNet_Channel, ResNet_HashNet_Channel, RNN_HashNet_Channel
 from DatasetHandler import DatasetHandler, ChannelSpectrogram, ChannelIQ, ChannelPolar
+from dataset_visualization import plot_data_scenario, plot_avg_min_max_power_scenario
 
 import time
 from TestChannelFingerprinting import test_model
@@ -19,28 +20,14 @@ if os.environ.get("POWDER_FORCE_CPU") == "1":
 import tensorflow as tf
 import matplotlib.pyplot as plt
 
-def export_feature_extractor_to_onnx(model, onnx_output_path: str):
-    """Export a Keras feature extractor to ONNX format."""
+def save_feature_extractor_keras(model, keras_output_path: str):
+    """Save a Keras feature extractor using native .keras format and validate reload."""
+    model.save(keras_output_path)
     try:
-        import tf2onnx
-    except ImportError as exc:
-        raise ImportError(
-            "tf2onnx is required to export ONNX models. "
-            "Install it with: pip install tf2onnx"
-        ) from exc
-
-    input_shape = model.input_shape
-    if isinstance(input_shape, list):
-        input_shape = input_shape[0]
-
-    signature_shape = [None] + list(input_shape[1:])
-    input_signature = (tf.TensorSpec(signature_shape, tf.float32, name="input"),)
-    tf2onnx.convert.from_keras(
-        model,
-        input_signature=input_signature,
-        opset=13,
-        output_path=onnx_output_path,
-    )
+        tf.keras.models.load_model(keras_output_path, compile=False, safe_mode=False)
+    except TypeError:
+        # Older tf.keras may not support safe_mode kwarg.
+        tf.keras.models.load_model(keras_output_path, compile=False)
 
 def set_reproducible(seed: int, deterministic: bool = True, max_threads: int = 1):
     """Set seeds and deterministic execution for reproducibility.
@@ -101,9 +88,11 @@ def train_channel_feature_extractor(data, labels, train_configurations, model_ty
         data = ChannelPolarObj.channel_polar(data)
     elif train_configurations[model_type]['data_type'] == "Spectrogram":
         ChannelSpectrogramObj = ChannelSpectrogram()
+        spectrogram_processing = train_configurations[model_type].get("spectrogram_processing", "magnitude")
         data = ChannelSpectrogramObj.channel_spectrogram(
             data,
-            train_configurations[model_type]['fft_len']
+            train_configurations[model_type]['fft_len'],
+            processing=spectrogram_processing
         )
 
     #NetObj =  TripletNet_Channel()
@@ -114,39 +103,61 @@ def train_channel_feature_extractor(data, labels, train_configurations, model_ty
     # Build model graph/variables on CPU to avoid H200 PTX JIT init failures.
     with tf.device('/CPU:0'):
         # Create an RFF extractor.
-        if network_type == "ResNet":
-            NetObj = ResNet_QuadrupletNet_Channel()
-        elif network_type == "FeedForward":
-            NetObj = FeedForward_QuadrupletNet_Channel()
-        elif network_type == "RNN":
-            NetObj = RNN_QuadrupletNet_Channel()
-        elif network_type == "Transformer":
-            NetObj = Transformer_QuadrupletNet_Channel()
-        elif network_type == "AE":
-            NetObj = AE_QuadrupletNet_Channel()
-        
-        if quantization_layer:
-            feature_extractor = NetObj.build_quantized_extractor(data.shape, output_length)
-        else:
+        if model_type == "HashNet":
+            # HashNet uses siamese architecture
+            if network_type == "ResNet":
+                NetObj = ResNet_HashNet_Channel()
+            elif network_type == "RNN":
+                NetObj = RNN_HashNet_Channel()
+            else:
+                raise ValueError(f"HashNet supports only ResNet or RNN network_type, got {network_type}")
+            
             feature_extractor = NetObj.feature_extractor(data.shape, output_length)
-        
-        # Create the quadruplet net using the RFF extractor.
-        loss_type = "KDR" if quantization_layer else ""
-        net = NetObj.create_quadruplet_net(
-            feature_extractor, 
-            train_configurations[model_type]['alpha'], 
-            train_configurations[model_type]['beta'], 
-            train_configurations[model_type]['gamma'] if 'gamma' in train_configurations[model_type] else None,
-            loss_type=loss_type
-        )
+            
+            # Create the siamese net using the RFF extractor.
+            margin = train_configurations[model_type].get('margin', 0.3)
+            net = NetObj.siammese_net(feature_extractor, m=margin)
+        else:
+            # QuadrupletNet architecture
+            if network_type == "ResNet":
+                NetObj = ResNet_QuadrupletNet_Channel()
+            elif network_type == "FeedForward":
+                NetObj = FeedForward_QuadrupletNet_Channel()
+            elif network_type == "RNN":
+                NetObj = RNN_QuadrupletNet_Channel()
+            elif network_type == "Transformer":
+                NetObj = Transformer_QuadrupletNet_Channel()
+            elif network_type == "AE":
+                NetObj = AE_QuadrupletNet_Channel()
+            else:
+                raise ValueError(f"Unknown network_type: {network_type}")
+            
+            if quantization_layer:
+                feature_extractor = NetObj.build_quantized_extractor(data.shape, output_length)
+            else:
+                feature_extractor = NetObj.feature_extractor(data.shape, output_length)
+            
+            # Create the quadruplet net using the RFF extractor.
+            loss_type = "KDR" if quantization_layer else ""
+            net = NetObj.create_quadruplet_net(
+                feature_extractor, 
+                train_configurations[model_type]['alpha'], 
+                train_configurations[model_type]['beta'], 
+                train_configurations[model_type]['gamma'] if 'gamma' in train_configurations[model_type] else None,
+                loss_type=loss_type
+            )
 
     # Create callbacks during training. The training stops when validation loss 
     # does not decrease for 30 epochs.
     patience = train_configurations[model_type]['patience']
     
-    early_stop = EarlyStopping('val_loss', 
-                                min_delta = 0, 
-                                patience = patience
+    early_stop = EarlyStopping(
+                                monitor='val_loss',
+                                min_delta=1e-4,
+                                patience=patience,
+                                mode='min',
+                                restore_best_weights=True,
+                                verbose=1
                                 )
     
     reduce_lr = ReduceLROnPlateau(monitor='val_loss', 
@@ -167,8 +178,7 @@ def train_channel_feature_extractor(data, labels, train_configurations, model_ty
                                  mode='min',
                                  save_weights_only=True)
     
-    # callbacks = [early_stop, reduce_lr, checkpoint]
-    callbacks = [reduce_lr]
+    callbacks = [early_stop, reduce_lr, checkpoint]
     
     validation_size= train_configurations[model_type]['validation_size']
     
@@ -235,6 +245,9 @@ def train_channel_feature_extractor(data, labels, train_configurations, model_ty
                         validation_steps = data_valid.shape[0]//batch_size,
                         verbose=1, 
                         callbacks = callbacks)
+    # Prefer checkpoint-selected weights when available.
+    if os.path.exists(checkpoint_filename):
+        net.load_weights(checkpoint_filename)
     # Save the history and reproducibility metadata
     with h5py.File(ResultsDir+"History_"+model_name, "w") as f:
                         f.create_dataset("train_loss",data=history.history['loss'])
@@ -242,102 +255,24 @@ def train_channel_feature_extractor(data, labels, train_configurations, model_ty
                         f.close()
                         
     timestamp = int(time.time())
-    # filename = model_name +'_'+str(timestamp)+'.h5'
-    onnx_filename = model_name +'_'+str(timestamp)+'.onnx'
+    keras_filename = model_name +'_'+str(timestamp)+'.keras'
     
     # feature_extractor.save(ModelsDir+filename)
     # print("Saving file: ", filename)
     try:
-        export_feature_extractor_to_onnx(feature_extractor, ModelsDir + onnx_filename)
-        print("Saving ONNX file: ", onnx_filename)
+        save_feature_extractor_keras(feature_extractor, ModelsDir + keras_filename)
+        print("Saving Keras file: ", keras_filename)
     except Exception as exc:
-        print("WARNING: ONNX export failed:", exc)
+        print("WARNING: .keras save failed:", exc)
     
     return feature_extractor
 
-def plot_data_scenario(data, index_start, filename):
-    example_data = {"AB": data[index_start], "AE": data[index_start+1], "BA": data[index_start+2], "BE": data[index_start+3]}
-    
-    fig, axes = plt.subplots(4, 2, figsize=(10, 10))
-    
-    for i, (label, data) in enumerate(example_data.items()):
-        axes[i, 0].plot(data.real, label='Real')
-        axes[i, 0].plot(data.imag, label='Imaginary')
-        axes[i, 0].set_title("IQ Samples "+label)
-        axes[i, 0].set_xlabel("Sample Number")
-        axes[i, 0].set_ylabel("Amplitude")
-        axes[i, 0].legend()
-    
-    fft_len = 2048 # 2048
-    overlap = fft_len/2
-    ChannelSpectrogramObj = ChannelSpectrogram()
-    for i, (label, data) in enumerate(example_data.items()):
-        spectrogram = ChannelSpectrogramObj._gen_single_channel_spectrogram(data, fft_len, overlap)
-        arr = np.asarray(spectrogram)
-        axes[i, 1].imshow(arr, aspect='auto', cmap='jet')
-        axes[i, 1].set_title("Spectrogram "+label)
-        axes[i, 1].set_xlabel("Frequency")
-        axes[i, 1].set_ylabel("Time")
-
-    plt.tight_layout()
-    plt.show()
-    plt.savefig(filename)
-    
-# Plot the avg power of the data for each scenario
-def plot_avg_power_scenario(data, ScenarioStartIndex, DataPerScenario, filename):
-    # Get entire data greatest and lowest values
-    greatest_value = np.max(data)
-    lowest_value = np.min(data)
-    avg_power = {"AB": [], "AE": [], "BA": [], "BE": []}
-    i = 0
-    data = data[ScenarioStartIndex:ScenarioStartIndex+DataPerScenario]
-    while i < data.shape[0]:
-        avg_power["AB"].append(np.mean(np.abs(data[i])**2))
-        avg_power["AE"].append(np.mean(np.abs(data[i+1])**2))
-        avg_power["BA"].append(np.mean(np.abs(data[i+2])**2))
-        avg_power["BE"].append(np.mean(np.abs(data[i+3])**2))
-        i += 4
-    fig, axes = plt.subplots(4, 1, figsize=(10, 10))
-    for i, (label, power) in enumerate(avg_power.items()):
-        axes[i].plot(power, label=label)
-        axes[i].set_title("Avg Power of "+label)
-        axes[i].set_xlabel("Sample Number")
-        axes[i].set_ylabel("Avg Power (dB)")
-        axes[i].legend()
-    plt.tight_layout()
-    plt.show()
-    plt.savefig(filename+".png")
-    
-def plot_avg_min_max_power_scenario(data, ScenarioStartIndex, DataPerScenario, filename):
-    # Get entire data greatest and lowest values
-    greatest_value = np.max(data)
-    lowest_value = np.min(data)
-    avg_power = {"AB": [], "AE": [], "BA": [], "BE": []}
-    i = 0
-    data = data[ScenarioStartIndex:ScenarioStartIndex+DataPerScenario]
-    while i < data.shape[0]:
-        # Get the average from the greatest and lowest values of each sample
-        avg_power["AB"].append(np.mean(np.abs([np.max(data[i])**2, np.min(data[i])**2])))
-        avg_power["AE"].append(np.mean(np.abs([np.max(data[i+1])**2, np.min(data[i+1])**2])))
-        avg_power["BA"].append(np.mean(np.abs([np.max(data[i+2])**2, np.min(data[i+2])**2])))
-        avg_power["BE"].append(np.mean(np.abs([np.max(data[i+3])**2, np.min(data[i+3])**2])))
-        i += 4
-    fig, axes = plt.subplots(4, 1, figsize=(10, 10))
-    for i, (label, power) in enumerate(avg_power.items()):
-        axes[i].plot(power, label=label)
-        axes[i].set_title("Avg Min Max Power of "+label)
-        axes[i].set_xlabel("Sample Number")
-        axes[i].set_ylabel("Avg Min Max Power (dB)")
-        axes[i].legend()
-    plt.tight_layout()
-    plt.show()
-    plt.savefig(filename+".png")
-
 if __name__ == "__main__":
     homeDir = "/home/Research/POWDER/"
+    ModelsDir = homeDir+"Models/"
     # Central seed for full reproducibility of data shuffling, initialization, and training
     
-    signal_type = "Sinusoid" # Sinusoid, PN-Sequence, deltaPulse
+    signal_type = "deltaPulse" # Sinusoid, PN-Sequence, deltaPulse
     
     node_Ids = {"Sinusoid":
                     {"OTA-Lab": [# [1,2,3],
@@ -434,7 +369,10 @@ if __name__ == "__main__":
     # Find the example with the most number of samples
     max_num_samples = np.max([example.shape[0] for example in data])
     print("Example with the most number of samples: ", max_num_samples)
-    min_num_samples = 8192
+    if signal_type == "deltaPulse":
+        min_num_samples = int(8192*2)
+    else:
+        min_num_samples = int(8192)
     # Resize the data in examples to the least number of samples
     data = np.array([example[-min_num_samples:] for example in data])
     print("Data shape: ", data.shape)
@@ -461,12 +399,25 @@ if __name__ == "__main__":
     print("Total data: ", TotalData)
     print("Data per scenario: ", DataPerScenario)
     
+    train_plot_dir = os.path.join(homeDir, "Results", "TrainDatasetPlots")
+    os.makedirs(train_plot_dir, exist_ok=True)
     for i in range(numberOfScenarios):
         ScenarioStartIndex = int(i*DataPerScenario)
-        plot_data_scenario(data, ScenarioStartIndex, "XTEST_IQ_Spectrogram_scenario_"+str(i)+".png")
+        plot_data_scenario(
+            data,
+            ScenarioStartIndex,
+            os.path.join(train_plot_dir, "TRAIN_IQ_Spectrogram_scenario_" + str(i) + ".png"),
+            show_plot=False,
+        )
         # plot_avg_power_scenario(data, ScenarioStartIndex, DataPerScenario, "XTEST_Avg_Power_scenario_"+str(i)+".png")
-        plot_avg_min_max_power_scenario(data, ScenarioStartIndex, DataPerScenario, "XTEST_Avg_Min_Max_Power_scenario_"+str(i)+".png")
-    # exit()
+        plot_avg_min_max_power_scenario(
+            data,
+            ScenarioStartIndex,
+            DataPerScenario,
+            os.path.join(train_plot_dir, "TRAIN_Avg_Min_Max_Power_scenario_" + str(i)),
+            show_plot=False,
+        )
+
     # Locate locations for delta pulses
     # def locate_delta_pulse(example_data):
     #     """
@@ -621,22 +572,28 @@ if __name__ == "__main__":
     # plt.colorbar()
     # plt.savefig("XTEST_IQ_Pulses_Spectrograms_per_pulse.png")
     # exit()
-    
+    model_type = "HashNet" # "HashNet", "QuadrupletNet", "TripletNet"
+    data_type = "Spectrogram" 
+    # data_types = ["IQ", "Polar", "Spectrogram"] # ["IQ", "Polar", "Spectrogram"]
+    spectrogram_processing = "magnitude_phase"  # "magnitude", "complex", "magnitude_phase"
     batch_size = 128 
-    fft_len = int(256) #256
-    patience = 100
-    maxEpochs = 200
+    if signal_type == "Sinusoid":
+        fft_len = int(256)
+    elif signal_type == "deltaPulse":
+        fft_len = int(2048)
+    else:
+        fft_len = int(256)
+    patience = 200
+    maxEpochs = 1000
     val_size = 0.1
     factor = 0.1
-    alphas = [0.5] # [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]
-    betas = [0.5] # [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]
-    gammas = [0] # [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]
+    alphas = [0.3] # [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]
+    betas = [alphas[0]] # [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]
+    gammas = [0.1] # [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]
     FFT_lengths = [fft_len]
     output_lengths = [128] # Need to define the output length and why based on 255 constraint (bytes)
-    optimizers = ["RMSprop"] # "RMSprop", "SGD", "Adam"
-    network_types = ["ResNet"] # ["ResNet", "FeedForward", "RNN", "Transformer", "AE"]
-    # data_types = ["IQ", "Polar", "Spectrogram"] # ["IQ", "Polar", "Spectrogram"]
-    data_type = "Spectrogram" 
+    optimizers = ["Adam"] # "RMSprop", "SGD", "Adam"
+    network_types = ["RNN"] # ["ResNet", "FeedForward", "RNN", "Transformer", "AE"]
     quantization_layer = True
     for fft_len in FFT_lengths:
         for output_length in output_lengths:
@@ -647,18 +604,33 @@ if __name__ == "__main__":
                             for o in optimizers:
                                 # b = a
                                 if o == "RMSprop":
-                                    lr = 0.001
+                                    lr = 0.0001
                                 elif o == "SGD":
                                     lr = 0.1
                                 elif o == "Adam":
-                                    lr = 0.001
+                                    lr = 0.0001
                                 print("Alpha: ", a, "Beta: ", b, "Gamma: ", g, "Optimizer: ", o, "Network Type: ", network_type)
                                 train_configurations = {
+                                    "HashNet": {
+                                        "margin": a,
+                                        "data_type": data_type,
+                                        "spectrogram_processing": spectrogram_processing,
+                                        "fft_len": fft_len,
+                                        "output_length": output_length,
+                                        "batch_size": batch_size,
+                                        "validation_size": val_size,
+                                        "LearningRate": lr,
+                                        "epochs": maxEpochs,
+                                        "patience": patience,
+                                        "factor": factor,
+                                        "optimizer": o,
+                                    },
                                     "QuadrupletNet": {
                                         "alpha": a,
                                         "beta": b,
-                                        # "gamma": g,
+                                        "gamma": g,
                                         "data_type": data_type,
+                                        "spectrogram_processing": spectrogram_processing,
                                         "fft_len": fft_len,
                                         "output_length": output_length,
                                         "batch_size": batch_size,
@@ -673,6 +645,7 @@ if __name__ == "__main__":
                                         "alpha": a,
                                         "beta": b,
                                         "data_type": data_type,
+                                        "spectrogram_processing": spectrogram_processing,
                                         "fft_len": fft_len,
                                         "output_length": output_length,
                                         "batch_size": batch_size,
@@ -684,21 +657,37 @@ if __name__ == "__main__":
                                         "optimizer": o
                                     }
                                 }
-                                model_type = "QuadrupletNet"
                                 
-                                filename_start = train_configurations[model_type]['data_type'] \
-                                        +'_FeatureExtractor_'+network_type \
-                                        +('_QuantizationLayer' if quantization_layer else "") \
-                                        +'_in'+str(train_configurations[model_type]["fft_len"]) \
-                                        +'_out'+str(train_configurations[model_type]["output_length"]) \
-                                        +'_alpha'+str(train_configurations[model_type]["alpha"]) \
-                                        +'_beta'+str(train_configurations[model_type]["beta"]) \
-                                        +('_gamma'+str(train_configurations[model_type]["gamma"]) if "gamma" in train_configurations[model_type] else "") \
-                                        +'_'+train_configurations[model_type]['optimizer'] \
-                                        +'_lr'+str(train_configurations[model_type]["LearningRate"]) \
-                                        +'_'+configuration["config_name"]+'_'+str(3)
-                                
-                                ModelsDir = homeDir+"Models/"
+                                if model_type == "HashNet":
+                                    spec_suffix = ""
+                                    if train_configurations[model_type]["data_type"] == "Spectrogram":
+                                        spec_suffix = "_spec" + str(train_configurations[model_type].get("spectrogram_processing", "magnitude"))
+                                    filename_start = model_type+'_'+train_configurations[model_type]['data_type'] \
+                                            +'_FeatureExtractor_'+network_type \
+                                            +('_QuantizationLayer' if quantization_layer else "") \
+                                            +spec_suffix \
+                                            +'_in'+str(train_configurations[model_type]["fft_len"]) \
+                                            +'_out'+str(train_configurations[model_type]["output_length"]) \
+                                            +'_margin'+str(train_configurations[model_type]["margin"]) \
+                                            +'_'+train_configurations[model_type]['optimizer'] \
+                                            +'_lr'+str(train_configurations[model_type]["LearningRate"]) \
+                                            +'_'+configuration["config_name"]+'_'+str(2)
+                                else:
+                                    spec_suffix = ""
+                                    if train_configurations[model_type]["data_type"] == "Spectrogram":
+                                        spec_suffix = "_spec" + str(train_configurations[model_type].get("spectrogram_processing", "magnitude"))
+                                    filename_start = train_configurations[model_type]['data_type'] \
+                                            +'_FeatureExtractor_'+network_type \
+                                            +('_QuantizationLayer' if quantization_layer else "") \
+                                            +spec_suffix \
+                                            +'_in'+str(train_configurations[model_type]["fft_len"]) \
+                                            +'_out'+str(train_configurations[model_type]["output_length"]) \
+                                            +'_alpha'+str(train_configurations[model_type]["alpha"]) \
+                                            +'_beta'+str(train_configurations[model_type]["beta"]) \
+                                            +('_gamma'+str(train_configurations[model_type]["gamma"]) if "gamma" in train_configurations[model_type] else "") \
+                                            +'_'+train_configurations[model_type]['optimizer'] \
+                                            +'_lr'+str(train_configurations[model_type]["LearningRate"]) \
+                                            +'_'+configuration["config_name"]
                                 
                                 model_exisits = False
                                 # Check if there is a file that starts with the same name

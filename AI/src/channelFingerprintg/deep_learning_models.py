@@ -6,6 +6,35 @@ from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Input, Lambda, ReLU, Add, Dense, Conv2D, Conv2DTranspose, Flatten, AveragePooling2D, Dropout, BatchNormalization, Reshape, Permute, GlobalAveragePooling1D, Bidirectional, GRU, MultiHeadAttention, LayerNormalization, Concatenate
 from tensorflow.keras.regularizers import l2
 
+
+@tf.keras.utils.register_keras_serializable(package="channelFingerprintg")
+class STEQuantizationLayer(tf.keras.layers.Layer):
+    """Serializable STE quantization layer for stable .keras save/load."""
+    def __init__(self, threshold=0.5, low=0.0, high=1.0, **kwargs):
+        super().__init__(**kwargs)
+        self.threshold = float(threshold)
+        self.low = float(low)
+        self.high = float(high)
+
+    def call(self, inputs):
+        hard = tf.where(inputs > self.threshold, self.high, self.low)
+        # Straight-through estimator: hard forward, identity gradient.
+        return inputs + tf.stop_gradient(hard - inputs)
+
+    def compute_output_shape(self, input_shape):
+        return input_shape
+
+    def get_config(self):
+        config = super().get_config()
+        config.update(
+            {
+                "threshold": self.threshold,
+                "low": self.low,
+                "high": self.high,
+            }
+        )
+        return config
+
 def divisible_random(a, b, n, rng: random.Random = None):
     """Random integer in [a, b] divisible by n. Uses provided RNG if given.
 
@@ -27,13 +56,13 @@ def identity_loss(y_true, y_pred):
 def straight_through_quantize(x, threshold=0.5):
     """Hard quantization with straight-through estimator for gradients.
     
-    Forward pass: returns hard binary values (0 or 1)
+    Forward pass: returns hard binary values (1 or -1)
     Backward pass: passes gradients through as if it were identity (STE)
     
     This allows the network to learn while still producing binary outputs.
     """
     # Forward: hard threshold
-    y = tf.cast(x > threshold, dtype=tf.float32)
+    y = tf.cast(x > threshold, dtype=tf.float32) * 2.0 - 1.0
     
     def grad(dy):
         # Backward: pass gradients straight through (identity)
@@ -45,11 +74,8 @@ def straight_through_quantize(x, threshold=0.5):
 
 
 def ste_quantize_layer(threshold=0.5):
-    """Returns a Lambda layer that applies straight-through quantization."""
-    return Lambda(
-        lambda t: straight_through_quantize(t, threshold),
-        name="quantization_ste"
-    )
+    """Returns a serializable STE quantization layer with {-1, +1} outputs."""
+    return STEQuantizationLayer(threshold=threshold, low=-1.0, high=1.0, name="quantization_ste")
 
 
 class TripletNet_Channel():
@@ -206,6 +232,15 @@ class TripletNet_Channel():
 class QuadrupletNet():
     def __init__(self):
         pass
+    
+    def _scaled_margin_01_to_sqdist(self, margin_01, output_length, margin_name):
+        """Scale normalized [0,1] margin to squared-distance margin."""
+        if margin_01 is None:
+            return None
+        margin_01 = float(margin_01)
+        if margin_01 < 0.0 or margin_01 > 1.0:
+            raise ValueError(f"{margin_name} must be in [0,1] when margin scaling is enabled, got {margin_01}")
+        return margin_01 * float(output_length)
         
     def create_quadruplet_net(self, embedding_net, alpha, beta, gamma=None, loss_type=""):
         
@@ -214,24 +249,39 @@ class QuadrupletNet():
         self.beta = beta
         self.gamma = gamma
         
+        # Optional DSH-style scaling: normalized margins [0,1] -> squared-distance units.
+        if getattr(self, "scale_margins_by_output", False):
+            output_length = int(embedding_net.output_shape[-1])
+            self.alpha = self._scaled_margin_01_to_sqdist(self.alpha, output_length, "alpha")
+            self.beta = self._scaled_margin_01_to_sqdist(self.beta, output_length, "beta")
+            self.gamma = self._scaled_margin_01_to_sqdist(self.gamma, output_length, "gamma")
+        
+        # Optional dual-branch behavior: use soft embedding branch for loss gradients.
+        loss_embedding_net = embedding_net
+        if getattr(self, "use_soft_codes_for_loss", False):
+            for soft_layer_name in ("output_soft", "hash_bits_soft"):
+                try:
+                    soft_layer = embedding_net.get_layer(soft_layer_name)
+                    loss_embedding_net = Model(
+                        inputs=embedding_net.input,
+                        outputs=soft_layer.output,
+                        name=f"{embedding_net.name}_soft_for_loss"
+                    )
+                    break
+                except ValueError:
+                    continue
+        
         input_1 = Input([self.datashape[1],self.datashape[2],self.datashape[3]])
         input_2 = Input([self.datashape[1],self.datashape[2],self.datashape[3]])
         input_3 = Input([self.datashape[1],self.datashape[2],self.datashape[3]])
         input_4 = Input([self.datashape[1],self.datashape[2],self.datashape[3]])
         
-        A = embedding_net(input_1)
-        P = embedding_net(input_2)
-        N1 = embedding_net(input_3)
-        N2 = embedding_net(input_4)
+        A = loss_embedding_net(input_1)
+        P = loss_embedding_net(input_2)
+        N1 = loss_embedding_net(input_3)
+        N2 = loss_embedding_net(input_4)
         
-        if loss_type == "KDR":
-            # loss = Lambda(self.quadruplet_loss_KDR)([A, P, N1, N2]) 
-            print("Using targeted KDR quadruplet loss")
-            loss = Lambda(self.targeted_kdr_quadruplet_loss)([A, P, N1, N2]) 
-        else:
-            # loss = Lambda(self.quadruplet_loss)([A, P, N1, N2]) 
-            print("Using quadruplet target band loss")
-            loss = Lambda(self.quadruplet_target_band_loss)([A, P, N1, N2]) 
+        loss = Lambda(self.quadruplet_loss)([A, P, N1, N2]) 
             
         return Model(inputs=[input_1, input_2, input_3, input_4], outputs=loss)
 
@@ -296,49 +346,10 @@ class QuadrupletNet():
         KDR_PN = kdr(positive, negative2)    # Should be HIGH (~0.5)
         KDR_NN = kdr(negative1, negative2)   # Should be HIGH (~0.5)
         
-        # =====================================================================
-        # LOSS 1: Similarity - minimize KDR between anchor and positive
-        # =====================================================================
-        # similarity_loss = tf.reduce_mean(KDR_AP)
         if self.gamma is not None:
             loss = tf.maximum(KDR_AP - KDR_AN + self.alpha, 0.0) + tf.maximum(KDR_AP - KDR_PN + self.beta, 0.0) + tf.maximum(KDR_AP - KDR_NN + self.gamma, 0.0)
         else:
             loss = tf.maximum(KDR_AP - KDR_AN + self.alpha, 0.0) + tf.maximum(KDR_AP - KDR_PN + self.beta, 0.0)
-        
-        
-        
-        # =====================================================================
-        # LOSS 3: Entropy - encourage ~50% ones (balanced bits)
-        # =====================================================================
-        all_emb = tf.concat([anchor, positive, negative1, negative2], axis=0)
-        bit_means = tf.reduce_mean(all_emb, axis=1)
-        entropy_loss = tf.reduce_mean(tf.square(bit_means - 0.5))
-        # Calculate entropy of each embedding to have a balanced bit distribution
-        # anchor_entropy = tf.reduce_mean(tf.square(anchor - 0.5))
-        # positive_entropy = tf.reduce_mean(tf.square(positive - 0.5))
-        # negative1_entropy = tf.reduce_mean(tf.square(negative1 - 0.5))
-        # negative2_entropy = tf.reduce_mean(tf.square(negative2 - 0.5))
-        # entropy_loss = tf.reduce_mean(anchor_entropy + positive_entropy + negative1_entropy + negative2_entropy)
-        
-        # =====================================================================
-        # LOSS 4: Diversity - different samples should produce different embeddings
-        # =====================================================================
-        anchor_shifted = tf.roll(anchor, shift=1, axis=0)
-        within_kdr = kdr(anchor, anchor_shifted)
-        diversity_loss = tf.reduce_mean(tf.maximum(0.1 - within_kdr, 0.0))
-        # Check diversity by calculating entropy across all embeddings in the batch
-        # all_emb = tf.concat([anchor, positive, negative1, negative2], axis=0)
-        # bit_means = tf.reduce_mean(all_emb, axis=1)
-        # diversity_loss = tf.reduce_mean(tf.square(bit_means - 0.5))
-        
-        # =====================================================================
-        # COMBINED LOSS
-        # =====================================================================
-        # loss = (
-        #     loss                       # Push Alice-Bob KDR → 0
-        #     + entropy_weight * entropy_loss         # Balanced bits
-        #     # + diversity_weight * diversity_loss       # Different inputs → different outputs
-        # )
         
         return loss
     
@@ -365,9 +376,9 @@ class QuadrupletNet():
             base = v_pos + v_an + v_pn + w_nn*v_nn
 
         loss = tf.reduce_mean(base)
-
+        
         return loss
-
+    
     def quantization_layer(self,x):
         ones = tf.ones_like(x)
         zeros = tf.zeros_like(x)
@@ -462,7 +473,10 @@ class ResNet_QuadrupletNet_Channel(QuadrupletNet):
         self.datashape = datashape
         reg = l2(0.001)  # Define L2 regularizer
         inputs = Input(shape=([self.datashape[1],self.datashape[2],self.datashape[3]]))
-        x = Conv2D(32, 7, strides = 2, activation='relu', padding='same', kernel_regularizer=reg)(inputs)
+        # Per-sample normalization improves robustness under indoor/outdoor
+        # distribution shift by reducing absolute power-scale dependence.
+        x = LayerNormalization(axis=[1, 2, 3], epsilon=1e-6, name="hash_input_norm")(inputs)
+        x = Conv2D(32, 7, strides = 2, activation='relu', padding='same', kernel_regularizer=reg)(x)
         x =  Dropout(0.3)(x)
         x = self.resblock(x, 3, 32, first_layer = True)
         for _ in range(1):
@@ -552,7 +566,7 @@ class RNN_QuadrupletNet_Channel(QuadrupletNet):
     def __init__(self,
                  gru_units=256,
                  dropout=0.3,
-                 recurrent_dropout=0.1,
+                 recurrent_dropout=0,
                  bidirectional=True,
                  num_layers=2):
         self.gru_units = gru_units
@@ -560,6 +574,8 @@ class RNN_QuadrupletNet_Channel(QuadrupletNet):
         self.recurrent_dropout = recurrent_dropout
         self.bidirectional = bidirectional
         self.num_layers = num_layers
+        self.scale_margins_by_output = True
+        self.use_soft_codes_for_loss = True
 
     def feature_extractor(self, datashape, output_length):
         """
@@ -579,12 +595,14 @@ class RNN_QuadrupletNet_Channel(QuadrupletNet):
         
         # Input: spectrogram (F, T, C)
         inputs = Input(shape=(F, T, C))
+        x = LayerNormalization(axis=[1, 2, 3], epsilon=1e-6, name="rnn_quad_input_norm")(inputs)
         
         # Step 1: Permute to (T, F, C) - time becomes sequence dimension
-        x = Permute((2, 1, 3))(inputs)
+        x = Permute((2, 1, 3))(x)
         
         # Step 2: Reshape to (T, F*C) - flatten frequency & channels per timestep
         x = Reshape((T, F * C))(x)
+        x = LayerNormalization(axis=-1, epsilon=1e-6, name="rnn_quad_step_norm")(x)
         
         # Step 3: Stacked GRU layers
         for i in range(self.num_layers):
@@ -594,7 +612,8 @@ class RNN_QuadrupletNet_Channel(QuadrupletNet):
                 self.gru_units,
                 return_sequences=return_sequences,
                 dropout=self.dropout,
-                # recurrent_dropout=self.recurrent_dropout,
+                recurrent_dropout=self.recurrent_dropout,
+                reset_after=True,
                 name=f"gru_{i+1}"
             )
             
@@ -611,11 +630,11 @@ class RNN_QuadrupletNet_Channel(QuadrupletNet):
         # Step 4: Project to output dimension
         hidden_dim = self.gru_units * 2 if self.bidirectional else self.gru_units
         x = Dense(hidden_dim, activation='relu', name="projection")(x)
-        x = BatchNormalization()(x)
+        x = LayerNormalization(name="projection_ln")(x)
         x = Dropout(self.dropout)(x)
         
-        # Step 5: Output layer with sigmoid for [0, 1] values
-        x = Dense(output_length, activation='sigmoid', name="output")(x)
+        # Step 5: soft output branch used for quadruplet loss.
+        x = Dense(output_length, activation='sigmoid', name="output_soft")(x)
         
         return Model(inputs, x, name="RNN_ChannelEncoder")
 
@@ -628,69 +647,8 @@ class RNN_QuadrupletNet_Channel(QuadrupletNet):
         - Backward: Gradients pass through as identity
         """
         base = self.feature_extractor(datashape, output_length)
-        q_out = ste_quantize_layer(threshold)(base.output)
+        q_out = ste_quantize_layer_HashNet(threshold)(base.output)
         return Model(base.input, q_out, name="RNN_ChannelEncoder_Quantized")
-    
-class RNN_QuadrupletNet_Channel2(QuadrupletNet):
-    """
-    GRU over time axis:
-      - Treat spectrogram time (W) as sequence; features per step = F*C
-      - Bi-GRU -> pooling -> 512-D embedding.
-    """
-    def __init__(self,
-                 embed_dim=512,
-                 gru_units=384,
-                 td_width=256,
-                 dropout=0.3,
-                 recurrent_dropout=0.0,
-                 l2_w=1e-3,
-                 bidirectional=True,
-                 num_gru_layers=1,
-                 use_attention=False,
-                 n_heads=4,
-                 ff_multiplier=2):
-        self.embed_dim = embed_dim
-        self.gru_units = gru_units
-        self.td_width = td_width
-        self.dropout = dropout
-        self.recurrent_dropout = recurrent_dropout
-        self.l2_w = l2_w
-        self.bidirectional = bidirectional
-        self.num_gru_layers = num_gru_layers
-        self.use_attention = use_attention
-        self.n_heads = n_heads
-        self.ff_multiplier = ff_multiplier
-
-    def feature_extractor(self, datashape, output_length):
-        F, T, C = datashape[1], datashape[2], datashape[3]
-        reg = l2(self.l2_w)
-        
-        inputs = Input(shape=(F, T, C))
-        x = Permute((2, 1, 3))(inputs)           # (T, F, C)
-        x = Reshape((T, F * C))(x)               # (T, F*C)
-        
-        # Project to working dimension
-        x = Dense(self.embed_dim, kernel_regularizer=reg)(x)
-        x = LayerNormalization()(x)
-        x = Dropout(self.dropout)(x)
-        
-        # GRU layer - use the __init__ parameter!
-        gru = GRU(self.gru_units, return_sequences=False,  # Only need final state
-                dropout=self.dropout, 
-                recurrent_dropout=self.recurrent_dropout)
-        if self.bidirectional:
-            x = Bidirectional(gru)(x)
-        else:
-            x = gru(x)
-        
-        # Projection head (after pooling, much cheaper)
-        x = Dense(output_length, kernel_regularizer=reg)(x)
-        x = BatchNormalization()(x)
-        x = ReLU()(x)
-        x = Dense(output_length, activation='sigmoid', 
-                kernel_initializer="lecun_normal")(x)
-        
-        return Model(inputs, x, name="GRU_Encoder")
     
 # Transformer model
 class Transformer_QuadrupletNet_Channel(QuadrupletNet):
@@ -863,42 +821,106 @@ class AE_QuadrupletNet_Channel(QuadrupletNet):
         autoencoder = Model(enc_in, ae_out, name="CAE_Pretrain")
 
         return encoder, autoencoder
+    
+def straight_through_quantize_HashNet(threshold=0.5):
+    @tf.custom_gradient
+    def _op(x):
+        y = tf.cast(x > threshold, tf.float32)
+        def grad(dy):
+            return dy
+        return y, grad
+    return _op
+
+
+def ste_quantize_layer_HashNet(threshold=0.5):
+    """Returns a serializable STE quantization layer with {0, 1} outputs."""
+    return STEQuantizationLayer(threshold=threshold, low=0.0, high=1.0, name="quantization_ste")
+
+def bit_balance_penalty(bits):
+    m = tf.reduce_mean(bits, axis=0)      # (k,)
+    return tf.reduce_mean((m - 0.5)**2)
 
 class SiammeseHashNet():
     
-    def __init__(self):
-        pass
+    def __init__(self, reg_weight=0.1):
+        # DSH-style regularization strength to encourage binary-like outputs.
+        self.reg_weight = reg_weight
+
+    def _scaled_margin_01_to_sqdist(self, margin_01, output_length):
+        """Map normalized margin in [0,1] to squared-distance margin.
+
+        In the current [0,1] code space, for hard binary codes:
+          D(a, b) = ||a-b||^2 equals Hamming distance in [0, output_length].
+        So a normalized margin in [0,1] is scaled by output_length.
+        """
+        margin_01 = float(margin_01)
+        if margin_01 < 0.0 or margin_01 > 1.0:
+            raise ValueError(f"HashNet margin must be in [0,1], got {margin_01}")
+        return margin_01 * float(output_length)
     
     def siammese_net(self, embedding_net, m=0.2):
         
-        self.m = m # Margin threshold
+        output_length = embedding_net.output_shape[1]
+        # Convert normalized margin to squared-distance threshold.
+        self.m = self._scaled_margin_01_to_sqdist(m, output_length)
+        # Build a soft branch view (sigmoid codes) for training loss, while
+        # keeping the main embedding_net output hard-binarized for inference.
+        try:
+            soft_output = embedding_net.get_layer("hash_bits_soft").output
+        except ValueError as exc:
+            raise ValueError(
+                "Expected layer 'hash_bits_soft' in embedding_net for dual-output HashNet training."
+            ) from exc
+        soft_embedding_net = Model(
+            inputs=embedding_net.input,
+            outputs=soft_output,
+            name=f"{embedding_net.name}_soft_branch"
+        )
         
         input_1 = Input([self.datashape[1],self.datashape[2],self.datashape[3]])
         input_2 = Input([self.datashape[1],self.datashape[2],self.datashape[3]])
-        label_1 = Input(shape=(1,))
-        label_2 = Input(shape=(1,))
+        label_y = Input(shape=(1,))
         
-        A = embedding_net(input_1)
-        P = embedding_net(input_2)
+        # Use soft sigmoid embeddings for Siamese loss to improve optimization.
+        A = soft_embedding_net(input_1)
+        P = soft_embedding_net(input_2)
         
+        loss = Lambda(
+            self.siammese_hamming_loss,
+            output_shape=(1,),
+            name="siammese_hamming_loss"
+        )([A, P, label_y])
         
-        loss = Lambda(self.siammese_hamming_loss)([A, P, label_1, label_2])
+        return Model(inputs=[input_1, input_2, label_y], outputs=loss)
+    
+    def jaccard_similarity(self, x):
+        anchor,positive = x
         
-        return Model(inputs=[input_1, input_2], outputs=loss)
-
-    # Siammese Hamming Loss function.
+        # Calcilate intersection
+        intersection = K.sum(K.minimum(anchor, positive), axis=1)
+        # Calculate union
+        union = K.sum(K.maximum(anchor, positive), axis=1)
+        # Calculate Jaccard similarity
+        jaccard = intersection / union
+        return jaccard
+    
+    # Siamese DSH-style loss in [0,1] code space.
     def siammese_hamming_loss(self,x):
-        # getting Quadruplet
-        anchor,positive,label_1,label_2 = x
-        # Hamming distance between the anchor and positive features
-        # Loss is 1/2 * (1 - y) D(anchor,positive) + 1/2 * y * max(m-D(anchor,positive),0)
-        # y is set to 0 if label_1 == label_2, otherwise 1
-        y = 1.0 - K.cast(label_1 == label_2, tf.float32)
-        # D is the Hamming distance between the anchor and positive features
+        anchor,positive,label_y = x
+        label_y = tf.squeeze(label_y, axis=-1)
+        # In [0,1], squared distance equals Hamming distance after hard thresholding.
         D = K.sum(K.square(anchor-positive),axis=1)
-        # Loss is 1/2 * (1 - y) D + 1/2 * y * max(m-D,0)
-        loss = 0.5 * (1 - y) * D + 0.5 * y * K.maximum(self.m-D,0)
-        return loss
+
+        # Discriminability term from DSH: pull similar pairs together, push dissimilar apart.
+        disc_loss = 0.5 * (1.0 - label_y) * D + 0.5 * label_y * K.maximum(self.m - D, 0.0)
+
+        # Quantization regularizer adapted to [0,1]:
+        # penalize uncertain bits near 0.5, minimized at 0 or 1.
+        reg_anchor = K.mean(anchor * (1.0 - anchor), axis=1)
+        reg_positive = K.mean(positive * (1.0 - positive), axis=1)
+        reg_loss = self.reg_weight * (reg_anchor + reg_positive)
+
+        return disc_loss + reg_loss
     
     def create_generator_channel(self, batchsize, data, label, seed: int = None):
         """Generate a siammese pairs generator for training."""
@@ -914,8 +936,7 @@ class SiammeseHashNet():
         while True:
             list_a = []
             list_p = []
-            label_1 = []
-            label_2 = []
+            label_y = []
             batch = 0
             while batch < batchsize:
                 if local_rng is not None:
@@ -939,28 +960,32 @@ class SiammeseHashNet():
                     n1 = data_usable[idx + 3] # BE
                     n2 = data_usable[idx + 1] # AE
 
+                # Anchor and positive are the same channel
                 list_a.append(a)
-                label_1.append(1)
                 list_p.append(p)
-                label_2.append(1)
+                label_y.append(0)
+                # Anchor and negative are the different channel
                 list_a.append(a)
-                label_1.append(1)
                 list_p.append(n1)
-                label_2.append(0)
+                label_y.append(1)
+                # Positive and negative are the different channel
                 list_a.append(p)
-                label_1.append(1)
                 list_p.append(n2)
-                label_2.append(0)
+                label_y.append(1)
+                # Both negatives are the different channel
+                # list_a.append(n1)
+                # list_p.append(n2)
+                # label_y.append(1)
+                
                 batch = batch + 1
             A = np.array(list_a, dtype='float32')
             P = np.array(list_p, dtype='float32')
-            label_1 = np.array(label_1, dtype='float32')
-            label_2 = np.array(label_2, dtype='float32')
-            yield (A, P, label_1, label_2), np.ones(int(batchsize))
+            label_y = np.array(label_y, dtype='float32')
+            yield (A, P,label_y), np.ones((A.shape[0],), dtype='float32')
 
 class ResNet_HashNet_Channel(SiammeseHashNet):
     def __init__(self):
-        pass
+        super().__init__()
     
     def resblock(self, x, kernelsize, filters, first_layer = False):
         reg = l2(0.001)  # Define L2 regularizer
@@ -999,17 +1024,68 @@ class ResNet_HashNet_Channel(SiammeseHashNet):
             x = self.resblock(x, 3, 64)
         x = AveragePooling2D(pool_size=2)(x)
         x = Flatten()(x)
-        x = Dense(output_length)(x)
-        x = Lambda(lambda  x: K.l2_normalize(x,axis=1))(x)
-        # x = Lambda(lambda x: tf.cast(x > 0.5, dtype=tf.float32))(x) # Quantization layer
-        x = Dense(units=output_length, activation='sigmoid', kernel_initializer="lecun_normal")(x)
+        x = Dense(256, activation='relu')(x)
+        # Soft hash codes used for training loss.
+        x = Dense(units=output_length, activation='sigmoid', name="hash_bits_soft")(x)
         
-        # Lets add a quantization layer that sets outputs to +1 and -1
-        x = Lambda(lambda x: tf.cast(x > 0.5, dtype=tf.float32))(x)
-        
+        # Hard hash codes used for inference/export (binary {0,1}).
+        x = ste_quantize_layer_HashNet(threshold = 0.5)(x)
+         
         model = Model(inputs=inputs, outputs=x)
         return model
 
+
+class RNN_HashNet_Channel(SiammeseHashNet):
+    """Siamese HashNet backbone using GRU sequence modeling over time bins."""
+    def __init__(self, gru_units=256, dropout=0.3, recurrent_dropout=0, bidirectional=True, num_layers=2):
+        super().__init__()
+        self.gru_units = gru_units
+        self.dropout = dropout
+        self.recurrent_dropout = recurrent_dropout
+        self.bidirectional = bidirectional
+        self.num_layers = num_layers
+
+    def feature_extractor(self, datashape, output_length):
+        self.datashape = datashape
+        F, T, C = datashape[1], datashape[2], datashape[3]
+
+        # Input spectrogram (F, T, C) -> sequence (T, F*C)
+        inputs = Input(shape=(F, T, C))
+        # Normalize each sample before sequence modeling to reduce
+        # environment-specific amplitude bias.
+        x = LayerNormalization(axis=[1, 2, 3], epsilon=1e-6, name="hash_rnn_input_norm")(inputs)
+        x = Permute((2, 1, 3))(x)
+        x = Reshape((T, F * C))(x)
+        x = LayerNormalization(axis=-1, epsilon=1e-6, name="hash_rnn_step_norm")(x)
+
+        # Stacked GRU layers.
+        for i in range(self.num_layers):
+            return_sequences = (i < self.num_layers - 1)
+            gru = GRU(
+                self.gru_units,
+                return_sequences=return_sequences,
+                dropout=self.dropout,
+                recurrent_dropout=self.recurrent_dropout,
+                reset_after=True,
+                name=f"hash_gru_{i+1}"
+            )
+            if self.bidirectional:
+                x = Bidirectional(gru, name=f"hash_bi_gru_{i+1}")(x)
+            else:
+                x = gru(x)
+            if return_sequences:
+                x = LayerNormalization(name=f"hash_gru_ln_{i+1}")(x)
+
+        hidden_dim = self.gru_units * 2 if self.bidirectional else self.gru_units
+        x = Dense(hidden_dim, activation='relu', name="hash_projection")(x)
+        x = Dropout(self.dropout, name="hash_projection_dropout")(x)
+        # Soft branch used by Siamese loss.
+        x = Dense(units=output_length, activation='sigmoid', name="hash_bits_soft")(x)
+        # Hard branch used at inference/export time.
+        x = ste_quantize_layer_HashNet(threshold=0.5)(x)
+
+        return Model(inputs=inputs, outputs=x, name="RNN_HashNet_Channel")
+    
 if __name__ == "__main__":
     
     
