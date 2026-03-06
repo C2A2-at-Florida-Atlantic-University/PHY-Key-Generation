@@ -42,6 +42,7 @@ def plot_data_scenario(data, index_start, filename, show_plot=True):
     if show_plot:
         plt.show()
     plt.close(fig)
+    print("Saved plot to: ", filename)
 
 
 # Plot the avg power of the data for each scenario
@@ -69,6 +70,7 @@ def plot_avg_power_scenario(data, scenario_start_index, data_per_scenario, filen
     if show_plot:
         plt.show()
     plt.close(fig)
+    print("Saved plot to: ", filename)
 
 
 def plot_avg_min_max_power_scenario(data, scenario_start_index, data_per_scenario, filename, show_plot=True):

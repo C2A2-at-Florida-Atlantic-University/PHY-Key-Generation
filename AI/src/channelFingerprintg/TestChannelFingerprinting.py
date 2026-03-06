@@ -246,6 +246,7 @@ def test_model(feature_extractor_name, node_configurations, home="/home/Research
         number_of_scenarios = data.shape[0] // data_per_scenario
         test_plot_directory = os.path.join(results_directory, "TestDatasetPlots")
         os.makedirs(test_plot_directory, exist_ok=True)
+        print("Saving test dataset visualizations to: ", test_plot_directory)
         for i in range(number_of_scenarios):
             scenario_start_index = int(i * data_per_scenario)
             plot_data_scenario(
@@ -1368,13 +1369,13 @@ if __name__ == "__main__":
     signal_type = "Sinusoid" # Sinusoid, PN-Sequence, deltaPulse
     
     node_Ids = {"Sinusoid":
-                    {"OTA-Lab": [[1,2,3],
+                    {"OTA-Lab": [#[1,2,3],
+                                 [5,7,6],
                              #[1,4,5]
                             #,[1,4,8],[2,4,3],
                             #[4,2,5],[4,2,8],[4,8,5],
                             #[5,7,8],[5,8,7],[8,4,1],
-                            #[8,5,1],
-                            # [8,5,4]
+                            #[8,5,1], [8,5,4]
                             ],
                     "OTA-Dense": [[1,2,3],
                                 #[1,2,5],
