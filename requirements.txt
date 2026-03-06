@@ -1,0 +1,3 @@
+# Python dependencies for PowderKeyGen runtime services.
+flask-classful
+numpy

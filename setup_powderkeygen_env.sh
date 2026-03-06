@@ -7,6 +7,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEPS_DIR="${SCRIPT_DIR}/external"
+PY_REQUIREMENTS_FILE="${SCRIPT_DIR}/requirements.txt"
 NPROC="$(nproc)"
 
 run_as_root() {
@@ -62,6 +63,17 @@ build_and_install_module() {
     run_as_root ldconfig
 }
 
+install_python_packages() {
+    local pip_args=("$@")
+
+    if python3 -m pip install "${pip_args[@]}"; then
+        return 0
+    fi
+
+    log "System pip install failed; retrying with --user"
+    python3 -m pip install --user "${pip_args[@]}"
+}
+
 main() {
     require_cmd git
 
@@ -86,7 +98,14 @@ main() {
         python3-pip
 
     log "Upgrading pip"
-    python3 -m pip install --upgrade pip
+    install_python_packages --upgrade pip
+
+    if [[ -f "${PY_REQUIREMENTS_FILE}" ]]; then
+        log "Installing Python requirements from ${PY_REQUIREMENTS_FILE}"
+        install_python_packages -r "${PY_REQUIREMENTS_FILE}"
+    else
+        log "No Python requirements file found at ${PY_REQUIREMENTS_FILE}; skipping"
+    fi
 
     mkdir -p "${DEPS_DIR}"
 
