@@ -987,6 +987,7 @@ if __name__ == "__main__":
     # Removing certain nodes that data has been collected
     configsToRemove = [[5, 6, 2], [5, 6, 3], [5, 6, 4], [5, 6, 7], [5, 6, 8], [5, 7, 2], [5, 7, 3], [5, 7, 4], [5, 7, 6], [5, 7, 8], [5, 8, 2]]
     nodeConfigs = [config for config in nodeConfigs if config not in configsToRemove]
+    nodeConfigs = [[5,6,7]] # Testing with only one config
     print("Node configs: ", nodeConfigs)
     print(len(nodeConfigs))
     # exit()
