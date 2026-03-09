@@ -883,16 +883,16 @@ def generateNodeConfigs(nodeIDs):
 def loadOTALabConfig(
         gainConfigs={
             "x310":{"tx":80,"rx":80},
-            "b210":{"tx":90,"rx":80}
+            "b210":{"tx":89,"rx":80}
             },
         nodeIDs = None
     ):
     # OTA Lab node IPs
     NodeIPs = {
         1:"pc743.emulab.net",       # x310 radio node 1
-        2:"pc780.emulab.net",       # x310 radio node 2
-        3:"pc774.emulab.net",       # x310 radio node 3
-        4:"pc768.emulab.net",        # x310 radio node 4
+        2:"pc750.emulab.net",       # x310 radio node 2
+        3:"pc745.emulab.net",       # x310 radio node 3
+        4:"pc730.emulab.net",        # x310 radio node 4
         5:"ota-nuc1.emulab.net",    # b210 nuc node 1
         6:"ota-nuc2.emulab.net",    # b210 nuc node 2
         7:"ota-nuc3.emulab.net",    # b210 nuc node 3
@@ -920,7 +920,7 @@ def loadOTALabConfig(
 def loadOTADenseConfig(
         gainConfigs={
             "x310":{"tx":31,"rx":31},
-            "b210":{"tx":80,"rx":70}
+            "b210":{"tx":89,"rx":90}
             },
         nodeIDs = None
     ):
@@ -985,9 +985,14 @@ if __name__ == "__main__":
     NodeIPs, NodeGains, nodeConfigs = loadOTALabConfig(nodeIDs = nodeIDs)
     # NodeIPs, NodeGains, nodeConfigs = loadOTADenseConfig()
     # Removing certain nodes that data has been collected
-    configsToRemove = [[5, 6, 2], [5, 6, 3], [5, 6, 4], [5, 6, 7], [5, 6, 8], [5, 7, 2], [5, 7, 3], [5, 7, 4], [5, 7, 6], [5, 7, 8], [5, 8, 2]]
+    configsToRemove = [[5, 6, 2], [5, 6, 3], [5, 6, 4], 
+                        [5, 6, 7], [5, 6, 8], [5, 7, 2], 
+                        [5, 7, 3], [5, 7, 4], [5, 7, 6], 
+                        [5, 7, 8], [5, 8, 2], [5, 8, 3], 
+                        [5, 8, 4], [5, 8, 6], [5, 8, 7], 
+                        [6, 7, 2]]
     nodeConfigs = [config for config in nodeConfigs if config not in configsToRemove]
-    nodeConfigs = [[5,6,7]] # Testing with only one config
+    # nodeConfigs = [[8,7,5]] # Testing with only one config
     print("Node configs: ", nodeConfigs)
     print(len(nodeConfigs))
     # exit()

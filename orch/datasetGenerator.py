@@ -1,221 +1,221 @@
-import h5py
-import matplotlib.pyplot as plt
-import pandas as pd
-from datasets import Dataset
-import huggingface_hub as hf
+import argparse
+from pathlib import Path
+
 import datasets
+import h5py
+import huggingface_hub as hf
+import numpy as np
+from datasets import Dataset, Features, Sequence, Value
 
-class DatasetGenerator():
-    def __init__(self, fileName):
-        self.fileName = fileName
-        self.dataFrame = self.generate_dataframe_from_hdf5()        
 
-    # Save dataframe to huggingface dataset
-    def saveDataFrame(self, dataset_name, config_name, repo_name="CAAI-FAU"):
-        username = hf.whoami()['name']
-        print("Pushing dataset to Hugging Face hub...")
-        # Create a new dataset
-        print("Creating new dataset...")
-        # Convert to HF Dataset
-        hf_dataset = Dataset.from_pandas(self.dataFrame)
-        # Push to Hugging Face hub
-        repo_name = username if repo_name == "" else repo_name
-        hf_dataset.push_to_hub(
-            repo_name+"/"+dataset_name, 
-            private=True, 
-            config_name=config_name
+OFDM_REQUIRED_KEYS = {
+    "iq_I",
+    "iq_Q",
+    "csi_I",
+    "csi_Q",
+    "chan_est_samples_I",
+    "chan_est_samples_Q",
+    "ids",
+    "rx",
+    "tx",
+    "channel",
+    "instance",
+}
+
+
+class DatasetGenerator:
+    def __init__(self, file_name):
+        self.file_name = file_name
+        self.data_dict = self.generate_dict_from_hdf5()
+        self.hf_dataset = self._to_hf_dataset(self.data_dict)
+
+    def save_to_huggingface(self, dataset_name, config_name, repo_name="CAAI-FAU", private=True):
+        try:
+            username = hf.whoami()["name"]
+            print(f"Logged in as: {username}")
+        except Exception:
+            print(
+                "Could not verify Hugging Face login. "
+                "Make sure you ran `huggingface-cli login`."
+            )
+            raise
+
+        owner = username if repo_name == "" else repo_name
+        repo_id = f"{owner}/{dataset_name}"
+        print(f"Pushing dataset to Hugging Face Hub: {repo_id} (config: {config_name})")
+        self.hf_dataset.push_to_hub(
+            repo_id=repo_id,
+            private=private,
+            config_name=config_name,
         )
-        print("Dataset pushed to Hugging Face hub successfully.")
+        print("Dataset pushed to Hugging Face Hub successfully.")
 
-    # read hdf5 file
     def read_hdf5_file(self):
         data = {}
-        with h5py.File(self.fileName, 'r') as f:
-            # Assuming the dataset is named 'dataset'
-            # Read all key from the file
-            keys = list(f.keys())
-            print("Keys in HDF5 file: ", keys)
+        with h5py.File(self.file_name, "r") as data_file:
+            keys = list(data_file.keys())
+            print("Keys in HDF5 file:", keys)
             for key in keys:
-                data[key] = f[key][:]
+                data[key] = data_file[key][:]
         return data
 
-    def generate_dataframe_from_hdf5(self):
-        data = self.read_hdf5_file()
-        for key in data.keys(): # Read all keys in dictionary
-            if data[key].shape[0] == 1: # If first dimension shape is 1, remove it
-                data[key] = data[key][0]
-            if len(data[key].shape) > 1: # If data shape is 2D, make it a list
-                data[key] = list(data[key])
-        return pd.DataFrame(data)
+    def generate_dict_from_hdf5(self):
+        raw_data = self.read_hdf5_file()
+        normalized = {}
+        for key, value in raw_data.items():
+            normalized[key] = self._normalize_hdf5_column(value)
+        self._validate_columns(normalized)
+        return normalized
 
-    def separate_iq_samples(self, data):
-        # I is the second half of the samples
-        I = data[len(data)//2:]
-        # Q is the first half of the samples
-        Q = data[:len(data)//2]
-        return I, Q
+    def _normalize_hdf5_column(self, value):
+        if isinstance(value, np.ndarray):
+            if value.ndim > 0 and value.shape[0] == 1 and value.dtype.kind != "S":
+                value = value[0]
+            if isinstance(value, np.ndarray):
+                return self._array_to_python(value)
+        return value
 
-    def plot_iq_samples(self, I,Q):
-        # Plot IQ samples
-        plt.plot(I, label='I')
-        plt.plot(Q, label='Q')
-        plt.title('IQ Samples')
-        plt.xlabel('Sample Number')
-        plt.ylabel('Amplitude')
-        plt.legend()
-        plt.show()
+    def _array_to_python(self, arr):
+        if arr.dtype.kind == "S":
+            return [x.decode("utf-8") for x in arr.tolist()]
+        if arr.dtype.kind in ("i", "u"):
+            if arr.ndim == 1:
+                return [int(x) for x in arr.tolist()]
+            return [[int(x) for x in row] for row in arr.tolist()]
+        if arr.dtype.kind == "f":
+            if arr.ndim == 1:
+                return [float(x) for x in arr.tolist()]
+            return [[float(x) for x in row] for row in arr.tolist()]
+        return arr.tolist()
 
-    def plot_quadruplet_samples(self, id):
-        # Plot quadrupole samples
-        dataInstance = self.dataFrame[self.dataFrame['ids'] == id]
-        for index, row in dataInstance.iterrows():
-            print("Index: ", index)
-            I = row["I"]
-            Q = row["Q"]
-            plt.plot(I, label='I')
-            plt.plot(Q, label='Q')
-            name = "Eve" if row["instance"] % 2 == 0 else "Alice" if row["instance"] == 1 else "Bob"
-            plt.title(f'IQ Samples. ID: {id}, label: {row["channel"]}, instance: {row["instance"]} for {name}')
-            plt.xlabel('Sample Number')
-            plt.ylabel('Amplitude')
-            plt.legend()
-            plt.show()
-    
-def load_OTA_lab_config():
-    nodeConfigs = {
-        "IDs":[
-            # [1,2,3],
-            # [1,4,5],
-            # [1,4,8],
-            # [2,4,3],
-            # [4,2,5],
-            # [4,2,8],
-            # [4,8,5],
-            # [5,7,8],
-            # [5,8,7],
-            # [8,4,1],
-            # [8,5,1],
-            # [8,5,4]
-            # [1,4,7]
-            [5,7,6],
-            [5,7,8],
-            [5,8,2],
-            [5,8,3],
-            [5,8,4],
-            [5,8,6],
-            [5,8,7],
-            [6,7,2],
-            [6,7,3],
-            [6,7,4],
-            [6,7,5],
-            [6,7,8],
-            [6,8,2],
-            [6,8,3],
-            [6,8,4],
-            [6,8,5],
-            [6,8,7],
-            [7,8,2],
-            [7,8,3],
-            [7,8,4],
-            [7,8,5],
-            [7,8,6]
-        ],
-        "Timestamps":[
-            # 1747672681,
-            # 1747678946,
-            # 1747679768,
-            # 1747673451,
-            # 1747675004,
-            # 1747674226,
-            # 1747716767,
-            # 1747697115,
-            # 1747699032,
-            # 1747713786,
-            # 1747709125,
-            # 1747706583,
-            # 1747698126
-            1768617241,
-            1768620814,
-            1768624673,
-            1768628487,
-            1768632247,
-            1768635668,
-            1768639083,
-            1768642737,
-            1768646379,
-            1768650027,
-            1768653482,
-            1768656902,
-            1768660598,
-            1768664353,
-            1768668115,
-            1768671517,
-            1768674938,
-            1768678672,
-            1768682289,
-            1768685932,
-            1768689359,
-            1768692821
-        ]
-    }
-    return nodeConfigs
+    def _validate_columns(self, data_dict):
+        if not OFDM_REQUIRED_KEYS.issubset(set(data_dict.keys())):
+            missing = sorted(list(OFDM_REQUIRED_KEYS - set(data_dict.keys())))
+            raise ValueError(
+                f"File {self.file_name} is missing required OFDM keys: {missing}"
+            )
 
-def load_OTA_dense_config():
-    nodeConfigs = {
-        "IDs":[
-            [1,2,3],
-            [1,2,5],
-            [1,3,2],
-            [4,3,5]
-        ],
-        "Timestamps":[
-            1747695341,
-            1747776498,
-            1747698126,
-            1747770576
-        ]
-    }
-    return nodeConfigs
+        lengths = {key: len(value) for key, value in data_dict.items() if hasattr(value, "__len__")}
+        unique_lengths = set(lengths.values())
+        if len(unique_lengths) != 1:
+            raise ValueError(
+                f"Column length mismatch in {self.file_name}: {lengths}"
+            )
+
+    def _to_hf_dataset(self, data_dict):
+        feature_spec = Features(
+            {
+                "iq_I": Sequence(Value("float32")),
+                "iq_Q": Sequence(Value("float32")),
+                "pilots_I": Sequence(Value("float32")) if "pilots_I" in data_dict else Sequence(Value("float32")),
+                "pilots_Q": Sequence(Value("float32")) if "pilots_Q" in data_dict else Sequence(Value("float32")),
+                "csi_I": Sequence(Value("float32")),
+                "csi_Q": Sequence(Value("float32")),
+                "chan_est_samples_I": Sequence(Value("float32")),
+                "chan_est_samples_Q": Sequence(Value("float32")),
+                "ids": Value("int32"),
+                "rx": Value("int32"),
+                "tx": Value("int32"),
+                "channel": Value("int32"),
+                "instance": Value("int32"),
+                "timestamp": Value("float64") if "timestamp" in data_dict else Value("float64"),
+            }
+        )
+
+        # Ensure optional fields always exist so a single schema works for all files.
+        if "pilots_I" not in data_dict:
+            data_dict["pilots_I"] = [[] for _ in range(len(data_dict["ids"]))]
+        if "pilots_Q" not in data_dict:
+            data_dict["pilots_Q"] = [[] for _ in range(len(data_dict["ids"]))]
+        if "timestamp" not in data_dict:
+            data_dict["timestamp"] = [0.0 for _ in range(len(data_dict["ids"]))]
+
+        return Dataset.from_dict(data_dict, features=feature_spec)
+
+
+def collect_hdf5_files(input_path):
+    path = Path(input_path)
+    if path.is_file():
+        return [path]
+    if not path.exists():
+        raise FileNotFoundError(f"Input path does not exist: {input_path}")
+    return sorted(path.glob("*.hdf5"))
+
+
+def push_files_to_hub(files, dataset_name, repo_name, config_prefix, private=True):
+    if not files:
+        raise ValueError("No .hdf5 files found to push.")
+
+    for file_path in files:
+        
+        print(f"\nProcessing file: {file_path}")
+        generator = DatasetGenerator(str(file_path))
+        # Split the file_path by _ to get the dataset info
+        environment = file_path.stem.split("_")[1]
+        if environment == "OTALab":
+            environment = "OTA-Lab"
+        elif environment == "OTADense":
+            environment = "OTA-Dense"
+        probeType = file_path.stem.split("_")[3]
+        # numProbes = file_path.stem.split("_")[4]
+        nodeIds = file_path.stem.split("_")[5]
+        # timestamp = file_path.stem.split("_")[6]
+        
+        config_name = f"{config_prefix}-{environment}-Nodes-{nodeIds}" if config_prefix else f"{probeType}-{environment}-Nodes-{nodeIds}"
+        print(f"Config name: {config_name}")
+        generator.save_to_huggingface(
+            dataset_name=dataset_name,
+            config_name=config_name,
+            repo_name=repo_name,
+            private=private,
+        )
+        loaded = datasets.load_dataset(f"{repo_name}/{dataset_name}", config_name)
+        print("Verified upload. Loaded dataset:", loaded)
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description=(
+            "Push OFDM HDF5 datasets (iq/csi/chan_est_samples + metadata) "
+            "to Hugging Face Hub."
+        )
+    )
+    parser.add_argument(
+        "--input",
+        default="./",
+        help="Path to a single .hdf5 file or directory containing .hdf5 files.",
+    )
+    parser.add_argument(
+        "--dataset-name",
+        required=True,
+        help="Dataset repository name on Hugging Face (without owner).",
+    )
+    parser.add_argument(
+        "--repo-name",
+        default="CAAI-FAU",
+        help="Dataset owner/org. Use empty string to use your logged-in username.",
+    )
+    parser.add_argument(
+        "--config-prefix",
+        default="ofdm",
+        help="Prefix for config names; final config is <prefix>-<filename_stem>.",
+    )
+    parser.add_argument(
+        "--public",
+        action="store_true",
+        help="If set, push as public dataset (private=False).",
+    )
+    return parser.parse_args()
+
 
 if __name__ == "__main__":
-
-    
-    # Example usage
-    saveDataFrame = True
-    names = ['Alice', 'Bob', 'Eve']
-    
-    site = "Powder-OTA-Lab" # "Powder-OTA-Lab" or "Powder-OTA-Dense"
-    if site == "Powder-OTA-Lab":
-        nodeConfigs = load_OTA_lab_config()
-    else:
-        nodeConfigs = load_OTA_dense_config()
-    
-    numProbes = 100
-    signalType = "deltaPulse"
-    folder = "./"
-    for nodeIDs, timestamp in zip(nodeConfigs["IDs"], nodeConfigs["Timestamps"]):
-        file = folder + "Dataset_"+("OTALab_" if site == "Powder-OTA-Lab" else "OTADense_")+"Channels_"+signalType+"_"+str(numProbes)+"_"+"".join(str(node) for node in nodeIDs)+"_"+str(timestamp)+".hdf5"
-        print("Reading file: ", file)
-        # Read the hdf5 file
-        dataset = DatasetGenerator(file)
-        # Print the dataframe info
-        dataset.dataFrame.info()
-        # print("Dataframe:", dataset.dataFrame)
-        # Plot the IQ samples
-        # dataset.plot_iq_samples(0, 1)
-        # Plot the quadruplet samples
-        # dataset.plot_quadruplet_samples(3)
-        if saveDataFrame:
-            dataset_name = "Key-Generation"
-            config_name = signalType+"-"+site+"-Nodes-"+"".join(str(node) for node in nodeIDs)  #"Sinusoid-Powder-OTA-Lab" 
-            repo_name="CAAI-FAU"
-            print("Saving dataset to huggingface...")
-            print("Dataset name: ", dataset_name)
-            print("Config name: ", config_name)
-            print("Repo name: ", repo_name)
-            dataset.saveDataFrame(dataset_name, config_name, repo_name)
-            print("Dataframe saved to huggingface.")
-            # Load the dataset from huggingface
-            dataset = datasets.load_dataset(repo_name+"/"+dataset_name, config_name)
-            # Dataset information
-            print("Dataset information: ", dataset)
+    args = parse_args()
+    files = collect_hdf5_files(args.input)
+    target_repo = args.repo_name if args.repo_name != "" else hf.whoami()["name"]
+    push_files_to_hub(
+        files=files,
+        dataset_name=args.dataset_name,
+        repo_name=target_repo,
+        config_prefix=args.config_prefix,
+        private=not args.public,
+    )
