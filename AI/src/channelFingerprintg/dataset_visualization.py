@@ -1,5 +1,4 @@
 import os
-
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -26,8 +25,15 @@ def plot_data_scenario(data, index_start, filename, show_plot=True):
         axes[i, 0].set_ylabel("Amplitude")
         axes[i, 0].legend()
 
-    fft_len = 2048
-    overlap = fft_len / 2
+    # Adapt STFT settings to the probe length.
+    # WiFi chan_est probes are typically 2x64 IQ samples (total 128), so
+    # use FFT=64 to better match one channel-estimation set.
+    sample_len = int(np.asarray(next(iter(example_data.values()))).shape[0])
+    if sample_len <= 128:
+        fft_len = 64 if sample_len >= 64 else max(2, sample_len)
+    else:
+        fft_len = min(2048, sample_len)
+    overlap = min(fft_len // 2, max(0, fft_len - 1))
     channel_spectrogram = ChannelSpectrogram()
     for i, (label, sample) in enumerate(example_data.items()):
         spectrogram = channel_spectrogram._gen_single_channel_spectrogram(sample, fft_len, overlap)

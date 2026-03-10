@@ -59,6 +59,53 @@ def set_reproducible(seed: int, deterministic: bool = True, max_threads: int = 1
     except Exception:
         pass
 
+def configure_dataset_iq_source(dataset, signal_type, sample_source="auto"):
+    """
+    Ensure DatasetHandler has `I`/`Q` columns for complex conversion.
+
+    sample_source options:
+      - "auto": WiFi -> chan_est_samples, others -> existing I/Q (or iq_I/Q fallback)
+      - "chan_est_samples": use chan_est_samples_I/Q
+      - "csi": use csi_I/Q
+      - "iq": use existing I/Q (or iq_I/Q fallback)
+    """
+    if dataset is None or dataset.dataFrame is None:
+        raise ValueError("Dataset is not loaded.")
+
+    df = dataset.dataFrame
+    source = str(sample_source).strip().lower()
+    if source == "auto":
+        source = "chan_est_samples" if signal_type == "WiFi" else "iq"
+
+    source_to_columns = {
+        "chan_est_samples": ("chan_est_samples_I", "chan_est_samples_Q"),
+        "chan_est": ("chan_est_samples_I", "chan_est_samples_Q"),
+        "csi": ("csi_I", "csi_Q"),
+        "iq": ("I", "Q"),
+    }
+    if source not in source_to_columns:
+        raise ValueError(
+            f"Unsupported sample_source='{sample_source}'. "
+            "Use one of: auto, chan_est_samples, csi, iq."
+        )
+
+    i_col, q_col = source_to_columns[source]
+    if source == "iq" and not {"I", "Q"}.issubset(set(df.columns)) and {"iq_I", "iq_Q"}.issubset(set(df.columns)):
+        i_col, q_col = "iq_I", "iq_Q"
+
+    required_cols = {i_col, q_col}
+    missing_cols = sorted(list(required_cols - set(df.columns)))
+    if missing_cols:
+        raise ValueError(
+            f"Dataset is missing required columns for sample_source='{source}': {missing_cols}"
+        )
+
+    df = df.copy()
+    df["I"] = df[i_col]
+    df["Q"] = df[q_col]
+    dataset.dataFrame = df
+    print(f"Using {i_col}/{q_col} as IQ input for training.")
+
 def train_channel_feature_extractor(data, labels, train_configurations, model_type, network_type="ResNet", model_name="", seed: int = 42, quantization_layer=False):
     '''
     train_feature_extractor trains an RFF extractor using triplet loss.
@@ -272,7 +319,8 @@ if __name__ == "__main__":
     ModelsDir = homeDir+"Models/"
     # Central seed for full reproducibility of data shuffling, initialization, and training
     
-    signal_type = "Sinusoid" # Sinusoid, PN-Sequence, deltaPulse
+    signal_type = "Sinusoid" # Sinusoid, PN-Sequence, deltaPulse, WiFi
+    sample_source = "iq"  # auto, chan_est_samples, csi, iq
     
     node_Ids = {"Sinusoid":
                     {"OTA-Lab": [[1,2,3],
@@ -282,11 +330,12 @@ if __name__ == "__main__":
                             [4,2,5],
                             [4,2,8],
                             [4,8,5],
-                            #[5,7,8],
+                            [5,7,8],
                             [5,8,7],
                             [8,4,1],
                             [8,5,1],
-                            [8,5,4]]
+                            # [8,5,4]
+                            ]
                     ,
                     "OTA-Dense": [[1,2,3],
                                 [1,2,5],
@@ -303,7 +352,8 @@ if __name__ == "__main__":
                                     # [5,6,4],[5,6,7],[5,6,8],  # Testing scenarios
                                     # [5,7,1],[5,7,3],[5,7,2],# May need to remove due to low signal power
                                     # [5,7,4],[5,7,6],[5,7,8],# May need to remove due to low signal power
-                                    [5,8,2],[5,8,3],[5,8,4],
+                                    [5,8,2],[5,8,3],
+                                    # [5,8,4],
                                     [5,8,6],[5,8,7],[6,7,2],
                                     [6,7,3],[6,7,4],[6,7,5],
                                     [6,7,8],
@@ -319,7 +369,28 @@ if __name__ == "__main__":
                                     [2,3,1],[2,3,4],[2,4,1],
                                     [2,4,3],[3,4,1],[3,4,2]
                                 ]
-                }
+                },
+                "WiFi": {
+                    "OTA-Lab": [
+                        [5,6,2],
+                        [5,6,3],
+                        [5,6,4],
+                        [5,6,7],
+                        [5,6,8],
+                        [5,7,2],
+                        [5,7,3],
+                        [5,7,4],
+                        [5,7,6],
+                        [5,7,8],
+                        [5,8,2],
+                        [5,8,3],
+                        # [5,8,4],
+                        [5,8,6],
+                        [5,8,7],
+                        [6,7,2],
+                    ],
+                    "OTA-Dense": []
+                },
     }
     node_configurations = {
         'OTA-Lab': {
@@ -350,7 +421,9 @@ if __name__ == "__main__":
             # break
         else:
             dataset.add_dataset(dataset_name, config_name, repo_name)
-        dataset.get_dataframe_Info()
+    
+    configure_dataset_iq_source(dataset, signal_type, sample_source=sample_source)
+    dataset.get_dataframe_Info()
     # Set seeds and determinism prior to any TF ops
     REPRO_SEED = 42
     set_reproducible(REPRO_SEED)
@@ -370,7 +443,14 @@ if __name__ == "__main__":
     max_num_samples = np.max([example.shape[0] for example in data])
     print("Example with the most number of samples: ", max_num_samples)
     if signal_type == "deltaPulse":
-        min_num_samples = int(8192*2)
+        min_num_samples = int(8192 * 2)
+    elif signal_type == "WiFi":
+        if str(sample_source).strip().lower() == "csi":
+            # WiFi CSI vectors are typically 64 complex coefficients.
+            min_num_samples = int(64)
+        else:
+            # WiFi chan_est probes contain 2x64 IQ samples.
+            min_num_samples = int(128)
     else:
         min_num_samples = int(8192)
     # Resize the data in examples to the least number of samples
@@ -573,7 +653,10 @@ if __name__ == "__main__":
     # plt.savefig("XTEST_IQ_Pulses_Spectrograms_per_pulse.png")
     # exit()
     model_type = "HashNet" # "HashNet", "QuadrupletNet", "TripletNet"
-    data_type = "Spectrogram" 
+    data_type = "Spectrogram"
+    if str(sample_source).strip().lower() == "csi":
+        # For CSI input, use raw complex examples (no FFT/spectrogram).
+        data_type = "IQ"
     # data_types = ["IQ", "Polar", "Spectrogram"] # ["IQ", "Polar", "Spectrogram"]
     spectrogram_processing = "magnitude_phase"  # "magnitude", "complex", "magnitude_phase"
     batch_size = 128 
@@ -581,18 +664,20 @@ if __name__ == "__main__":
         fft_len = int(256)
     elif signal_type == "deltaPulse":
         fft_len = int(2048)
+    elif signal_type == "WiFi":
+        fft_len = int(64)
     else:
         fft_len = int(256)
     patience = 200
     maxEpochs = 1000
     val_size = 0.1
     factor = 0.1
-    alphas = [0.3] # [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]
+    alphas = [0.2] # [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]
     betas = [alphas[0]] # [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]
     gammas = [0.1] # [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]
     FFT_lengths = [fft_len]
     output_lengths = [128] # Need to define the output length and why based on 255 constraint (bytes)
-    optimizers = ["Adam"] # "RMSprop", "SGD", "Adam"
+    optimizers = ["RMSprop"] # "RMSprop", "SGD", "Adam"
     network_types = ["RNN"] # ["ResNet", "FeedForward", "RNN", "Transformer", "AE"]
     quantization_layer = True
     for fft_len in FFT_lengths:
@@ -671,7 +756,7 @@ if __name__ == "__main__":
                                             +'_margin'+str(train_configurations[model_type]["margin"]) \
                                             +'_'+train_configurations[model_type]['optimizer'] \
                                             +'_lr'+str(train_configurations[model_type]["LearningRate"]) \
-                                            +'_'+configuration["config_name"]+'_'+str(3)
+                                            +'_'+configuration["config_name"]+'_'+str(4)
                                 else:
                                     spec_suffix = ""
                                     if train_configurations[model_type]["data_type"] == "Spectrogram":

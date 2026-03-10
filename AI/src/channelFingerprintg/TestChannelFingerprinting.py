@@ -37,6 +37,61 @@ from dataset_visualization import (
 
 img_type = ".png" # png, eps, pdf
 
+def configure_dataset_iq_source(dataset, signal_type, sample_source="auto"):
+    """
+    Ensure DatasetHandler has `I`/`Q` columns for complex conversion.
+
+    sample_source options:
+      - "auto": WiFi -> chan_est_samples, others -> existing I/Q (or iq_I/Q fallback)
+      - "chan_est_samples": use chan_est_samples_I/Q
+      - "csi": use csi_I/Q
+      - "iq": use existing I/Q (or iq_I/Q fallback)
+    """
+    if dataset is None or dataset.dataFrame is None:
+        raise ValueError("Dataset is not loaded.")
+
+    df = dataset.dataFrame
+    source = str(sample_source).strip().lower()
+    if source == "auto":
+        source = "chan_est_samples" if signal_type == "WiFi" else "iq"
+
+    source_to_columns = {
+        "chan_est_samples": ("chan_est_samples_I", "chan_est_samples_Q"),
+        "chan_est": ("chan_est_samples_I", "chan_est_samples_Q"),
+        "csi": ("csi_I", "csi_Q"),
+        "iq": ("I", "Q"),
+    }
+    if source not in source_to_columns:
+        raise ValueError(
+            f"Unsupported sample_source='{sample_source}'. "
+            "Use one of: auto, chan_est_samples, csi, iq."
+        )
+
+    i_col, q_col = source_to_columns[source]
+    if source == "iq" and not {"I", "Q"}.issubset(set(df.columns)) and {"iq_I", "iq_Q"}.issubset(set(df.columns)):
+        i_col, q_col = "iq_I", "iq_Q"
+
+    required_cols = {i_col, q_col}
+    missing_cols = sorted(list(required_cols - set(df.columns)))
+    if missing_cols:
+        raise ValueError(
+            f"Dataset is missing required columns for sample_source='{source}': {missing_cols}"
+        )
+
+    df = df.copy()
+    df["I"] = df[i_col]
+    df["Q"] = df[q_col]
+    dataset.dataFrame = df
+    print(f"Using {i_col}/{q_col} as IQ input for testing.")
+
+def infer_model_data_type(feature_extractor_name):
+    name_l = str(feature_extractor_name).lower()
+    if "_iq_" in name_l:
+        return "IQ"
+    if "_polar_" in name_l:
+        return "Polar"
+    return "Spectrogram"
+
 def load_trusted_feature_extractor(model_path):
     """Load trusted local feature extractor from native .keras format."""
     candidate_paths = []
@@ -133,6 +188,89 @@ def get_latest_results_file(results_directory, results_file):
     results_files.sort(key=lambda x: os.path.getmtime(os.path.join(results_directory, x)))
     return results_files[-1]
 
+def plot_scenario_bdr_from_h5_files(file_paths, scenario_labels=None, output_path=None):
+    """
+    Generate a 3-scenario BDR comparison plot from saved test result .h5 files.
+
+    Parameters
+    ----------
+    file_paths : list[str]
+        Exactly three absolute/relative .h5 file paths. Each file must contain
+        datasets: KDR_AB, KDR_AC, KDR_BC.
+    scenario_labels : list[str] | None
+        Optional labels to use on x-axis (length must match file_paths).
+        If None, defaults to Scenario 1/2/3.
+    output_path : str | None
+        Optional output image path. Defaults to:
+        /home/Research/POWDER/Results/BDR_3_scenarios_from_h5.png
+
+    Returns
+    -------
+    dict
+        {
+            "scenario_labels": [...],
+            "KDR_AB": [...],
+            "KDR_AC": [...],
+            "KDR_BC": [...],
+            "output_path": "...",
+        }
+    """
+    if not isinstance(file_paths, (list, tuple)) or len(file_paths) != 3:
+        raise ValueError("file_paths must contain exactly three .h5 file paths.")
+
+    for p in file_paths:
+        if not os.path.exists(p):
+            raise FileNotFoundError(f"Results file not found: {p}")
+
+    if scenario_labels is None:
+        scenario_labels = [f"Scenario {i+1}" for i in range(3)]
+    if len(scenario_labels) != len(file_paths):
+        raise ValueError("scenario_labels length must match file_paths length.")
+
+    if output_path is None:
+        output_path = "/home/Research/POWDER/Results/BDR_3_scenarios_from_h5.png"
+
+    kdr_ab_means = []
+    kdr_ac_means = []
+    kdr_bc_means = []
+
+    for path in file_paths:
+        with h5py.File(path, "r") as f:
+            required = {"KDR_AB", "KDR_AC", "KDR_BC"}
+            missing = sorted(list(required - set(f.keys())))
+            if missing:
+                raise ValueError(f"Missing required datasets in {path}: {missing}")
+
+            kdr_ab_means.append(float(np.mean(f["KDR_AB"][:])))
+            kdr_ac_means.append(float(np.mean(f["KDR_AC"][:])))
+            kdr_bc_means.append(float(np.mean(f["KDR_BC"][:])))
+
+    x = np.arange(len(scenario_labels))
+    width = 0.24
+    fig, ax = plt.subplots(figsize=(11, 5))
+    ax.bar(x - width, kdr_ab_means, width, label="Alice-Bob", color="#1f77b4")
+    ax.bar(x, kdr_ac_means, width, label="Alice-Eve", color="#ff7f0e")
+    ax.bar(x + width, kdr_bc_means, width, label="Bob-Eve", color="#2ca02c")
+    ax.set_xticks(x)
+    ax.set_xticklabels(scenario_labels, rotation=10)
+    ax.set_ylabel("BDR")
+    ax.set_title("BDR by Scenario (from result .h5 files)")
+    ax.set_ylim(0, 1)
+    ax.grid(axis="y", linestyle="--", alpha=0.35)
+    ax.legend()
+    plt.tight_layout()
+    plt.savefig(output_path)
+    plt.close(fig)
+    print("Saved scenario BDR plot to:", output_path)
+
+    return {
+        "scenario_labels": list(scenario_labels),
+        "KDR_AB": kdr_ab_means,
+        "KDR_AC": kdr_ac_means,
+        "KDR_BC": kdr_bc_means,
+        "output_path": output_path,
+    }
+
 def extract_features_data(data, feature_extractor, fft_len, data_type="Spectrogram", spectrogram_processing="magnitude"):
     data = np.array(data)
     if data_type == "IQ":
@@ -186,7 +324,7 @@ def avg_KDR_data_RayTracing(quantized_data, quantized_dataRayTracing):
     KDR_BB_average = np.sum(KDR_BB)/(len(KDR_BB))
     return KDR_AA_average, KDR_BB_average, KDR_AA, KDR_BB
         
-def test_model(feature_extractor_name, node_configurations, home="/home/Research/POWDER/", generate_results=True, signal_type="Sinusoid"):
+def test_model(feature_extractor_name, node_configurations, home="/home/Research/POWDER/", generate_results=True, signal_type="Sinusoid", sample_source="auto"):
     node_configs_names = ""
     idx = 0
     # for dataset_type in node_configurations.keys():
@@ -209,7 +347,7 @@ def test_model(feature_extractor_name, node_configurations, home="/home/Research
     #                 dataset.add_dataset(dataset_name, node_config_name, repo_name)
     #             idx = idx + 1
     
-    dataset_type = "OTA-Lab"  # "OTA-Lab", "OTA-Dense", "Sionna-Ray-Tracing"
+    dataset_type = "OTA-Dense"  # "OTA-Lab", "OTA-Dense", "Sionna-Ray-Tracing"
     dataset_name = node_configurations[dataset_type]["dataset_name"]
     repo_name = node_configurations[dataset_type]['repo_name']
     node_Ids = node_configurations[dataset_type]['node_Ids']
@@ -230,11 +368,18 @@ def test_model(feature_extractor_name, node_configurations, home="/home/Research
             dataset = DatasetHandler(dataset_name, node_config_name, repo_name)
         else:
             dataset.add_dataset(dataset_name, node_config_name, repo_name)
+    configure_dataset_iq_source(dataset, signal_type, sample_source=sample_source)
     dataset.get_dataframe_Info()
     data, _, _, _ = dataset.load_data()
     
+    source_l = str(sample_source).strip().lower()
     if signal_type == "deltaPulse":
-        min_num_samples = int(8192*2)
+        min_num_samples = int(8192 * 2)
+    elif signal_type == "WiFi":
+        if source_l == "csi":
+            min_num_samples = int(64)
+        else:
+            min_num_samples = int(128)
     else:
         min_num_samples = int(8192)
     # Resize the data in examples to the least number of samples
@@ -310,11 +455,18 @@ def test_model(feature_extractor_name, node_configurations, home="/home/Research
         #     print("loading model")
         feature_extractor_path = home+"Models/"+feature_extractor_name
         feature_extractor = load_trusted_feature_extractor(feature_extractor_path)
-        # Infer fft_len from the model input shape if available
+        model_data_type = infer_model_data_type(feature_extractor_name)
+        # For CSI source, force raw input mode (no FFT/spectrogram).
+        if source_l == "csi" and model_data_type == "Spectrogram":
+            print("CSI sample_source selected; overriding model input preprocessing to IQ (no FFT).")
+            model_data_type = "IQ"
+
+        # Infer fft_len from the model input shape if available (used only for Spectrogram).
         try:
             inferred_fft_len = int(feature_extractor.input_shape[1]) if feature_extractor.input_shape is not None else 256
         except Exception:
             inferred_fft_len = 256
+
         # Keep test preprocessing aligned with training-time spectrogram construction.
         model_name_l = feature_extractor_name.lower()
         expected_channels = 2
@@ -330,13 +482,16 @@ def test_model(feature_extractor_name, node_configurations, home="/home/Research
         elif expected_channels == 2:
             # Backward-compatible fallback when older filenames do not include spectrogram mode.
             spectrogram_processing = "magnitude_phase"
-        print(f"Using spectrogram processing mode: {spectrogram_processing}")
+        if model_data_type == "Spectrogram":
+            print(f"Using spectrogram processing mode: {spectrogram_processing}")
+        else:
+            print(f"Using raw {model_data_type} preprocessing (no FFT).")
 
         features = extract_features_data(
             data,
             feature_extractor,
             inferred_fft_len,
-            data_type="Spectrogram",
+            data_type=model_data_type,
             spectrogram_processing=spectrogram_processing,
         )
         if dataRayTracing:
@@ -344,7 +499,7 @@ def test_model(feature_extractor_name, node_configurations, home="/home/Research
                 dataRayTracing,
                 feature_extractor,
                 inferred_fft_len,
-                data_type="Spectrogram",
+                data_type=model_data_type,
                 spectrogram_processing=spectrogram_processing,
             )
         
@@ -449,7 +604,7 @@ def test_model(feature_extractor_name, node_configurations, home="/home/Research
         
         reconciliation = ReedSolomonReconciliation(L, bits_per_symbol, K, n1)
         t_start = time.time()
-        reconciliation11,reconciliation21,reconciliation31=reconciliation.reconcile_rate(quantized_data)
+        reconciliation11, reconciliation21, reconciliation31, _, _ = reconciliation.reconcile_rate(quantized_data)
         t_end = time.time()
         print("Time for reconciliation (Alice,Bob,Eve): ", t_end-t_start)
         print("Reconciliation results: ", reconciliation11[0])
@@ -463,7 +618,7 @@ def test_model(feature_extractor_name, node_configurations, home="/home/Research
         print("L=", L, "K=", K, "S=", S, "N=", n1)
         print("Number of success keys: ", len(success_keys))
         print("Percentage of success keys: ", len(success_keys)/len(reconciliation11)*100, "%")
-        exit()
+        # exit()
         # Ampplification and NIST Test Suite shortcut
         #Privacy Amplification
         print("Privacy Amplification and NIST Test Suite shortcut")
@@ -527,20 +682,20 @@ def test_model(feature_extractor_name, node_configurations, home="/home/Research
         # print("Number of keys passed the NIST Test Suite: ", num_keys_passed)
         print("Percentage of keys passed the NIST Test Suite: ", num_keys_passed/len(priv_amp_bin_data)*100)
         
-        exit()
+        # exit()
         
         s2 = 15
         n2 = int(k+s2)
         reconciliation = ReedSolomonReconciliation(L, bits_per_symbol, K, n2)
         t_start = time.time()
-        reconciliation12,reconciliation22,reconciliation32=reconciliation.reconcile_rate(quantized_data)
+        reconciliation12, reconciliation22, reconciliation32, _, _ = reconciliation.reconcile_rate(quantized_data)
         t_end = time.time()
         print("Time for reconciliation (Alice,Bob,Eve): ", t_end-t_start)
         s3 = 7
         n3 = int(k+s3)
         t_start = time.time()
         reconciliation = ReedSolomonReconciliation(L, bits_per_symbol, K, n3)
-        reconciliation13,reconciliation23,reconciliation33=reconciliation.reconcile_rate(quantized_data)
+        reconciliation13, reconciliation23, reconciliation33, _, _ = reconciliation.reconcile_rate(quantized_data)
         t_end = time.time()
         print("Time for reconciliation (Alice,Bob,Eve): ", t_end-t_start)
         
@@ -599,7 +754,7 @@ def test_model(feature_extractor_name, node_configurations, home="/home/Research
     
     plotting = True
     if plotting:
-        scenario = "Scenario 2"
+        scenario = "Scenario 1"
         
         # Separate real and imaginary parts
         t = np.arange(len(data[0]))
@@ -1007,7 +1162,7 @@ def calculate_KDR_ratio(avg_KDR_AB, avg_KDR_AC, avg_KDR_BC):
     eve_KDR_ratio = KDR_eve_avg/avg_KDR_AB
     return eve_KDR_ratio
 
-def find_best_model(configuration, homeDir, node_configurations):
+def find_best_model(configuration, homeDir, node_configurations, signal_type="Sinusoid", sample_source="auto"):
 
     # Alpha:  1 Beta:  1 Gamma:  0.5
     alphas = [0.5] # [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]
@@ -1051,6 +1206,7 @@ def find_best_model(configuration, homeDir, node_configurations):
                 idx = idx + 1
         else:
             print("No node IDs found for dataset: ", dataset_type)
+    configure_dataset_iq_source(dataset, signal_type, sample_source=sample_source)
     dataset.get_dataframe_Info()
     print("Node configs names: ", node_configs_names)
     # print("Dataset names: ", dataset_names)
@@ -1061,7 +1217,8 @@ def find_best_model(configuration, homeDir, node_configurations):
     quantization_methods = [{"type": "floating_point", "precision": precision_levels[0]}, {"type": "mean"}, {"type": "threshold", "threshold": 0.5}]
     quantization_methods = quantization_methods[0:1]
     # data_types = ["IQ", "Polar", "Spectrogram"]
-    data_types = ["Spectrogram"]
+    source_l = str(sample_source).strip().lower()
+    data_types = ["IQ"] if source_l == "csi" else ["Spectrogram"]
     # data_type = data_types[2]
     EveRayTracing = False
     if EveRayTracing:
@@ -1339,7 +1496,7 @@ if __name__ == "__main__":
     #     # plot_rec_rate_by_S_for_L(csv_path=ResultsDir+reconciliation_file, title="Reconciliation Rate vs RS Code Rate (B="+str(L)+")", save_path="rec_rate_by_S_OTA-Lab-123_132_"+model_type+"_L"+str(L)+img_type, L=L, quantization_method=quantization_method)
     #     plot_rec_rate_by_S_for_L(csv_path=ResultsDir+reconciliation_file, title="Reconciliation Rate vs RS Code Rate (B="+str(L)+")", save_path="rec_rate_by_S_OTA-Lab-123_RayTracing_"+model_type+"_L"+str(L)+img_type, L=L, quantization_method=quantization_method)
     # exit() 
-    # Lets plot the history of the training
+    # # Lets plot the history of the training
     # file = "/home/Research/POWDER/Results/History_Spectrogram_FeatureExtractor_RNN_in256_out128_alpha0.5_beta0.5_gamma0.1_RMSprop_lr0.0001_Sinusoid-Powder-OTA-Lab-Nodes"
     # with h5py.File(file, "r") as f:
     #     # Check the keys in the file
@@ -1358,6 +1515,30 @@ if __name__ == "__main__":
     # plt.savefig("train_and_validation_loss.eps")
     # exit()
     
+    plotScenarioFiles = True
+    if plotScenarioFiles:
+        scenario_files_sinusoid = [
+            "/home/Research/POWDER/Results/Results_CAAI-FAU_Key-Generation_[[8, 5, 4]]_HashNet_Spectrogram_FeatureExtractor_RNN_QuantizationLayer_specmagnitude_phase_in256_out128_margin0_20260310_050425.h5",
+            "/home/Research/POWDER/Results/Results_CAAI-FAU_Key-Generation_[[1, 2, 3]]_HashNet_Spectrogram_FeatureExtractor_RNN_QuantizationLayer_specmagnitude_phase_in256_out128_margin0_20260310_050703.h5",
+            "/home/Research/POWDER/Results/Results_CAAI-FAU_Key-Generation_[[1, 3, 2]]_HashNet_Spectrogram_FeatureExtractor_RNN_QuantizationLayer_specmagnitude_phase_in256_out128_margin0_20260310_050733.h5",
+        ]
+        
+        scenario_files_deltaPulse = [
+            "/home/Research/POWDER/Results/Results_CAAI-FAU_Key-Generation_[[5, 8, 4]]_HashNet_Spectrogram_FeatureExtractor_RNN_QuantizationLayer_specmagnitude_phase_in2048_out128_margin0_20260310_052607.h5",
+            "/home/Research/POWDER/Results/Results_CAAI-FAU_Key-Generation_[[1, 2, 3]]_HashNet_Spectrogram_FeatureExtractor_RNN_QuantizationLayer_specmagnitude_phase_in2048_out128_margin0_20260310_052741.h5",
+            "/home/Research/POWDER/Results/Results_CAAI-FAU_Key-Generation_[[1, 3, 2]]_HashNet_Spectrogram_FeatureExtractor_RNN_QuantizationLayer_specmagnitude_phase_in2048_out128_margin0_20260310_052811.h5",
+        ]
+        
+        scenario_files = scenario_files_sinusoid
+
+        summary = plot_scenario_bdr_from_h5_files(
+            scenario_files,
+            scenario_labels=["Scenario 1", "Scenario 2", "Scenario 3"],
+            output_path="/home/Research/POWDER/Results/BDR_3_scenarios_from_h5.png",
+        )
+        print(summary)
+        exit()
+    
     homeDir = "/home/Research/POWDER/"
     ModelsDir = homeDir+"Models/"
     ResultsDir = homeDir+"Results/"
@@ -1366,18 +1547,20 @@ if __name__ == "__main__":
     
     # exit()
     
-    signal_type = "Sinusoid" # Sinusoid, PN-Sequence, deltaPulse
+    signal_type = "deltaPulse" # Sinusoid, PN-Sequence, deltaPulse, WiFi
+    sample_source = "auto"    # auto, chan_est_samples, csi, iq
     
     node_Ids = {"Sinusoid":
                     {"OTA-Lab": [#[1,2,3],
-                                 [5,7,6],
+                                #  [5,7,8],
                              #[1,4,5]
                             #,[1,4,8],[2,4,3],
                             #[4,2,5],[4,2,8],[4,8,5],
                             #[5,7,8],[5,8,7],[8,4,1],
-                            #[8,5,1], [8,5,4]
+                            #[8,5,1], 
+                            [8,5,4]
                             ],
-                    "OTA-Dense": [[1,2,3],
+                    "OTA-Dense": [#[1,2,3],
                                 #[1,2,5],
                                   [1,3,2],
                                 # [4,3,5]
@@ -1392,19 +1575,40 @@ if __name__ == "__main__":
                     "OTA-Dense": []
                 },
                 "deltaPulse": {
-                    "OTA-Lab": [[5,6,1],
+                    "OTA-Lab": [# [5,6,1],
                                 # [5,6,2],[5,6,3],
                                 # [5,6,4],[5,6,7],[5,6,8]
                                 # [5,7,1],[5,7,2],[5,7,3],
                                 # [5,7,4]
+                                [5,8,4]
                                 ],
-                    "OTA-Dense": [[1,2,3],[1,2,4],[1,3,2],
-                                  [1,3,4],[1,4,2],[1,4,3],
-                                  [2,3,1],[2,3,4],[2,4,1],
-                                  [2,4,3],[3,4,1],[3,4,2]
+                    "OTA-Dense": [
+                                  #[1,2,3],
+                                  #[1,2,4],
+                                  [1,3,2],
+                                  #[1,3,4],[1,4,2],[1,4,3],
+                                  #[2,3,1],[2,3,4],[2,4,1],
+                                  #[2,4,3],[3,4,1],[3,4,2]
                                   ],
                     "Sionna-Ray-Tracing":[]
-                }         
+                },
+                "WiFi": {
+                    "OTA-Lab": [
+                        [1,2,3],
+                        [1,4,5],
+                        [1,4,8],
+                        [2,4,3],
+                        [4,2,5],
+                        [4,2,8],
+                        [4,8,5],
+                        [5,8,7],
+                        [8,4,1],
+                        [8,5,1],
+                        [8,5,4],
+                    ],
+                    "OTA-Dense": [],
+                    "Sionna-Ray-Tracing": []
+                }
     }
     
     test_node_configurations = {
@@ -1449,7 +1653,14 @@ if __name__ == "__main__":
         ScenariosBDR = [scenario1BDR, scenario2BDR, scenario3BDR]        
         
         model_name = "Spectrogram_FeatureExtractor_RNN_in256_out128_alpha0.5_beta0.5_gamma0.1_RMSprop_lr0.0001_Sinusoid-Powder-OTA-Lab-Nodes_1761276429.h5"
-        test_model(model_name, test_node_configurations[data_collection_type_test], home=homeDir, generate_results=True)
+        test_model(
+            model_name,
+            test_node_configurations[data_collection_type_test],
+            home=homeDir,
+            generate_results=True,
+            signal_type=signal_type,
+            sample_source=sample_source,
+        )
         
         exit()
     # exit()
@@ -1484,7 +1695,13 @@ if __name__ == "__main__":
         elif test_type == "find_best_model":
             print("Finding best model")
             # exit()
-            model_name = find_best_model(test_node_configurations[data_collection_type_train], homeDir, test_node_configurations[data_collection_type_test])
+            model_name = find_best_model(
+                test_node_configurations[data_collection_type_train],
+                homeDir,
+                test_node_configurations[data_collection_type_test],
+                signal_type=signal_type,
+                sample_source=sample_source,
+            )
             
             # exit()
             # results_reconciliation_file = ResultsDir+"results_reconciliation_models_OTA-All-123_RNN.csv"
@@ -1497,9 +1714,12 @@ if __name__ == "__main__":
             # shutil.copy(ModelsDir+model_name, ModelsDir+"Best_Model.h5")
         else:
             print("Using default model name")
-            model_name_deltaPulse = "HashNet_Spectrogram_FeatureExtractor_RNN_QuantizationLayer_specmagnitude_phase_in2048_out128_margin0.3_Adam_lr0.0001_deltaPulse-Powder-OTA-Lab-Nodes_2_1771886380.keras"
-            model_name_Sinusoid = "HashNet_Spectrogram_FeatureExtractor_RNN_QuantizationLayer_specmagnitude_phase_in256_out128_margin0.3_Adam_lr0.0001_Sinusoid-Powder-OTA-Lab-Nodes_2_1771884478.keras"
-            # Find the latest file in the models directory by date
+            # model_name_deltaPulse = "HashNet_Spectrogram_FeatureExtractor_RNN_QuantizationLayer_specmagnitude_phase_in2048_out128_margin0.3_Adam_lr0.0001_deltaPulse-Powder-OTA-Lab-Nodes_2_1771886380.keras"
+            # # NEW BEST: HashNet_Spectrogram_FeatureExtractor_RNN_QuantizationLayer_specmagnitude_phase_in256_out128_margin0.25_RMSprop_lr0.0001_Sinusoid-Powder-OTA-Lab-Nodes_4_1773111726.keras
+            # model_name_Sinusoid = "HashNet_Spectrogram_FeatureExtractor_RNN_QuantizationLayer_specmagnitude_phase_in256_out128_margin0.3_Adam_lr0.0001_Sinusoid-Powder-OTA-Lab-Nodes_2_1771884478.keras"
+            # NEW BEST: HashNet_Spectrogram_FeatureExtractor_RNN_QuantizationLayer_specmagnitude_phase_in2048_out128_margin0.3_RMSprop_lr0.0001_deltaPulse-Powder-OTA-Lab-Nodes_4_1773091686.keras
+            model_name_deltaPulse = "HashNet_Spectrogram_FeatureExtractor_RNN_QuantizationLayer_specmagnitude_phase_in2048_out128_margin0.3_RMSprop_lr0.0001_deltaPulse-Powder-OTA-Lab-Nodes_4_1773091686.keras"
+            model_name_Sinusoid = "HashNet_Spectrogram_FeatureExtractor_RNN_QuantizationLayer_specmagnitude_phase_in256_out128_margin0.25_RMSprop_lr0.0001_Sinusoid-Powder-OTA-Lab-Nodes_4_1773111726.keras"
             if signal_type == "deltaPulse":
                 model_name = model_name_deltaPulse
             elif signal_type == "Sinusoid":
@@ -1575,6 +1795,13 @@ if __name__ == "__main__":
     
     print("Testing model name: ", model_name)
     feature_extractor_name = ModelsDir+model_name
-    test_model(model_name, test_node_configurations[data_collection_type_test], home=homeDir, generate_results=True, signal_type=signal_type)
+    test_model(
+        model_name,
+        test_node_configurations[data_collection_type_test],
+        home=homeDir,
+        generate_results=True,
+        signal_type=signal_type,
+        sample_source=sample_source,
+    )
     
     # Spectrogram_FeatureExtractor_RNN_in2048_out128_alpha0.5_beta0.5_gamma0.1_RMSprop_lr0.0001_deltaPulse-Powder-OTA-Lab-Nodes_1769122091.h5

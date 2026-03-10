@@ -420,6 +420,11 @@ class ChannelSpectrogram():
             
             CHAN_IND_SPEC_AMP is the genereated channel independent spectrogram.
         '''
+        # Clamp STFT parameters for short signals (e.g., WiFi chan_est probes with 128 samples).
+        sig_len = int(np.asarray(sig).shape[0])
+        win_len = int(min(max(2, int(win_len)), max(2, sig_len)))
+        overlap = int(min(max(0, int(overlap)), win_len - 1))
+
         # Short-time Fourier transform (STFT).
         f, t, spec = signal.stft(sig,
                                 # fs=1000000,
