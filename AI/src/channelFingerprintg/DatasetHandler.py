@@ -4,8 +4,38 @@ import datasets
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
+import os
 
 from scipy import signal
+
+def normalize_complex_samples(data, method="rms", center=True, eps=1e-8):
+    """
+    Normalize a batch of complex samples per example.
+
+    method:
+      - "rms": unit-RMS normalization (power invariance)
+      - "peak": unit-peak normalization
+      - "none": no scaling
+    """
+    x = np.asarray(data, dtype=np.complex64).copy()
+    if x.ndim != 2:
+        raise ValueError(f"normalize_complex_samples expects shape (M,N), got {x.shape}")
+
+    if center:
+        x = x - np.mean(x, axis=1, keepdims=True)
+
+    mode = str(method).strip().lower()
+    if mode == "none":
+        return x
+    if mode == "rms":
+        scale = np.sqrt(np.mean(np.abs(x) ** 2, axis=1, keepdims=True))
+    elif mode == "peak":
+        scale = np.max(np.abs(x), axis=1, keepdims=True)
+    else:
+        raise ValueError(f"Unsupported normalization method: {method}")
+
+    scale = np.maximum(scale, eps).astype(np.float32)
+    return (x / scale).astype(np.complex64)
 
 class DatasetHandler():
     def __init__(self, dataset_name, config_name, repo_name="CAAI-FAU"):
@@ -128,6 +158,186 @@ class DatasetHandler():
         if shuffle:
             data, label, rx, tx = self.shuffle_in_groups_of_four(data, label, rx, tx, seed=seed)
         return data,label, rx, tx
+
+    def evaluate_dataset_diagnostics(
+        self,
+        dataset_label,
+        output_dir,
+        samples_per_scenario=400,
+        show_plot=False,
+        iq_probe_index=None,
+    ):
+        """
+        Generate diagnostic plots/metrics for one dataset configuration.
+
+        This helps explain why some scenarios produce better/worse key quality by
+        comparing link behaviors:
+          - Alice-Bob (AB)
+          - Alice-Eve (AE)
+          - Bob-Alice (BA)
+          - Bob-Eve (BE)
+        """
+        os.makedirs(output_dir, exist_ok=True)
+        data, labels, rx, tx = self.load_data(shuffle=False)
+        data = np.stack([np.asarray(pkt, dtype=np.complex64) for pkt in data])
+
+        usable = (data.shape[0] // 4) * 4
+        if usable == 0:
+            raise ValueError("Dataset has fewer than 4 samples; cannot form AB/AE/BA/BE quadruplets.")
+        if usable != data.shape[0]:
+            data = data[:usable]
+            labels = labels[:usable]
+            rx = rx[:usable]
+            tx = tx[:usable]
+
+        ab = data[0::4]
+        ae = data[1::4]
+        ba = data[2::4]
+        be = data[3::4]
+        link_data = {
+            "alice-bob": ab,
+            "alice-eve": ae,
+            "bob-alice": ba,
+            "bob-eve": be,
+        }
+
+        # ---- Plot 1: IQ samples for one probe per link ----
+        n_probes = ab.shape[0]
+        # By default, visualize a representative probe from the middle.
+        if iq_probe_index is None:
+            probe_idx = n_probes // 2
+        else:
+            probe_idx = int(np.clip(iq_probe_index, 0, n_probes - 1))
+        fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+        axes = axes.flatten()
+        for i, (name, arr) in enumerate(link_data.items()):
+            sig = arr[probe_idx]
+            axes[i].plot(sig.real, label="I", linewidth=1.2)
+            axes[i].plot(sig.imag, label="Q", linewidth=1.2)
+            axes[i].set_title(f"{name} - probe {probe_idx}")
+            axes[i].set_xlabel("Sample")
+            axes[i].set_ylabel("Amplitude")
+            axes[i].grid(alpha=0.3)
+            axes[i].legend()
+        plt.tight_layout()
+        iq_plot_path = os.path.join(output_dir, f"{dataset_label}_diag_iq_links.png")
+        plt.savefig(iq_plot_path, dpi=180)
+        if show_plot:
+            plt.show()
+        plt.close(fig)
+
+        # ---- Probe power helpers ----
+        def avg_probe_power(x):
+            return np.mean(np.abs(x) ** 2, axis=1)
+
+        power = {name: avg_probe_power(arr) for name, arr in link_data.items()}
+
+        # ---- Plot 2: Per-probe average power by link ----
+        fig, ax = plt.subplots(figsize=(12, 5))
+        for name, p in power.items():
+            ax.plot(p, label=name, linewidth=1.2)
+        ax.set_title("Average probe power by link")
+        ax.set_xlabel("Probe index")
+        ax.set_ylabel("Average power")
+        ax.grid(alpha=0.3)
+        ax.legend()
+        plt.tight_layout()
+        power_curve_path = os.path.join(output_dir, f"{dataset_label}_diag_probe_power_curve.png")
+        plt.savefig(power_curve_path, dpi=180)
+        if show_plot:
+            plt.show()
+        plt.close(fig)
+
+        # ---- Plot 3: Power distribution per link ----
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.boxplot(
+            [power["alice-bob"], power["alice-eve"], power["bob-alice"], power["bob-eve"]],
+            labels=["AB", "AE", "BA", "BE"],
+            showfliers=False,
+        )
+        ax.set_title("Probe power distribution by link")
+        ax.set_ylabel("Average power")
+        ax.grid(alpha=0.3, axis="y")
+        plt.tight_layout()
+        power_box_path = os.path.join(output_dir, f"{dataset_label}_diag_probe_power_box.png")
+        plt.savefig(power_box_path, dpi=180)
+        if show_plot:
+            plt.show()
+        plt.close(fig)
+
+        # ---- Plot 4: Scenario-wise mean power (if enough probes) ----
+        scenario_plot_path = None
+        probes_per_scenario = max(1, samples_per_scenario // 4)
+        num_scenarios = n_probes // probes_per_scenario
+        if num_scenarios > 0:
+            fig, ax = plt.subplots(figsize=(10, 5))
+            for name, p in power.items():
+                scen_means = []
+                for s in range(num_scenarios):
+                    start = s * probes_per_scenario
+                    stop = start + probes_per_scenario
+                    scen_means.append(float(np.mean(p[start:stop])))
+                ax.plot(scen_means, marker="o", label=name)
+            ax.set_title("Scenario-wise mean probe power by link")
+            ax.set_xlabel("Scenario index")
+            ax.set_ylabel("Mean probe power")
+            ax.grid(alpha=0.3)
+            ax.legend()
+            plt.tight_layout()
+            scenario_plot_path = os.path.join(output_dir, f"{dataset_label}_diag_scenario_power.png")
+            plt.savefig(scenario_plot_path, dpi=180)
+            if show_plot:
+                plt.show()
+            plt.close(fig)
+
+        # ---- Pairwise link similarity (complex correlation magnitude) ----
+        def link_similarity(x, y, eps=1e-12):
+            # Returns one similarity value per probe in [0, 1].
+            num = np.abs(np.sum(x * np.conj(y), axis=1))
+            den = np.linalg.norm(x, axis=1) * np.linalg.norm(y, axis=1) + eps
+            return num / den
+
+        similarities = {
+            "AB-BA": link_similarity(ab, ba),
+            "AB-AE": link_similarity(ab, ae),
+            "BA-BE": link_similarity(ba, be),
+            "AB-BE": link_similarity(ab, be),
+        }
+
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.boxplot(
+            [similarities["AB-BA"], similarities["AB-AE"], similarities["BA-BE"], similarities["AB-BE"]],
+            labels=["AB-BA", "AB-AE", "BA-BE", "AB-BE"],
+            showfliers=False,
+        )
+        ax.set_title("Pairwise link similarity distribution")
+        ax.set_ylabel("Similarity (|corr|)")
+        ax.grid(alpha=0.3, axis="y")
+        plt.tight_layout()
+        similarity_plot_path = os.path.join(output_dir, f"{dataset_label}_diag_link_similarity.png")
+        plt.savefig(similarity_plot_path, dpi=180)
+        if show_plot:
+            plt.show()
+        plt.close(fig)
+
+        summary = {
+            "dataset_label": dataset_label,
+            "num_samples_total": int(data.shape[0]),
+            "num_probes_per_link": int(n_probes),
+            "mean_power": {k: float(np.mean(v)) for k, v in power.items()},
+            "std_power": {k: float(np.std(v)) for k, v in power.items()},
+            "mean_similarity": {k: float(np.mean(v)) for k, v in similarities.items()},
+            "plots": {
+                "iq_links": iq_plot_path,
+                "probe_power_curve": power_curve_path,
+                "probe_power_box": power_box_path,
+                "scenario_power": scenario_plot_path,
+                "link_similarity": similarity_plot_path,
+            },
+        }
+
+        print("Dataset diagnostics summary:", summary)
+        return summary
     
     def plot_time_series(self, data, config_name, indexes_to_plot=None):
         # In a figure with 4 subplots each showing a time series for each quadruplet
@@ -386,16 +596,9 @@ class ChannelSpectrogram():
     def __init__(self,):
         pass
     
-    def _normalization(self,data):
-        ''' Normalize the signal.'''
-        s_norm = np.zeros(data.shape, dtype=np.complex64)
-        
-        for i in range(data.shape[0]):
-            sig_amplitude = np.abs(data[i])
-            rms = np.sqrt(np.mean(sig_amplitude**2))
-            s_norm[i] = data[i]/rms
-        
-        return s_norm        
+    def _normalization(self, data, method="rms", center=True):
+        """Normalize each complex example to reduce power/offset leakage."""
+        return normalize_complex_samples(data, method=method, center=center)
 
     def _spec_crop(self, x):
         '''Crop the generated channel independent spectrogram.'''
@@ -465,7 +668,7 @@ class ChannelSpectrogram():
         normalized_data = (data - min_val) / (max_val - min_val)
         return normalized_data
         
-    def channel_spectrogram(self, data, FFTwindow=512, processing="magnitude"):
+    def channel_spectrogram(self, data, FFTwindow=512, processing="magnitude", normalize=True, normalization_method="rms", center=True):
         '''
         channel_ind_spectrogram converts IQ samples to channel independent 
         spectrograms.
@@ -477,8 +680,9 @@ class ChannelSpectrogram():
             DATA_CHANNEL_IND_SPEC is channel independent spectrograms.
         '''
         data = np.stack([np.asarray(pkt, dtype=np.complex64) for pkt in data])
-        # Normalize the IQ samples.
-        # data = self._normalization(data)
+        # Normalize complex IQ samples to reduce absolute-power shortcuts.
+        if normalize:
+            data = self._normalization(data, method=normalization_method, center=center)
             
         # Calculate the size of channel independent spectrograms.
         win_len=FFTwindow # 128 | 256 | 512 --Smaller window will give better time resolution but worse freq. resolution and vice versa. 128 for N=8192 is the most balanced
@@ -518,45 +722,40 @@ class ChannelIQ():
     def __init__(self,):
         pass
     
-    def _normalization(self,data):
-        ''' Normalize the signal.'''
-        s_norm = np.zeros(data.shape, dtype=np.complex64)
-        
-        for i in range(data.shape[0]):
-            sig_amplitude = np.abs(data[i])
-            rms = np.sqrt(np.mean(sig_amplitude**2))
-            s_norm[i] = data[i]/rms
-        
-        return s_norm   
+    def _normalization(self, data, method="rms", center=True):
+        """Normalize each complex example to reduce power/offset leakage."""
+        return normalize_complex_samples(data, method=method, center=center)
     
-    def channel_iq(self, data):
+    def channel_iq(self, data, normalize=True, normalization_method="rms", center=True, rnn_format=False):
         '''
         channel_iq converts IQ samples to channel independent IQ samples.
+
+        When rnn_format=True, output shape is (M, 1, N, 2) so that an RNN
+        (which permutes to time-first) sees N time steps of [I, Q] features.
         '''
         data = np.stack([np.asarray(pkt, dtype=np.complex64) for pkt in data])
-        # data = self._normalization(data)
-        # Create (M, N, 2, 1) array: feature axis [I, Q], trailing channel axis = 1
+        if normalize:
+            data = self._normalization(data, method=normalization_method, center=center)
         M, N = data.shape[0], data.shape[1]
-        data_iq = np.empty((M, N, 2, 1), dtype=np.float32)
-        data_iq[:, :, 0, 0] = data.real.astype(np.float32)
-        data_iq[:, :, 1, 0] = data.imag.astype(np.float32)
-        print("Data IQ shape (M, N, 2, 1):", data_iq.shape)
+        if rnn_format:
+            data_iq = np.empty((M, 1, N, 2), dtype=np.float32)
+            data_iq[:, 0, :, 0] = data.real.astype(np.float32)
+            data_iq[:, 0, :, 1] = data.imag.astype(np.float32)
+            print("Data IQ shape (M, 1, N, 2) [RNN-format]:", data_iq.shape)
+        else:
+            data_iq = np.empty((M, N, 2, 1), dtype=np.float32)
+            data_iq[:, :, 0, 0] = data.real.astype(np.float32)
+            data_iq[:, :, 1, 0] = data.imag.astype(np.float32)
+            print("Data IQ shape (M, N, 2, 1):", data_iq.shape)
         return data_iq
     
 class ChannelPolar():
     def __init__(self,):
         pass
     
-    def _normalization(self,data):
-        ''' Normalize the signal.'''
-        s_norm = np.zeros(data.shape, dtype=np.complex64)
-        
-        for i in range(data.shape[0]):
-            sig_amplitude = np.abs(data[i])
-            rms = np.sqrt(np.mean(sig_amplitude**2))
-            s_norm[i] = data[i]/rms
-        
-        return s_norm   
+    def _normalization(self, data, method="rms", center=True):
+        """Normalize each complex example to reduce power/offset leakage."""
+        return normalize_complex_samples(data, method=method, center=center)
     
     def complex_to_polar(self, data):
         I = data.real
@@ -565,12 +764,13 @@ class ChannelPolar():
         phase = np.arctan2(Q, I)
         return amplitude, phase
     
-    def channel_polar(self, data):
+    def channel_polar(self, data, normalize=True, normalization_method="rms", center=True):
         '''
         channel_polar converts IQ samples to channel independent polar samples.
         '''
         data = np.stack([np.asarray(pkt, dtype=np.complex64) for pkt in data])
-        # data = self._normalization(data)
+        if normalize:
+            data = self._normalization(data, method=normalization_method, center=center)
         amplitude, phase = self.complex_to_polar(data)
         # Create (M, N, 2, 1) array: feature axis [Amplitude, Phase], trailing channel axis = 1
         M, N = amplitude.shape[0], amplitude.shape[1]
@@ -612,6 +812,21 @@ def build_group_names(config_names):
 
 
 if __name__ == "__main__":
+    dataset = DatasetHandler("Key-Generation", "Sinusoid-Powder-OTA-Dense-Nodes-123", "CAAI-FAU")
+    summary_123 = dataset.evaluate_dataset_diagnostics(
+        dataset_label="OTA-Dense-123",
+        output_dir="/home/Research/POWDER/Results/DatasetDiagnostics",
+        samples_per_scenario=400,
+        show_plot=False,
+    )
+    dataset2 = DatasetHandler("Key-Generation", "Sinusoid-Powder-OTA-Dense-Nodes-132", "CAAI-FAU")
+    summary_132 = dataset2.evaluate_dataset_diagnostics(
+        dataset_label="OTA-Dense-132",
+        output_dir="/home/Research/POWDER/Results/DatasetDiagnostics",
+        samples_per_scenario=400,
+        show_plot=False,
+    )
+    exit()
     # Example usage
     dataset_name = "Key-Generation"
     # config_name = "Sinusoid-Powder-OTA-Dense-Nodes-123" #"Sinusoid-Powder-OTA-Lab"

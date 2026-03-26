@@ -8,6 +8,25 @@ from tensorflow.keras.regularizers import l2
 
 
 @tf.keras.utils.register_keras_serializable(package="channelFingerprintg")
+class L2NormalizeLayer(tf.keras.layers.Layer):
+    """Serializable L2 normalization layer."""
+    def __init__(self, axis=1, **kwargs):
+        super().__init__(**kwargs)
+        self.axis = axis
+
+    def call(self, inputs):
+        return K.l2_normalize(inputs, axis=self.axis)
+
+    def compute_output_shape(self, input_shape):
+        return input_shape
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({"axis": self.axis})
+        return config
+
+
+@tf.keras.utils.register_keras_serializable(package="channelFingerprintg")
 class STEQuantizationLayer(tf.keras.layers.Layer):
     """Serializable STE quantization layer for stable .keras save/load."""
     def __init__(self, threshold=0.5, low=0.0, high=1.0, **kwargs):
@@ -185,7 +204,7 @@ class TripletNet_Channel():
         x = Flatten()(x)
         x = Dense(512)(x)
         #x = Dense(512,kernel_regularizer='l1_l2')(x)
-        outputs = Lambda(lambda  x: K.l2_normalize(x,axis=1))(x)
+        outputs = L2NormalizeLayer(axis=1, name="resnet_l2norm")(x)
         model = Model(inputs=inputs, outputs=outputs)
         return model             
     
@@ -228,6 +247,192 @@ class TripletNet_Channel():
             #print("label",label.shape)
             #print("A",A.shape)
             yield (A, P, N), label 
+
+class RNN_TripletNet_Channel(TripletNet_Channel):
+    """TripletNet with an RNN feature extractor producing binary {0,1} keys.
+
+    Architecture mirrors RNN_HashNet_Channel:
+      GRU -> projection -> sigmoid (soft, named "triplet_bits_soft")
+                                   -> STE quantization (hard {0,1})
+
+    create_triplet_net taps the soft branch for loss (smooth gradients),
+    while the saved feature_extractor outputs hard binary codes.
+    """
+    def __init__(
+        self,
+        gru_units=128,
+        dropout=0.2,
+        recurrent_dropout=0.0,
+        bidirectional=False,
+        num_layers=1,
+        embed_dim=256,
+    ):
+        super().__init__()
+        self.gru_units = gru_units
+        self.dropout = dropout
+        self.recurrent_dropout = recurrent_dropout
+        self.bidirectional = bidirectional
+        self.num_layers = num_layers
+        self.embed_dim = embed_dim
+
+    def feature_extractor(self, datashape, output_length=None):
+        self.datashape = datashape
+        F, T, C = datashape[1], datashape[2], datashape[3]
+        out_dim = int(self.embed_dim if output_length is None else output_length)
+
+        inputs = Input(shape=(F, T, C))
+        x = LayerNormalization(axis=[1, 2, 3], epsilon=1e-6, name="rnn_triplet_input_norm")(inputs)
+        x = Permute((2, 1, 3))(x)        # (T, F, C)
+        x = Reshape((T, F * C))(x)       # (T, F*C)
+
+        x = Dense(self.gru_units, name="triplet_input_projection")(x)
+        x = LayerNormalization(axis=-1, epsilon=1e-6, name="rnn_triplet_step_norm")(x)
+
+        for i in range(self.num_layers):
+            return_sequences = (i < self.num_layers - 1)
+            gru = GRU(
+                self.gru_units,
+                return_sequences=return_sequences,
+                dropout=self.dropout,
+                recurrent_dropout=self.recurrent_dropout,
+                reset_after=True,
+                name=f"triplet_gru_{i+1}",
+            )
+            if self.bidirectional:
+                x = Bidirectional(gru, name=f"triplet_bi_gru_{i+1}")(x)
+            else:
+                x = gru(x)
+            if return_sequences:
+                x = LayerNormalization(name=f"triplet_gru_ln_{i+1}")(x)
+
+        hidden_dim = self.gru_units * 2 if self.bidirectional else self.gru_units
+        x = Dense(hidden_dim, activation="relu", name="triplet_projection")(x)
+        x = LayerNormalization(name="triplet_projection_ln")(x)
+        x = Dropout(self.dropout, name="triplet_projection_dropout")(x)
+        x = Dense(out_dim, activation="sigmoid", name="triplet_bits_soft")(x)
+        x = ste_quantize_layer_HashNet(threshold=0.5)(x)
+        return Model(inputs=inputs, outputs=x, name="RNN_TripletNet_Channel")
+
+    def triplet_loss_kdr_soft(self, x):
+        """Differentiable KDR-based triplet loss using soft XOR: a+b-2ab."""
+        anchor, positive, negative = x
+        kdr_pos = tf.reduce_mean(anchor + positive - 2.0 * anchor * positive, axis=1)
+        kdr_neg = tf.reduce_mean(anchor + negative - 2.0 * anchor * negative, axis=1)
+        return K.maximum(kdr_pos - kdr_neg + self.alpha, 0.0)
+
+    def create_triplet_net(self, embedding_net, alpha):
+        """Build triplet training model using soft branch for loss gradients."""
+        self.alpha = alpha
+
+        soft_embedding_net = embedding_net
+        try:
+            soft_layer = embedding_net.get_layer("triplet_bits_soft")
+            soft_embedding_net = Model(
+                inputs=embedding_net.input,
+                outputs=soft_layer.output,
+                name="RNN_TripletNet_soft_for_loss",
+            )
+        except ValueError:
+            pass
+
+        input_1 = Input([self.datashape[1], self.datashape[2], self.datashape[3]])
+        input_2 = Input([self.datashape[1], self.datashape[2], self.datashape[3]])
+        input_3 = Input([self.datashape[1], self.datashape[2], self.datashape[3]])
+        A = soft_embedding_net(input_1)
+        P = soft_embedding_net(input_2)
+        N = soft_embedding_net(input_3)
+        loss = Lambda(self.triplet_loss_kdr_soft)([A, P, N])
+        return Model(inputs=[input_1, input_2, input_3], outputs=loss)
+
+    def create_generator_channel(self, batchsize, data, label, seed: int = None):
+        """Generate triplets with cross-scenario hard-negative mining.
+
+        For each sampled quadruplet [AB, AE, BA, BE]:
+          - Anchor/Positive: AB <-> BA (reciprocal channel pair)
+          - Negative: mix of local Eve and cross-scenario Eve with
+            similar power to remove trivial amplitude cues.
+        """
+        self.data = data
+        self.label = label
+        local_rng = random.Random(seed) if seed is not None else None
+
+        usable_len = (len(data) // 4) * 4
+        if usable_len < 4:
+            raise ValueError("Dataset must contain at least one full quadruplet (4 samples).")
+        data_usable = data[:usable_len]
+        quad_starts = np.arange(0, usable_len, 4, dtype=np.int32)
+
+        reduce_axes = tuple(range(1, data_usable.ndim))
+        sample_power = np.mean(np.abs(data_usable) ** 2, axis=reduce_axes)
+        ae_all = quad_starts + 1
+        be_all = quad_starts + 3
+        hard_top_k = 8
+
+        hard_pool_ab = {}
+        hard_pool_ba = {}
+        for qs in quad_starts:
+            ae_candidates = ae_all[ae_all != (qs + 1)]
+            be_candidates = be_all[be_all != (qs + 3)]
+            candidates = np.concatenate([ae_candidates, be_candidates], axis=0)
+
+            if candidates.size == 0:
+                hard_pool_ab[int(qs)] = np.array([qs + 1], dtype=np.int32)
+                hard_pool_ba[int(qs)] = np.array([qs + 3], dtype=np.int32)
+                continue
+
+            diff_ab = np.abs(sample_power[candidates] - sample_power[qs])
+            diff_ba = np.abs(sample_power[candidates] - sample_power[qs + 2])
+            order_ab = np.argsort(diff_ab)
+            order_ba = np.argsort(diff_ba)
+            hard_pool_ab[int(qs)] = candidates[order_ab[: min(hard_top_k, len(order_ab))]]
+            hard_pool_ba[int(qs)] = candidates[order_ba[: min(hard_top_k, len(order_ba))]]
+
+        def _pick_from(arr):
+            if local_rng is not None:
+                return int(arr[local_rng.randrange(len(arr))])
+            return int(arr[random.randrange(len(arr))])
+
+        while True:
+            list_a = []
+            list_p = []
+            list_n = []
+            batch = 0
+            while batch < batchsize:
+                if local_rng is not None:
+                    idx = int(quad_starts[local_rng.randrange(len(quad_starts))])
+                    swap_direction = bool(local_rng.getrandbits(1))
+                    use_hard = bool(local_rng.getrandbits(1))
+                else:
+                    idx = int(random.choice(quad_starts))
+                    swap_direction = bool(random.getrandbits(1))
+                    use_hard = bool(random.getrandbits(1))
+
+                if swap_direction:
+                    a = data_usable[idx]          # AB
+                    p = data_usable[idx + 2]      # BA
+                    n_local = data_usable[idx + 1] # AE
+                    hard_candidates = hard_pool_ab[int(idx)]
+                else:
+                    a = data_usable[idx + 2]      # BA
+                    p = data_usable[idx]          # AB
+                    n_local = data_usable[idx + 3] # BE
+                    hard_candidates = hard_pool_ba[int(idx)]
+
+                if use_hard:
+                    n = data_usable[_pick_from(hard_candidates)]
+                else:
+                    n = n_local
+
+                list_a.append(a)
+                list_p.append(p)
+                list_n.append(n)
+                batch += 1
+
+            A = np.array(list_a, dtype='float32')
+            P = np.array(list_p, dtype='float32')
+            N = np.array(list_n, dtype='float32')
+            label_out = np.ones(int(batchsize))
+            yield (A, P, N), label_out
 
 class QuadrupletNet():
     def __init__(self):
@@ -649,6 +854,24 @@ class RNN_QuadrupletNet_Channel(QuadrupletNet):
         base = self.feature_extractor(datashape, output_length)
         q_out = ste_quantize_layer_HashNet(threshold)(base.output)
         return Model(base.input, q_out, name="RNN_ChannelEncoder_Quantized")
+
+class RNN_QuadrupletNet_Channel_Simple(RNN_QuadrupletNet_Channel):
+    """Smaller/faster RNN Quadruplet baseline for debugging generalization."""
+    def __init__(
+        self,
+        gru_units=128,
+        dropout=0.2,
+        recurrent_dropout=0.0,
+        bidirectional=False,
+        num_layers=1,
+    ):
+        super().__init__(
+            gru_units=gru_units,
+            dropout=dropout,
+            recurrent_dropout=recurrent_dropout,
+            bidirectional=bidirectional,
+            num_layers=num_layers,
+        )
     
 # Transformer model
 class Transformer_QuadrupletNet_Channel(QuadrupletNet):
@@ -923,7 +1146,14 @@ class SiammeseHashNet():
         return disc_loss + reg_loss
     
     def create_generator_channel(self, batchsize, data, label, seed: int = None):
-        """Generate a siammese pairs generator for training."""
+        """Generate reciprocity-centric Siamese pairs with hard negatives.
+
+        Pair design per sampled quadruplet [AB, AE, BA, BE]:
+          1) Positive: AB <-> BA (reciprocal link)
+          2) Local negative: anchor vs same-time Eve (AE/BE)
+          3) Hard negative: anchor vs cross-scenario Eve sample with similar power
+             to reduce trivial power-based discrimination.
+        """
         self.data = data
         self.label = label
         local_rng = random.Random(seed) if seed is not None else None
@@ -933,6 +1163,42 @@ class SiammeseHashNet():
             raise ValueError("Dataset must contain at least one full quadruplet (4 samples).")
         data_usable = data[:usable_len]
         quad_starts = np.arange(0, usable_len, 4, dtype=np.int32)
+
+        # Precompute per-sample power for hard-negative mining.
+        reduce_axes = tuple(range(1, data_usable.ndim))
+        sample_power = np.mean(np.abs(data_usable) ** 2, axis=reduce_axes)
+        ae_all = quad_starts + 1
+        be_all = quad_starts + 3
+        hard_top_k = 8
+
+        # For each quadruplet start, cache hard-negative pools for AB and BA anchors.
+        hard_pool_ab = {}
+        hard_pool_ba = {}
+        for qs in quad_starts:
+            # Exclude same-quad Eve samples from hard pool.
+            ae_candidates = ae_all[ae_all != (qs + 1)]
+            be_candidates = be_all[be_all != (qs + 3)]
+            candidates = np.concatenate([ae_candidates, be_candidates], axis=0)
+
+            if candidates.size == 0:
+                # Fallback to same-quad negatives for tiny datasets.
+                hard_pool_ab[int(qs)] = np.array([qs + 1], dtype=np.int32)
+                hard_pool_ba[int(qs)] = np.array([qs + 3], dtype=np.int32)
+                continue
+
+            # Hardness proxy: close power to anchor (remove easy amplitude cues).
+            diff_ab = np.abs(sample_power[candidates] - sample_power[qs])
+            diff_ba = np.abs(sample_power[candidates] - sample_power[qs + 2])
+            order_ab = np.argsort(diff_ab)
+            order_ba = np.argsort(diff_ba)
+            hard_pool_ab[int(qs)] = candidates[order_ab[: min(hard_top_k, len(order_ab))]]
+            hard_pool_ba[int(qs)] = candidates[order_ba[: min(hard_top_k, len(order_ba))]]
+
+        def _pick_from(arr):
+            if local_rng is not None:
+                return int(arr[local_rng.randrange(len(arr))])
+            return int(arr[random.randrange(len(arr))])
+
         while True:
             list_a = []
             list_p = []
@@ -953,12 +1219,13 @@ class SiammeseHashNet():
                     a = data_usable[idx]      # AB
                     p = data_usable[idx + 2]  # BA
                     n1 = data_usable[idx + 1] # AE
-                    n2 = data_usable[idx + 3] # BE
+                    hard_candidates = hard_pool_ab[int(idx)]
                 else:
                     a = data_usable[idx + 2]  # BA
                     p = data_usable[idx]      # AB
                     n1 = data_usable[idx + 3] # BE
-                    n2 = data_usable[idx + 1] # AE
+                    hard_candidates = hard_pool_ba[int(idx)]
+                n_hard = data_usable[_pick_from(hard_candidates)]
 
                 # Anchor and positive are the same channel
                 list_a.append(a)
@@ -968,9 +1235,9 @@ class SiammeseHashNet():
                 list_a.append(a)
                 list_p.append(n1)
                 label_y.append(1)
-                # Positive and negative are the different channel
-                list_a.append(p)
-                list_p.append(n2)
+                # Hard negative with similar power profile (cross-scenario Eve).
+                list_a.append(a)
+                list_p.append(n_hard)
                 label_y.append(1)
                 # Both negatives are the different channel
                 # list_a.append(n1)
@@ -1036,8 +1303,8 @@ class ResNet_HashNet_Channel(SiammeseHashNet):
 
 
 class RNN_HashNet_Channel(SiammeseHashNet):
-    """Siamese HashNet backbone using GRU sequence modeling over time bins."""
-    def __init__(self, gru_units=256, dropout=0.3, recurrent_dropout=0, bidirectional=True, num_layers=2):
+    """Simplified Siamese HashNet baseline with GRU sequence modeling."""
+    def __init__(self, gru_units=128, dropout=0.2, recurrent_dropout=0, bidirectional=False, num_layers=1):
         super().__init__()
         self.gru_units = gru_units
         self.dropout = dropout
@@ -1049,16 +1316,18 @@ class RNN_HashNet_Channel(SiammeseHashNet):
         self.datashape = datashape
         F, T, C = datashape[1], datashape[2], datashape[3]
 
-        # Input spectrogram (F, T, C) -> sequence (T, F*C)
+        # Minimal baseline: normalize -> sequence reshape -> GRU -> hash head.
         inputs = Input(shape=(F, T, C))
-        # Normalize each sample before sequence modeling to reduce
-        # environment-specific amplitude bias.
         x = LayerNormalization(axis=[1, 2, 3], epsilon=1e-6, name="hash_rnn_input_norm")(inputs)
         x = Permute((2, 1, 3))(x)
         x = Reshape((T, F * C))(x)
         x = LayerNormalization(axis=-1, epsilon=1e-6, name="hash_rnn_step_norm")(x)
-
-        # Stacked GRU layers.
+        
+        # Adding some dense layers before GRU layers of the shape of the previous layer
+        x = Dense(x.shape[-1], activation='relu', name="input_hash_projection")(x)
+        x = Dropout(self.dropout, name="input_hash_projection_dropout")(x)
+        
+        # Stacked GRU layers; final layer returns a single embedding vector.
         for i in range(self.num_layers):
             return_sequences = (i < self.num_layers - 1)
             gru = GRU(
@@ -1077,8 +1346,8 @@ class RNN_HashNet_Channel(SiammeseHashNet):
                 x = LayerNormalization(name=f"hash_gru_ln_{i+1}")(x)
 
         hidden_dim = self.gru_units * 2 if self.bidirectional else self.gru_units
-        x = Dense(hidden_dim, activation='relu', name="hash_projection")(x)
-        x = Dropout(self.dropout, name="hash_projection_dropout")(x)
+        x = Dense(hidden_dim, activation='relu', name="output_hash_projection")(x)
+        x = Dropout(self.dropout, name="output_hash_projection_dropout")(x)
         # Soft branch used by Siamese loss.
         x = Dense(units=output_length, activation='sigmoid', name="hash_bits_soft")(x)
         # Hard branch used at inference/export time.

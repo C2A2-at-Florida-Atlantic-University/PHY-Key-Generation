@@ -2,9 +2,10 @@ import math
 from sklearn.model_selection import train_test_split
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
 from tensorflow.keras.optimizers import RMSprop, Adam, SGD
-from deep_learning_models import identity_loss, ResNet_QuadrupletNet_Channel, FeedForward_QuadrupletNet_Channel, RNN_QuadrupletNet_Channel, Transformer_QuadrupletNet_Channel, AE_QuadrupletNet_Channel, ResNet_HashNet_Channel, RNN_HashNet_Channel
+from deep_learning_models import identity_loss, TripletNet_Channel, RNN_TripletNet_Channel, ResNet_QuadrupletNet_Channel, FeedForward_QuadrupletNet_Channel, RNN_QuadrupletNet_Channel, RNN_QuadrupletNet_Channel_Simple, Transformer_QuadrupletNet_Channel, AE_QuadrupletNet_Channel, ResNet_HashNet_Channel, RNN_HashNet_Channel
 from DatasetHandler import DatasetHandler, ChannelSpectrogram, ChannelIQ, ChannelPolar
 from dataset_visualization import plot_data_scenario, plot_avg_min_max_power_scenario
+from SionnaDataGenerator import generate_multi_scenario_data
 
 import time
 from TestChannelFingerprinting import test_model
@@ -13,12 +14,19 @@ from collections import Counter
 import numpy as np
 import os
 import random
+import contextlib
 # Optional: force CPU when CUDA/cuBLAS is misconfigured.
 # Set POWDER_FORCE_CPU=1 in the environment to disable GPU.
 if os.environ.get("POWDER_FORCE_CPU") == "1":
     os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 import tensorflow as tf
 import matplotlib.pyplot as plt
+
+def training_device_context():
+    """Use CPU only when explicitly requested via POWDER_FORCE_CPU=1."""
+    if os.environ.get("POWDER_FORCE_CPU") == "1":
+        return tf.device("/CPU:0")
+    return contextlib.nullcontext()
 
 def save_feature_extractor_keras(model, keras_output_path: str):
     """Save a Keras feature extractor using native .keras format and validate reload."""
@@ -129,7 +137,8 @@ def train_channel_feature_extractor(data, labels, train_configurations, model_ty
     
     if train_configurations[model_type]['data_type'] == "IQ":
         ChannelIQObj = ChannelIQ()
-        data = ChannelIQObj.channel_iq(data)
+        use_rnn_format = network_type in ("RNN", "RNN-Simple")
+        data = ChannelIQObj.channel_iq(data, rnn_format=use_rnn_format)
     elif train_configurations[model_type]['data_type'] == "Polar":
         ChannelPolarObj = ChannelPolar()
         data = ChannelPolarObj.channel_polar(data)
@@ -139,7 +148,9 @@ def train_channel_feature_extractor(data, labels, train_configurations, model_ty
         data = ChannelSpectrogramObj.channel_spectrogram(
             data,
             train_configurations[model_type]['fft_len'],
-            processing=spectrogram_processing
+            processing=spectrogram_processing,
+            normalize=True,
+            normalization_method="rms"
         )
 
     #NetObj =  TripletNet_Channel()
@@ -147,8 +158,8 @@ def train_channel_feature_extractor(data, labels, train_configurations, model_ty
     
     # NetObj = ResNet_QuadrupletNet_Channel()
     output_length = train_configurations[model_type]['output_length']
-    # Build model graph/variables on CPU to avoid H200 PTX JIT init failures.
-    with tf.device('/CPU:0'):
+    # Build model graph/variables on requested device context.
+    with training_device_context():
         # Create an RFF extractor.
         if model_type == "HashNet":
             # HashNet uses siamese architecture
@@ -164,6 +175,17 @@ def train_channel_feature_extractor(data, labels, train_configurations, model_ty
             # Create the siamese net using the RFF extractor.
             margin = train_configurations[model_type].get('margin', 0.3)
             net = NetObj.siammese_net(feature_extractor, m=margin)
+        elif model_type == "TripletNet":
+            # TripletNet architecture
+            if network_type == "RNN":
+                NetObj = RNN_TripletNet_Channel()
+            elif network_type == "ResNet":
+                NetObj = TripletNet_Channel()
+            else:
+                raise ValueError(f"TripletNet supports only ResNet or RNN network_type, got {network_type}")
+
+            feature_extractor = NetObj.feature_extractor(data.shape, output_length)
+            net = NetObj.create_triplet_net(feature_extractor, train_configurations[model_type]['alpha'])
         else:
             # QuadrupletNet architecture
             if network_type == "ResNet":
@@ -172,6 +194,8 @@ def train_channel_feature_extractor(data, labels, train_configurations, model_ty
                 NetObj = FeedForward_QuadrupletNet_Channel()
             elif network_type == "RNN":
                 NetObj = RNN_QuadrupletNet_Channel()
+            elif network_type == "RNN-Simple":
+                NetObj = RNN_QuadrupletNet_Channel_Simple()
             elif network_type == "Transformer":
                 NetObj = Transformer_QuadrupletNet_Channel()
             elif network_type == "AE":
@@ -269,7 +293,7 @@ def train_channel_feature_extractor(data, labels, train_configurations, model_ty
     # Use the RMSprop optimizer for training.
     LearningRate = train_configurations[model_type]['LearningRate']
     optimizer = train_configurations[model_type]['optimizer']
-    with tf.device('/CPU:0'):
+    with training_device_context():
         if optimizer == "Adam":
             opt = Adam(learning_rate=LearningRate)
         elif optimizer == "RMSprop":
@@ -321,7 +345,34 @@ if __name__ == "__main__":
     
     signal_type = "Sinusoid" # Sinusoid, PN-Sequence, deltaPulse, WiFi
     sample_source = "iq"  # auto, chan_est_samples, csi, iq
-    
+    augment_with_sionna = True  # Set True to append Sionna ray-tracing data
+
+    # ── Sionna ray-tracing augmentation config (used when augment_with_sionna=True)
+    sionna_config = {
+        "signal_type": signal_type,       # "Sinusoid" or "deltaPulse"
+        "num_probes": 100,                # probes per scenario
+        "num_samples": 8192,              # IQ samples per probe
+        "num_bins": 1024,                 # IFFT size for deltaPulse probe
+        "backend": "gnuradio",              # "numpy" (fast, no GNURadio) or "gnuradio"
+        "noise_voltage": 0.01,
+        "seed": 42,
+        "scenarios": [
+            # Each entry is [Alice, Bob, Eve] using POWDER node names or IDs
+            ["EBC", "Guest House", "Moran"],
+            ["EBC", "Guest House", "USTAR"],
+            ["EBC", "Moran", "Guest House"],
+            ["EBC", "Moran", "USTAR"],
+            ["EBC", "USTAR", "Guest House"],
+            ["EBC", "USTAR", "Moran"],
+            ["Guest House", "Moran", "EBC"],
+            ["Guest House", "Moran", "USTAR"],
+            ["Guest House", "USTAR", "Moran"],
+            ["Guest House", "USTAR", "EBC"],
+            ["USTAR", "Moran", "EBC"],
+            ["USTAR", "Moran", "Guest House"],
+        ],
+    }
+
     node_Ids = {"Sinusoid":
                     {"OTA-Lab": [[1,2,3],
                             [1,4,5],
@@ -407,68 +458,92 @@ if __name__ == "__main__":
         }
     }
     
+    REPRO_SEED = 42
+    set_reproducible(REPRO_SEED)
+    shuffle_dataset = True
+
+    # ── 1. Always load from HuggingFace ─────────────────────────────────
     configuration = node_configurations['OTA-Lab']
     dataset_name = configuration['dataset_name']
     repo_name = configuration['repo_name']
     node_Ids = configuration['node_Ids']
-    
+
     for idx, node_ids in enumerate(node_Ids):
         config_name = configuration['config_name']+"-"+"".join(str(node) for node in node_ids)
         print("Config name: ", config_name)
         if idx == 0:
             dataset = DatasetHandler(dataset_name, config_name, repo_name)
-            # Exit the loop after the first iteration
-            # break
         else:
             dataset.add_dataset(dataset_name, config_name, repo_name)
-    
+
     configure_dataset_iq_source(dataset, signal_type, sample_source=sample_source)
     dataset.get_dataframe_Info()
-    # Set seeds and determinism prior to any TF ops
-    REPRO_SEED = 42
-    set_reproducible(REPRO_SEED)
-    shuffle_dataset = True
     data, labels, rx, tx = dataset.load_data(shuffle=shuffle_dataset, seed=REPRO_SEED)
-    
-    # For every example in the data lets take the average number of samples per example
-    
+
     print("First example number of samples: ", data[0].shape[0])
     print("Last example number of samples: ", data[-1].shape[0])
     avg_num_samples = np.mean([example.shape[0] for example in data])
     print("Average number of samples per example: ", avg_num_samples)
-    # Find the example with the least number of samples
     min_num_samples = np.min([example.shape[0] for example in data])
     print("Example with the least number of samples: ", min_num_samples)
-    # Find the example with the most number of samples
     max_num_samples = np.max([example.shape[0] for example in data])
     print("Example with the most number of samples: ", max_num_samples)
     if signal_type == "deltaPulse":
         min_num_samples = int(8192 * 2)
     elif signal_type == "WiFi":
         if str(sample_source).strip().lower() == "csi":
-            # WiFi CSI vectors are typically 64 complex coefficients.
             min_num_samples = int(64)
         else:
-            # WiFi chan_est probes contain 2x64 IQ samples.
             min_num_samples = int(128)
     else:
         min_num_samples = int(8192)
-    # Resize the data in examples to the least number of samples
     data = np.array([example[-min_num_samples:] for example in data])
-    print("Data shape: ", data.shape)
-    print("Labels shape: ", labels.shape)
-    print("RX shape: ", rx.shape)
-    print("TX shape: ", tx.shape)
-    avg_num_samples = np.mean([example.shape[0] for example in data])
-    print("Average number of samples per example: ", avg_num_samples)
-        
+    hf_num_samples = data.shape[0]
+
+    # ── 2. Optionally augment with Sionna ray-tracing data ──────────────
+    if augment_with_sionna:
+        print("=" * 60)
+        print("AUGMENTING with Sionna ray-tracing simulation data")
+        print("=" * 60)
+        sc = sionna_config
+        sionna_data, sionna_labels, sionna_rx, sionna_tx = generate_multi_scenario_data(
+            scenarios=sc["scenarios"],
+            num_probes=sc["num_probes"],
+            signal_type=sc.get("signal_type", signal_type),
+            num_samples=sc["num_samples"],
+            backend=sc["backend"],
+            noise_voltage=sc["noise_voltage"],
+            seed=sc["seed"],
+            num_bins=sc.get("num_bins", 2048),
+        )
+        sionna_target_len = min_num_samples
+        if sc["num_samples"] >= sionna_target_len:
+            sionna_data = sionna_data[:, -sionna_target_len:]
+        else:
+            pad_width = sionna_target_len - sc["num_samples"]
+            sionna_data = np.pad(
+                sionna_data, ((0, 0), (pad_width, 0)),
+                mode="constant", constant_values=0,
+            )
+        data = np.concatenate([data, sionna_data], axis=0)
+        labels = np.concatenate([labels, sionna_labels], axis=0)
+        rx = np.concatenate([rx, sionna_rx], axis=0)
+        tx = np.concatenate([tx, sionna_tx], axis=0)
+
+        _shuffler = DatasetHandler.__new__(DatasetHandler)
+        data, labels, rx, tx = _shuffler.shuffle_in_groups_of_four(
+            data, labels, rx, tx, seed=REPRO_SEED)
+        sionna_num_samples = sionna_data.shape[0]
+        print(f"  HuggingFace samples: {hf_num_samples}, "
+              f"Sionna samples: {sionna_num_samples}, "
+              f"Total: {data.shape[0]}")
+        configuration["config_name"] += "+Sionna"
+
     print("Data shape: ", data.shape)
     print("Labels shape: ", labels.shape)
     print("RX shape: ", rx.shape)
     print("TX shape: ", tx.shape)
 
-    # Get a single example of the data
-    # For every scenario there are 400 examples where i (AB), i+1 (AE), i+2 (BA), i+3 (BE)
     DataPerScenario = 400
     TotalData = data.shape[0]
     numberOfScenarios = TotalData//DataPerScenario
@@ -668,17 +743,17 @@ if __name__ == "__main__":
         fft_len = int(64)
     else:
         fft_len = int(256)
-    patience = 200
+    patience = 100
     maxEpochs = 1000
     val_size = 0.1
     factor = 0.1
-    alphas = [0.2] # [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]
+    alphas = [0.5] # [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]
     betas = [alphas[0]] # [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]
     gammas = [0.1] # [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]
     FFT_lengths = [fft_len]
     output_lengths = [128] # Need to define the output length and why based on 255 constraint (bytes)
     optimizers = ["RMSprop"] # "RMSprop", "SGD", "Adam"
-    network_types = ["RNN"] # ["ResNet", "FeedForward", "RNN", "Transformer", "AE"]
+    network_types = ["RNN"] # ["ResNet", "FeedForward", "RNN", "RNN-Simple", "Transformer", "AE"]
     quantization_layer = True
     for fft_len in FFT_lengths:
         for output_length in output_lengths:
@@ -742,7 +817,7 @@ if __name__ == "__main__":
                                         "optimizer": o
                                     }
                                 }
-                                
+                                model_count = 12
                                 if model_type == "HashNet":
                                     spec_suffix = ""
                                     if train_configurations[model_type]["data_type"] == "Spectrogram":
@@ -756,12 +831,12 @@ if __name__ == "__main__":
                                             +'_margin'+str(train_configurations[model_type]["margin"]) \
                                             +'_'+train_configurations[model_type]['optimizer'] \
                                             +'_lr'+str(train_configurations[model_type]["LearningRate"]) \
-                                            +'_'+configuration["config_name"]+'_'+str(4)
+                                            +'_'+configuration["config_name"]+'_'+str(model_count)
                                 else:
                                     spec_suffix = ""
                                     if train_configurations[model_type]["data_type"] == "Spectrogram":
                                         spec_suffix = "_spec" + str(train_configurations[model_type].get("spectrogram_processing", "magnitude"))
-                                    filename_start = train_configurations[model_type]['data_type'] \
+                                    filename_start = model_type+'_'+train_configurations[model_type]['data_type'] \
                                             +'_FeatureExtractor_'+network_type \
                                             +('_QuantizationLayer' if quantization_layer else "") \
                                             +spec_suffix \
@@ -772,7 +847,7 @@ if __name__ == "__main__":
                                             +('_gamma'+str(train_configurations[model_type]["gamma"]) if "gamma" in train_configurations[model_type] else "") \
                                             +'_'+train_configurations[model_type]['optimizer'] \
                                             +'_lr'+str(train_configurations[model_type]["LearningRate"]) \
-                                            +'_'+configuration["config_name"]
+                                            +'_'+configuration["config_name"]+'_'+str(model_count)
                                 
                                 model_exisits = False
                                 # Check if there is a file that starts with the same name
@@ -781,34 +856,34 @@ if __name__ == "__main__":
                                         model_exisits = True
                                         filename = file
                                         break
-                                if model_exisits:
-                                    print("Model already exists")
-                                    print("Skipping: ", filename)
-                                    # Plot the history of the model located in results directory
-                                    history_file = homeDir+"Results/History_"+filename
-                                    history = h5py.File(history_file, "r")
-                                    train_loss = history["train_loss"][:]
-                                    validation_loss = history["validation_loss"][:]
-                                    plt.plot(train_loss)
-                                    plt.plot(validation_loss)
-                                    plt.title(filename+" Model History")
-                                    plt.ylabel("Loss")
-                                    plt.xlabel("Epoch")
-                                    plt.legend(["Train", "Validation"], loc="upper left")
-                                    plt.show()
-                                    plt.savefig(homeDir+"Results/"+filename_start+"_history.png")
-                                    continue
-                                else:
-                                    print("Training model: ", filename_start)
+                                # if model_exisits:
+                                #     print("Model already exists")
+                                #     print("Skipping: ", filename)
+                                #     # Plot the history of the model located in results directory
+                                #     history_file = homeDir+"Results/History_"+filename
+                                #     history = h5py.File(history_file, "r")
+                                #     train_loss = history["train_loss"][:]
+                                #     validation_loss = history["validation_loss"][:]
+                                #     plt.plot(train_loss)
+                                #     plt.plot(validation_loss)
+                                #     plt.title(filename+" Model History")
+                                #     plt.ylabel("Loss")
+                                #     plt.xlabel("Epoch")
+                                #     plt.legend(["Train", "Validation"], loc="upper left")
+                                #     plt.show()
+                                #     plt.savefig(homeDir+"Results/"+filename_start+"_history.png")
+                                #     continue
+                                # else:
+                                #     print("Training model: ", filename_start)
                                     
-                                    feature_extractor = train_channel_feature_extractor(
-                                        data,
-                                        labels,
-                                        train_configurations,
-                                        model_type,
-                                        network_type,
-                                        filename_start,
-                                        seed=REPRO_SEED,
-                                        quantization_layer=quantization_layer
-                                        
-                                    )
+                                feature_extractor = train_channel_feature_extractor(
+                                    data,
+                                    labels,
+                                    train_configurations,
+                                    model_type,
+                                    network_type,
+                                    filename_start,
+                                    seed=REPRO_SEED,
+                                    quantization_layer=quantization_layer
+                                    
+                                )

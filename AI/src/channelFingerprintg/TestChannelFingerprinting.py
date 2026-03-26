@@ -271,11 +271,11 @@ def plot_scenario_bdr_from_h5_files(file_paths, scenario_labels=None, output_pat
         "output_path": output_path,
     }
 
-def extract_features_data(data, feature_extractor, fft_len, data_type="Spectrogram", spectrogram_processing="magnitude"):
+def extract_features_data(data, feature_extractor, fft_len, data_type="Spectrogram", spectrogram_processing="magnitude", rnn_format=False):
     data = np.array(data)
     if data_type == "IQ":
         ChannelIQObj = ChannelIQ()
-        data = ChannelIQObj.channel_iq(data)
+        data = ChannelIQObj.channel_iq(data, rnn_format=rnn_format)
     elif data_type == "Polar":
         ChannelPolarObj = ChannelPolar()
         data = ChannelPolarObj.channel_polar(data)
@@ -324,7 +324,146 @@ def avg_KDR_data_RayTracing(quantized_data, quantized_dataRayTracing):
     KDR_BB_average = np.sum(KDR_BB)/(len(KDR_BB))
     return KDR_AA_average, KDR_BB_average, KDR_AA, KDR_BB
         
-def test_model(feature_extractor_name, node_configurations, home="/home/Research/POWDER/", generate_results=True, signal_type="Sinusoid", sample_source="auto"):
+def tx_leakage_diagnostic(embeddings, tx_labels):
+    """Detect TX-identity leakage by comparing same-TX vs diff-TX embedding KDR.
+
+    If the model learns transmitter identity instead of channel reciprocity,
+    same-TX embeddings will be nearly identical (KDR ~0) while diff-TX
+    embeddings will be maximally different (KDR ~0.5 or higher).
+
+    Parameters
+    ----------
+    embeddings : np.ndarray
+        Feature embeddings of shape (N, D), already quantized to {0,1}.
+    tx_labels : np.ndarray or list
+        TX node ID for each of the N samples.
+
+    Returns
+    -------
+    dict with keys: same_tx_kdr, diff_tx_kdr, leakage_detected (bool)
+    """
+    tx_labels = np.asarray(tx_labels)
+    n = len(embeddings)
+    if n < 2:
+        return {"same_tx_kdr": None, "diff_tx_kdr": None, "leakage_detected": False}
+
+    same_tx_kdrs = []
+    diff_tx_kdrs = []
+
+    max_pairs = min(5000, n * (n - 1) // 2)
+    rng = np.random.RandomState(42)
+    pairs_checked = 0
+
+    indices = rng.permutation(n)
+    for i_idx in range(n):
+        if pairs_checked >= max_pairs:
+            break
+        i = indices[i_idx]
+        for j_idx in range(i_idx + 1, n):
+            if pairs_checked >= max_pairs:
+                break
+            j = indices[j_idx]
+            kdr_val = np.mean(np.abs(embeddings[i].astype(float) - embeddings[j].astype(float)))
+            if tx_labels[i] == tx_labels[j]:
+                same_tx_kdrs.append(kdr_val)
+            else:
+                diff_tx_kdrs.append(kdr_val)
+            pairs_checked += 1
+
+    same_mean = float(np.mean(same_tx_kdrs)) if same_tx_kdrs else None
+    diff_mean = float(np.mean(diff_tx_kdrs)) if diff_tx_kdrs else None
+    leakage = (same_mean is not None and diff_mean is not None
+               and same_mean < 0.10 and diff_mean > 0.35)
+
+    print("\n" + "="*70)
+    print("TX-LEAKAGE DIAGNOSTIC")
+    print("="*70)
+    print(f"  Pairs compared: {pairs_checked} "
+          f"(same-TX: {len(same_tx_kdrs)}, diff-TX: {len(diff_tx_kdrs)})")
+    if same_mean is not None:
+        print(f"  Mean KDR (same TX):  {same_mean:.4f}  (should be ~0.5 if no leakage)")
+    if diff_mean is not None:
+        print(f"  Mean KDR (diff TX):  {diff_mean:.4f}  (should be ~0.5 if no leakage)")
+    if leakage:
+        print("  ** WARNING: TX-identity leakage detected! **")
+        print("     The model is producing similar embeddings for same-TX samples")
+        print("     regardless of channel, indicating it learned TX hardware")
+        print("     fingerprints rather than channel reciprocity features.")
+    else:
+        print("  No obvious TX-identity leakage detected.")
+    print("="*70 + "\n")
+
+    return {"same_tx_kdr": same_mean, "diff_tx_kdr": diff_mean,
+            "leakage_detected": leakage}
+
+
+def _resolve_test_node_config(node_configurations, test_band="OTA-Lab"):
+    """Pick OTA-Lab vs OTA-Dense when `node_configurations` is the OTA-All wrapper.
+
+    Training uses `configuration['OTA-Lab']` (e.g. Sinusoid-Powder-OTA-Lab-Nodes+Sionna).
+    Testing must use the same band; the previous code always used OTA-Dense, which
+    mismatched training and skewed KDR/BDR.
+    """
+    if not isinstance(node_configurations, dict):
+        return node_configurations
+    if "OTA-Lab" in node_configurations and "OTA-Dense" in node_configurations:
+        if test_band not in ("OTA-Lab", "OTA-Dense"):
+            raise ValueError(
+                f"test_band must be 'OTA-Lab' or 'OTA-Dense', got {test_band!r}"
+            )
+        sub = node_configurations[test_band]
+        print(
+            f"[test_model] Test HuggingFace band: {test_band} "
+            f"(set test_band='OTA-Dense' to evaluate on dense scenarios instead)."
+        )
+        return sub
+    return node_configurations
+
+
+def select_latest_keras_model(models_dir, signal_type="Sinusoid", name_substring=None, preprocessing="magnitude_phase"):
+    """Pick newest .keras under models_dir, optionally filtered by signal type / substring."""
+    model_files = [f for f in os.listdir(models_dir) if f.endswith(".keras")]
+    if not model_files:
+        raise FileNotFoundError(f"No .keras models found in {models_dir}")
+    candidates = model_files
+    preprocessing_suffix = "_spec"+preprocessing if preprocessing else ""
+    if preprocessing_suffix:
+        filtered = [f for f in candidates if preprocessing_suffix in f]
+        if filtered:
+            candidates = filtered
+    # Prefer filenames that match the signal type used in training (e.g. Sinusoid-Powder-...)
+    if signal_type:
+        filtered = [f for f in candidates if signal_type in f]
+        if filtered:
+            candidates = filtered
+    if name_substring:
+        filtered = [f for f in candidates if name_substring in f]
+        if filtered:
+            candidates = filtered
+    return sorted(
+        candidates,
+        key=lambda x: os.path.getmtime(os.path.join(models_dir, x)),
+    )[-1]
+
+
+def test_model(
+    feature_extractor_name,
+    node_configurations,
+    home="/home/Research/POWDER/",
+    generate_results=True,
+    signal_type="Sinusoid",
+    sample_source="auto",
+    test_band="OTA-Lab",
+    data_per_scenario=400,
+    preprocessing="magnitude_phase",
+):
+    """Evaluate a saved feature extractor.
+
+    test_band: When `node_configurations` is OTA-All (nested OTA-Lab / OTA-Dense),
+      selects which scenarios to load. Default ``OTA-Lab`` matches typical training.
+    data_per_scenario: Quadruplet block size (default 400 = 100 probes x 4 links).
+    """
+    node_configurations = _resolve_test_node_config(node_configurations, test_band=test_band)
     node_configs_names = ""
     idx = 0
     # for dataset_type in node_configurations.keys():
@@ -346,12 +485,11 @@ def test_model(feature_extractor_name, node_configurations, home="/home/Research
     #             else:
     #                 dataset.add_dataset(dataset_name, node_config_name, repo_name)
     #             idx = idx + 1
-    
-    dataset_type = "OTA-Dense"  # "OTA-Lab", "OTA-Dense", "Sionna-Ray-Tracing"
-    dataset_name = node_configurations[dataset_type]["dataset_name"]
-    repo_name = node_configurations[dataset_type]['repo_name']
-    node_Ids = node_configurations[dataset_type]['node_Ids']
-    config_name = node_configurations[dataset_type]['config_name']
+
+    dataset_name = node_configurations["dataset_name"]
+    repo_name = node_configurations["repo_name"]
+    node_Ids = node_configurations["node_Ids"]
+    config_name = node_configurations["config_name"]
 
     extractor_name = feature_extractor_name.split("/")[-1]
     extractor_name = extractor_name.split(".")[0]
@@ -370,7 +508,7 @@ def test_model(feature_extractor_name, node_configurations, home="/home/Research
             dataset.add_dataset(dataset_name, node_config_name, repo_name)
     configure_dataset_iq_source(dataset, signal_type, sample_source=sample_source)
     dataset.get_dataframe_Info()
-    data, _, _, _ = dataset.load_data()
+    data, _, _, tx_labels = dataset.load_data()
     
     source_l = str(sample_source).strip().lower()
     if signal_type == "deltaPulse":
@@ -386,7 +524,6 @@ def test_model(feature_extractor_name, node_configurations, home="/home/Research
     data = np.array([example[-min_num_samples:] for example in data])
 
     # Plot test dataset scenarios using the same visualization utilities as training.
-    data_per_scenario = 400
     if data.shape[0] >= data_per_scenario:
         number_of_scenarios = data.shape[0] // data_per_scenario
         test_plot_directory = os.path.join(results_directory, "TestDatasetPlots")
@@ -467,32 +604,14 @@ def test_model(feature_extractor_name, node_configurations, home="/home/Research
         except Exception:
             inferred_fft_len = 256
 
-        # Keep test preprocessing aligned with training-time spectrogram construction.
-        model_name_l = feature_extractor_name.lower()
-        expected_channels = 2
-        try:
-            expected_channels = int(feature_extractor.input_shape[-1])
-        except Exception:
-            expected_channels = 1
-        spectrogram_processing = "magnitude_phase"
-        if "_speccomplex" in model_name_l:
-            spectrogram_processing = "complex"
-        elif "_specmagnitude_phase" in model_name_l or "_specmag_phase" in model_name_l:
-            spectrogram_processing = "magnitude_phase"
-        elif expected_channels == 2:
-            # Backward-compatible fallback when older filenames do not include spectrogram mode.
-            spectrogram_processing = "magnitude_phase"
-        if model_data_type == "Spectrogram":
-            print(f"Using spectrogram processing mode: {spectrogram_processing}")
-        else:
-            print(f"Using raw {model_data_type} preprocessing (no FFT).")
-
+        is_rnn_model = "_RNN" in feature_extractor_name or "_RNN-Simple" in feature_extractor_name
         features = extract_features_data(
             data,
             feature_extractor,
             inferred_fft_len,
             data_type=model_data_type,
-            spectrogram_processing=spectrogram_processing,
+            spectrogram_processing=preprocessing,
+            rnn_format=(is_rnn_model and model_data_type == "IQ"),
         )
         if dataRayTracing:
             featuresRayTracing = extract_features_data(
@@ -500,7 +619,8 @@ def test_model(feature_extractor_name, node_configurations, home="/home/Research
                 feature_extractor,
                 inferred_fft_len,
                 data_type=model_data_type,
-                spectrogram_processing=spectrogram_processing,
+                spectrogram_processing=preprocessing,
+                rnn_format=(is_rnn_model and model_data_type == "IQ"),
             )
         
         # =====================================================================
@@ -560,6 +680,9 @@ def test_model(feature_extractor_name, node_configurations, home="/home/Research
         model_has_quantization = "QuantizationLayer" in feature_extractor_path or "Quantization" in feature_extractor_path
         print(f"\nModel appears to have built-in quantization: {model_has_quantization}")
         print("="*70 + "\n")
+
+        if tx_labels is not None and len(tx_labels) == len(features):
+            tx_leakage_diagnostic(features, tx_labels)
         
         quantization_method["precision"] = 1 # 1, 2, 4
         t_start = time.time()
@@ -1515,7 +1638,7 @@ if __name__ == "__main__":
     # plt.savefig("train_and_validation_loss.eps")
     # exit()
     
-    plotScenarioFiles = True
+    plotScenarioFiles = False
     if plotScenarioFiles:
         scenario_files_sinusoid = [
             "/home/Research/POWDER/Results/Results_CAAI-FAU_Key-Generation_[[8, 5, 4]]_HashNet_Spectrogram_FeatureExtractor_RNN_QuantizationLayer_specmagnitude_phase_in256_out128_margin0_20260310_050425.h5",
@@ -1547,8 +1670,15 @@ if __name__ == "__main__":
     
     # exit()
     
-    signal_type = "deltaPulse" # Sinusoid, PN-Sequence, deltaPulse, WiFi
+    signal_type = "Sinusoid" # Sinusoid, PN-Sequence, deltaPulse, WiFi
     sample_source = "auto"    # auto, chan_est_samples, csi, iq
+    preprocessing = "magnitude_phase" # magnitude, complex, magnitude_phase
+    # Get name of file from command line
+    # If there is no command line argument, use the default model name
+    data_collection_type_train = "OTA-Lab" # "OTA-Lab", "OTA-Dense"
+    data_collection_type_test = "OTA-All" # "OTA-All" (nested) or "OTA-Lab" / "OTA-Dense" (flat)
+    # When using OTA-All, which band to evaluate on (should match training: OTA-Lab for Powder-OTA-Lab-Nodes+Sionna).
+    test_band = "OTA-Lab"  # "OTA-Lab" or "OTA-Dense"
     
     node_Ids = {"Sinusoid":
                     {"OTA-Lab": [#[1,2,3],
@@ -1562,7 +1692,7 @@ if __name__ == "__main__":
                             ],
                     "OTA-Dense": [#[1,2,3],
                                 #[1,2,5],
-                                  [1,3,2],
+                                    [1,3,2],
                                 # [4,3,5]
                                 ],
                     "Sionna-Ray-Tracing":[
@@ -1583,9 +1713,9 @@ if __name__ == "__main__":
                                 [5,8,4]
                                 ],
                     "OTA-Dense": [
-                                  #[1,2,3],
+                                  [1,2,3],
                                   #[1,2,4],
-                                  [1,3,2],
+                                #   [1,3,2],
                                   #[1,3,4],[1,4,2],[1,4,3],
                                   #[2,3,1],[2,3,4],[2,4,1],
                                   #[2,4,3],[3,4,1],[3,4,2]
@@ -1636,10 +1766,7 @@ if __name__ == "__main__":
                                            "OTA-Dense": test_node_configurations["OTA-Dense"],}
                                         #    "Sionna-Ray-Tracing": test_node_configurations["Sionna-Ray-Tracing"]}
     print("Test node configurations: ", test_node_configurations["OTA-All"])
-    # Get name of file from command line
-    # If there is no command line argument, use the default model name
-    data_collection_type_train = "OTA-Lab" # "OTA-Lab", "OTA-Dense"
-    data_collection_type_test = "OTA-All" # "OTA-Lab", "OTA-Dense"
+
     
     # Create a new BDR plot per scenario
     run_nist_test = False
@@ -1660,6 +1787,7 @@ if __name__ == "__main__":
             generate_results=True,
             signal_type=signal_type,
             sample_source=sample_source,
+            test_band=test_band,
         )
         
         exit()
@@ -1724,13 +1852,19 @@ if __name__ == "__main__":
                 model_name = model_name_deltaPulse
             elif signal_type == "Sinusoid":
                 model_name = model_name_Sinusoid
-            getLatest = False
-            if getLatest:
-                model_files = [f for f in os.listdir(ModelsDir) if f.endswith(".keras")]
-                if not model_files:
-                    raise FileNotFoundError(f"No .keras models found in {ModelsDir}")
-                model_name = sorted(model_files, key=lambda x: os.path.getmtime(os.path.join(ModelsDir, x)))[-1]
-                print("Model name: ", model_name)
+            getLatest = True
+            env_model = os.environ.get("POWDER_TEST_MODEL", "").strip()
+            if env_model:
+                model_name = os.path.basename(env_model)
+                print("Using model from POWDER_TEST_MODEL:", model_name)
+            elif getLatest:
+                model_name = select_latest_keras_model(
+                    ModelsDir,
+                    signal_type=signal_type,
+                    name_substring=os.environ.get("POWDER_TEST_MODEL_SUBSTRING", "").strip() or None,
+                    preprocessing=preprocessing,
+                )
+                print("Latest matching .keras model:", model_name)
             # print("Model name: ", model_name)
             # exit()
     else:
@@ -1792,9 +1926,8 @@ if __name__ == "__main__":
     
     # model_name = "FeatureExtractor_512_alpha0.5_beta0.5_SGD_lr0.1_Sinusoid-Powder-OTA-Lab-Nodes_1758225804"
     # model_name = "Spectrogram_FeatureExtractor_RNN_in256_out128_alpha0.5_beta0.5_gamma0.1_RMSprop_lr0.0001_Sinusoid-Powder-OTA-Lab-Nodes_1761276429.h5"
-    
+
     print("Testing model name: ", model_name)
-    feature_extractor_name = ModelsDir+model_name
     test_model(
         model_name,
         test_node_configurations[data_collection_type_test],
@@ -1802,6 +1935,8 @@ if __name__ == "__main__":
         generate_results=True,
         signal_type=signal_type,
         sample_source=sample_source,
+        test_band=test_band,
+        preprocessing=preprocessing,
     )
     
     # Spectrogram_FeatureExtractor_RNN_in2048_out128_alpha0.5_beta0.5_gamma0.1_RMSprop_lr0.0001_deltaPulse-Powder-OTA-Lab-Nodes_1769122091.h5
