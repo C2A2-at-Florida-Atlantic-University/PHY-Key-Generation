@@ -6,7 +6,158 @@ from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Input, Lambda, ReLU, Add, Dense, Conv2D, Conv2DTranspose, Flatten, AveragePooling2D, Dropout, BatchNormalization, Reshape, Permute, GlobalAveragePooling1D, Bidirectional, GRU, MultiHeadAttention, LayerNormalization, Concatenate
 from tensorflow.keras.regularizers import l2
 
+# ------------------------------------------------------------
+# Original code from gxhen repo https://github.com/gxhen/LoRa_RFFI.git
+# And paper Towards Scalable and Channel-Robust Radio Frequency Fingerprint Identification for LoRa
 
+# Residual block for the feature extractor
+def resblock(x, kernelsize, filters, first_layer = False):
+
+    if first_layer:
+        fx = Conv2D(filters, kernelsize, padding='same')(x)
+        fx = ReLU()(fx)
+        fx = Conv2D(filters, kernelsize, padding='same')(fx)
+        
+        x = Conv2D(filters, 1, padding='same')(x)
+        
+        out = Add()([x,fx])
+        out = ReLU()(out)
+    else:
+        fx = Conv2D(filters, kernelsize, padding='same')(x)
+        fx = ReLU()(fx)
+        fx = Conv2D(filters, kernelsize, padding='same')(fx)
+        
+        
+        out = Add()([x,fx])
+        out = ReLU()(out)
+
+    return out 
+
+# Identity loss function
+def identity_loss(y_true, y_pred):
+    return K.mean(y_pred)  
+
+class TripletNet_DeviceFingerprinting():
+    def __init__(self):
+        pass
+        
+    def create_triplet_net(self, embedding_net, alpha):
+        
+#        embedding_net = encoder()
+        self.alpha = alpha
+        
+        input_1 = Input([self.datashape[1],self.datashape[2],self.datashape[3]])
+        input_2 = Input([self.datashape[1],self.datashape[2],self.datashape[3]])
+        input_3 = Input([self.datashape[1],self.datashape[2],self.datashape[3]])
+        
+        A = embedding_net(input_1)
+        P = embedding_net(input_2)
+        N = embedding_net(input_3)
+   
+        loss = Lambda(self.triplet_loss)([A, P, N]) 
+        model = Model(inputs=[input_1, input_2, input_3], outputs=loss)
+        return model
+      
+    def triplet_loss(self,x):
+    # Triplet Loss function.
+        anchor,positive,negative = x
+#        K.l2_normalize
+    # distance between the anchor and the positive
+        pos_dist = K.sum(K.square(anchor-positive),axis=1)
+    # distance between the anchor and the negative
+        neg_dist = K.sum(K.square(anchor-negative),axis=1)
+
+        basic_loss = pos_dist-neg_dist + self.alpha
+        loss = K.maximum(basic_loss,0.0)
+        return loss   
+    
+    def feature_extractor(self, datashape):
+            
+        self.datashape = datashape
+        
+        inputs = Input(shape=([self.datashape[1],self.datashape[2],self.datashape[3]]))
+        
+        x = Conv2D(32, 7, strides = 2, activation='relu', padding='same')(inputs)
+        
+        x = resblock(x, 3, 32)
+        x = resblock(x, 3, 32)
+
+        x = resblock(x, 3, 64, first_layer = True)
+        x = resblock(x, 3, 64)
+
+        x = AveragePooling2D(pool_size=2)(x)
+        
+        x = Flatten()(x)
+    
+        x = Dense(512)(x)
+  
+        outputs = Lambda(lambda  x: K.l2_normalize(x,axis=1))(x)
+        
+        model = Model(inputs=inputs, outputs=outputs)
+        return model
+
+    
+    def get_triplet(self):
+        """Choose a triplet (anchor, positive, negative) of images
+        such that anchor and positive have the same label and
+        anchor and negative have different labels."""
+        
+        
+        n = a = self.dev_range[np.random.randint(len(self.dev_range))]
+        
+        while n == a:
+            # keep searching randomly!
+            n = self.dev_range[np.random.randint(len(self.dev_range))]
+        a, p = self.call_sample(a), self.call_sample(a)
+        n = self.call_sample(n)
+        
+        return a, p, n
+
+          
+    def call_sample(self,label_name):
+        """Choose an image from our training or test data with the
+        given label."""
+        num_sample = len(self.label)
+        idx = np.random.randint(num_sample)
+        while self.label[idx] != label_name:
+            # keep searching randomly!
+            idx = np.random.randint(num_sample) 
+        return self.data[idx]
+
+
+    def create_generator(self, batchsize, dev_range, data, label):
+        """Generate a triplets generator for training."""
+        self.data = data
+        self.label = label
+        self.dev_range = dev_range
+        
+        while True:
+            list_a = []
+            list_p = []
+            list_n = []
+
+            for i in range(batchsize):
+                a, p, n = self.get_triplet()
+                list_a.append(a)
+                list_p.append(p)
+                list_n.append(n)
+            
+            A = np.array(list_a, dtype='float32')
+            P = np.array(list_p, dtype='float32')
+            N = np.array(list_n, dtype='float32')
+            
+           # a "dummy" label which will come in to our identity loss
+           # function below as y_true. We'll ignore it.
+            label = np.ones(batchsize)
+            yield [A, P, N], label  
+
+# ------------------------------------------------------------
+# End of original code from gxhen repo https://github.com/gxhen/LoRa_RFFI.git
+# ------------------------------------------------------------
+
+# ------------------------------------------------------------
+# Custom layers for the feature extractor
+# ------------------------------------------------------------
 @tf.keras.utils.register_keras_serializable(package="channelFingerprintg")
 class L2NormalizeLayer(tf.keras.layers.Layer):
     """Serializable L2 normalization layer."""
@@ -157,53 +308,21 @@ class TripletNet_Channel():
         return loss  
 
     def quantization_layer(self,x):
-        ones = tf.ones_like(x)
-        zeros = tf.zeros_like(x)
         x_mean = K.mean(x)
-        x_less = K.less(x,x_mean)
-        x_greater = K.greater_equal(x,x_mean)
-        x_q = tf.where(x_greater, x, ones)
-        x_q = tf.where(x_less, x_q, zeros)
+        x_q = tf.cast(tf.greater_equal(x, x_mean), tf.float32)
         return x_q
     
-    def resblock(self, x, kernelsize, filters, first_layer = False):
-        reg = l2(0.001)  # Define L2 regularizer
-        if first_layer:
-            fx = Conv2D(filters, kernelsize, padding='same', kernel_regularizer=reg)(x)
-            fx = BatchNormalization()(fx)
-            fx = ReLU()(fx)
-            fx = Conv2D(filters, kernelsize, padding='same', kernel_regularizer=reg)(fx)
-            fx = BatchNormalization()(fx)
-            x = Conv2D(filters, 1, padding='same', kernel_regularizer=reg)(x)
-            fx = BatchNormalization()(fx)
-            out = Add()([x,fx])
-            out = ReLU()(out)
-        else:
-            fx = Conv2D(filters, kernelsize, padding='same', kernel_regularizer=reg)(x)
-            fx = BatchNormalization()(fx)
-            fx = ReLU()(fx)
-            fx = Conv2D(filters, kernelsize, padding='same', kernel_regularizer=reg)(fx)
-            fx = BatchNormalization()(fx)
-            out = Add()([x,fx])
-            out = ReLU()(out)
-
-        return out 
-    
-    def feature_extractor(self, datashape):
+    def feature_extractor(self, datashape, output_length=512):
         self.datashape = datashape
         inputs = Input(shape=([self.datashape[1],self.datashape[2],self.datashape[3]]))
         x = Conv2D(32, 7, strides = 2, activation='relu', padding='same')(inputs)
-        x =  Dropout(0.3)(x)
-        x = self.resblock(x, 3, 32)
-        x = self.resblock(x, 3, 32)
-        #x = resblock(x, 3, 32)
-        x = self.resblock(x, 3, 64, first_layer = True)
-        x = self.resblock(x, 3, 64)
-        #x = resblock(x, 3, 64)
+        x = resblock(x, 3, 32)
+        x = resblock(x, 3, 32)
+        x = resblock(x, 3, 64, first_layer = True)
+        x = resblock(x, 3, 64)
         x = AveragePooling2D(pool_size=2)(x)
         x = Flatten()(x)
-        x = Dense(512)(x)
-        #x = Dense(512,kernel_regularizer='l1_l2')(x)
+        x = Dense(output_length)(x)
         outputs = L2NormalizeLayer(axis=1, name="resnet_l2norm")(x)
         model = Model(inputs=inputs, outputs=outputs)
         return model             
@@ -320,6 +439,18 @@ class RNN_TripletNet_Channel(TripletNet_Channel):
         kdr_neg = tf.reduce_mean(anchor + negative - 2.0 * anchor * negative, axis=1)
         return K.maximum(kdr_pos - kdr_neg + self.alpha, 0.0)
 
+    def triplet_loss(self,x):
+        # Triplet Loss function.
+        anchor,positive,negative = x
+        # K.l2_normalize
+        # distance between the anchor and the positive
+        pos_dist = K.sum(K.square(anchor-positive),axis=1)
+        # distance between the anchor and the negative
+        neg_dist = K.sum(K.square(anchor-negative),axis=1)
+        basic_loss = (pos_dist-neg_dist) + self.alpha
+        loss = K.maximum(basic_loss,0.0)
+        return loss  
+
     def create_triplet_net(self, embedding_net, alpha):
         """Build triplet training model using soft branch for loss gradients."""
         self.alpha = alpha
@@ -341,7 +472,8 @@ class RNN_TripletNet_Channel(TripletNet_Channel):
         A = soft_embedding_net(input_1)
         P = soft_embedding_net(input_2)
         N = soft_embedding_net(input_3)
-        loss = Lambda(self.triplet_loss_kdr_soft)([A, P, N])
+        # loss = Lambda(self.triplet_loss_kdr_soft)([A, P, N])
+        loss = Lambda(self.triplet_loss)([A, P, N])
         return Model(inputs=[input_1, input_2, input_3], outputs=loss)
 
     def create_generator_channel(self, batchsize, data, label, seed: int = None):
@@ -585,13 +717,8 @@ class QuadrupletNet():
         return loss
     
     def quantization_layer(self,x):
-        ones = tf.ones_like(x)
-        zeros = tf.zeros_like(x)
         x_mean = K.mean(x)
-        x_less = K.less(x,x_mean)
-        x_greater = K.greater_equal(x,x_mean)
-        x_q = tf.where(x_greater, x, ones)
-        x_q = tf.where(x_less, x_q, zeros)
+        x_q = tf.cast(tf.greater_equal(x, x_mean), tf.float32)
         return x_q           
             
     def create_generator_channel(self, batchsize, data, label, seed: int = None):
@@ -650,52 +777,21 @@ class QuadrupletNet():
 class ResNet_QuadrupletNet_Channel(QuadrupletNet):
     def __init__(self):
         pass
-    
-    def resblock(self, x, kernelsize, filters, first_layer = False):
-        reg = l2(0.001)  # Define L2 regularizer
-        if first_layer:
-            fx = Conv2D(filters, kernelsize, padding='same', kernel_regularizer=reg)(x)
-            fx = BatchNormalization()(fx)
-            fx = ReLU()(fx)
-            fx = Conv2D(filters, kernelsize, padding='same', kernel_regularizer=reg)(fx)
-            fx = BatchNormalization()(fx)
-            x = Conv2D(filters, 1, padding='same', kernel_regularizer=reg)(x)
-            fx = BatchNormalization()(fx)
-            out = Add()([x,fx])
-            out = ReLU()(out)
-        else:
-            fx = Conv2D(filters, kernelsize, padding='same', kernel_regularizer=reg)(x)
-            fx = BatchNormalization()(fx)
-            fx = ReLU()(fx)
-            fx = Conv2D(filters, kernelsize, padding='same', kernel_regularizer=reg)(fx)
-            fx = BatchNormalization()(fx)
-            out = Add()([x,fx])
-            out = ReLU()(out)
-
-        return out 
 
     def feature_extractor(self, datashape, output_length):
         self.datashape = datashape
         reg = l2(0.001)  # Define L2 regularizer
         inputs = Input(shape=([self.datashape[1],self.datashape[2],self.datashape[3]]))
-        # Per-sample normalization improves robustness under indoor/outdoor
-        # distribution shift by reducing absolute power-scale dependence.
-        x = LayerNormalization(axis=[1, 2, 3], epsilon=1e-6, name="hash_input_norm")(inputs)
-        x = Conv2D(32, 7, strides = 2, activation='relu', padding='same', kernel_regularizer=reg)(x)
-        x =  Dropout(0.3)(x)
-        x = self.resblock(x, 3, 32, first_layer = True)
-        for _ in range(1):
-            x = self.resblock(x, 3, 32)
-        x = self.resblock(x, 3, 64, first_layer = True)
-        for _ in range(1):
-            x = self.resblock(x, 3, 64)
+        x = Conv2D(32, 7, strides = 2, activation='relu', padding='same')(inputs)
+        x = resblock(x, 3, 32)
+        x = resblock(x, 3, 32)
+        x = resblock(x, 3, 64, first_layer = True)
+        x = resblock(x, 3, 64)
         x = AveragePooling2D(pool_size=2)(x)
         x = Flatten()(x)
         x = Dense(output_length)(x)
-        x = Lambda(lambda  x: K.l2_normalize(x,axis=1))(x)
-        # x = Lambda(lambda x: tf.cast(x > 0.5, dtype=tf.float32))(x) # Quantization layer
-        x = Dense(units=output_length, activation='sigmoid', kernel_initializer="lecun_normal")(x)
-        model = Model(inputs=inputs, outputs=x)
+        outputs = L2NormalizeLayer(axis=1, name="resnet_l2norm")(x)
+        model = Model(inputs=inputs, outputs=outputs)
         return model
     
     def build_quantized_extractor(self, datashape, output_length, threshold=0.5):
@@ -769,50 +865,35 @@ class RNN_QuadrupletNet_Channel(QuadrupletNet):
     the channel's frequency response evolves over time.
     """
     def __init__(self,
-                 gru_units=256,
-                 dropout=0.3,
+                 gru_units=128,
+                 dropout=0.2,
                  recurrent_dropout=0,
-                 bidirectional=True,
-                 num_layers=2):
+                 bidirectional=False,
+                 num_layers=1,
+                 embed_dim=256):
+        super().__init__()
         self.gru_units = gru_units
         self.dropout = dropout
         self.recurrent_dropout = recurrent_dropout
         self.bidirectional = bidirectional
         self.num_layers = num_layers
-        self.scale_margins_by_output = True
-        self.use_soft_codes_for_loss = True
+        self.embed_dim = embed_dim
 
     def feature_extractor(self, datashape, output_length):
-        """
-        Build the RNN feature extractor.
-        
-        Args:
-            datashape: Tuple (batch, F, T, C) - spectrogram dimensions
-            output_length: Size of output feature vector
-            
-        Returns:
-            Keras Model: Input spectrogram → Output feature vector [0, 1]
-        """
         self.datashape = datashape  # Store for create_quadruplet_net
         F, T, C = datashape[1], datashape[2], datashape[3]
-        print(f"Building RNN: F={F} (freq), T={T} (time), C={C} (channels)")
-        print(f"GRU units={self.gru_units}, layers={self.num_layers}, bidirectional={self.bidirectional}")
+        output_dim = int(self.embed_dim if output_length is None else output_length)
         
-        # Input: spectrogram (F, T, C)
         inputs = Input(shape=(F, T, C))
         x = LayerNormalization(axis=[1, 2, 3], epsilon=1e-6, name="rnn_quad_input_norm")(inputs)
-        
-        # Step 1: Permute to (T, F, C) - time becomes sequence dimension
         x = Permute((2, 1, 3))(x)
-        
-        # Step 2: Reshape to (T, F*C) - flatten frequency & channels per timestep
         x = Reshape((T, F * C))(x)
+        
+        x = Dense(self.gru_units, name="quadruplet_input_projection")(x)
         x = LayerNormalization(axis=-1, epsilon=1e-6, name="rnn_quad_step_norm")(x)
         
-        # Step 3: Stacked GRU layers
         for i in range(self.num_layers):
             return_sequences = (i < self.num_layers - 1)  # Only last layer returns final state
-            
             gru = GRU(
                 self.gru_units,
                 return_sequences=return_sequences,
@@ -821,39 +902,26 @@ class RNN_QuadrupletNet_Channel(QuadrupletNet):
                 reset_after=True,
                 name=f"gru_{i+1}"
             )
-            
             if self.bidirectional:
                 x = Bidirectional(gru, name=f"bi_gru_{i+1}")(x)
             else:
                 x = gru(x)
-            
-            # Add layer norm between GRU layers (not after last)
             if return_sequences:
                 x = LayerNormalization()(x)
                 
-        
         # Step 4: Project to output dimension
         hidden_dim = self.gru_units * 2 if self.bidirectional else self.gru_units
         x = Dense(hidden_dim, activation='relu', name="projection")(x)
         x = LayerNormalization(name="projection_ln")(x)
         x = Dropout(self.dropout)(x)
-        
-        # Step 5: soft output branch used for quadruplet loss.
-        x = Dense(output_length, activation='sigmoid', name="output_soft")(x)
-        
-        return Model(inputs, x, name="RNN_ChannelEncoder")
+        x = Dense(output_dim, activation='sigmoid', name="output_soft")(x)
+        # x = ste_quantize_layer_HashNet(threshold=0.5)(x)
+        return Model(inputs=inputs, outputs=x, name="RNN_ChannelEncoder")
 
     def build_quantized_extractor(self, datashape, output_length, threshold=0.5):
-        """
-        Build RNN with STE quantization layer for binary {0, 1} output.
-        
-        Uses Straight-Through Estimator for differentiable hard quantization:
-        - Forward: Hard threshold to {0, 1}
-        - Backward: Gradients pass through as identity
-        """
         base = self.feature_extractor(datashape, output_length)
         q_out = ste_quantize_layer_HashNet(threshold)(base.output)
-        return Model(base.input, q_out, name="RNN_ChannelEncoder_Quantized")
+        return Model(base.input, q_out, name="RNN_QuadrupletNet_Channel_Quantized")
 
 class RNN_QuadrupletNet_Channel_Simple(RNN_QuadrupletNet_Channel):
     """Smaller/faster RNN Quadruplet baseline for debugging generalization."""
@@ -1253,52 +1321,20 @@ class SiammeseHashNet():
 class ResNet_HashNet_Channel(SiammeseHashNet):
     def __init__(self):
         super().__init__()
-    
-    def resblock(self, x, kernelsize, filters, first_layer = False):
-        reg = l2(0.001)  # Define L2 regularizer
-        if first_layer:
-            fx = Conv2D(filters, kernelsize, padding='same', kernel_regularizer=reg)(x)
-            fx = BatchNormalization()(fx)
-            fx = ReLU()(fx)
-            fx = Conv2D(filters, kernelsize, padding='same', kernel_regularizer=reg)(fx)
-            fx = BatchNormalization()(fx)
-            x = Conv2D(filters, 1, padding='same', kernel_regularizer=reg)(x)
-            fx = BatchNormalization()(fx)
-            out = Add()([x,fx])
-            out = ReLU()(out)
-        else:
-            fx = Conv2D(filters, kernelsize, padding='same', kernel_regularizer=reg)(x)
-            fx = BatchNormalization()(fx)
-            fx = ReLU()(fx)
-            fx = Conv2D(filters, kernelsize, padding='same', kernel_regularizer=reg)(fx)
-            fx = BatchNormalization()(fx)
-            out = Add()([x,fx])
-            out = ReLU()(out)
-
-        return out 
 
     def feature_extractor(self, datashape, output_length):
         self.datashape = datashape
-        reg = l2(0.001)  # Define L2 regularizer
         inputs = Input(shape=([self.datashape[1],self.datashape[2],self.datashape[3]]))
-        x = Conv2D(32, 7, strides = 2, activation='relu', padding='same', kernel_regularizer=reg)(inputs)
-        x =  Dropout(0.3)(x)
-        x = self.resblock(x, 3, 32, first_layer = True)
-        for _ in range(1):
-            x = self.resblock(x, 3, 32)
-        x = self.resblock(x, 3, 64, first_layer = True)
-        for _ in range(1):
-            x = self.resblock(x, 3, 64)
+        x = Conv2D(32, 7, strides = 2, activation='relu', padding='same')(inputs)
+        x = resblock(x, 3, 32)
+        x = resblock(x, 3, 32)
+        x = resblock(x, 3, 64, first_layer = True)
+        x = resblock(x, 3, 64)
         x = AveragePooling2D(pool_size=2)(x)
         x = Flatten()(x)
-        x = Dense(256, activation='relu')(x)
-        # Soft hash codes used for training loss.
-        x = Dense(units=output_length, activation='sigmoid', name="hash_bits_soft")(x)
-        
-        # Hard hash codes used for inference/export (binary {0,1}).
-        x = ste_quantize_layer_HashNet(threshold = 0.5)(x)
-         
-        model = Model(inputs=inputs, outputs=x)
+        x = Dense(output_length)(x)
+        outputs = L2NormalizeLayer(axis=1, name="resnet_l2norm")(x)
+        model = Model(inputs=inputs, outputs=outputs)
         return model
 
 

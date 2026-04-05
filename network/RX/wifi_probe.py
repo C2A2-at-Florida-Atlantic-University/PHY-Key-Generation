@@ -177,3 +177,15 @@ class WiFiProbeRx(gr.top_block):
         self.ieee802_11_frame_equalizer_0.set_algorithm(
             ieee802_11.Equalizer(self.chan_est)
         )
+        
+    def start(self):
+        self.usrp_source.set_gpio_attr("FP0", "CTRL", 0x0)
+        self.usrp_source.set_gpio_attr("FP0", "DDR",  0x10, 0x10, 0)
+        self.usrp_source.set_gpio_attr("FP0", "OUT",  0x10, 0x10, 0)
+        super().start()
+
+    def stop(self):
+        self.usrp_source.set_gpio_attr("FP0", "CTRL", 0x10, 0x10, 0)
+        self.usrp_source.set_gpio_attr("FP0", "DDR",  0xFFFFFFFF, 0x0, 0)
+        self.usrp_source.set_gpio_attr("FP0", "OUT",  0xFFFFFFFF, 0x0, 0)
+        return super().stop()

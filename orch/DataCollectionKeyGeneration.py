@@ -930,9 +930,10 @@ def loadOTADenseConfig(
         2:"cnode-guesthouse.emulab.net",# Guesthouse dense node with b210
         3:"cnode-moran.emulab.net",     # Moran dense node with b210
         4:"cnode-ustar.emulab.net",     # Ustar dense node with b210
-        5:"localhost",                  # Local computer with b210
-        6:"162.168.10.101",             # Jetson nano 1 with b210
-        7:"162.168.10.102"              # Jetson nano 2 with b210
+        5:"cnode-mario.emulab.net",     # Mario dense node with b210
+        6:"localhost",                  # Local computer with b210
+        7:"162.168.10.101",             # Jetson nano 1 with b210
+        8:"162.168.10.102"              # Jetson nano 2 with b210
     }
     NodeGains = {
         1:gainConfigs["b210"],
@@ -981,17 +982,18 @@ def loadOTARooftopConfig(
 
 if __name__ == "__main__":
     
-    nodeIDs = [2,3,4,5,6,7,8] #[1,2,3,4,5,6,7,8]
-    NodeIPs, NodeGains, nodeConfigs = loadOTALabConfig(nodeIDs = nodeIDs)
-    # NodeIPs, NodeGains, nodeConfigs = loadOTADenseConfig()
+    # nodeIDs = [2,3,4,5,6,7,8] #[1,2,3,4,5,6,7,8]
+    nodeIDs = [1,2,3,4,5] #[1,2,3,4,5,6,7,8]
+    # NodeIPs, NodeGains, nodeConfigs = loadOTALabConfig(nodeIDs = nodeIDs)
+    NodeIPs, NodeGains, nodeConfigs = loadOTADenseConfig(nodeIDs = nodeIDs)
     # Removing certain nodes that data has been collected
-    configsToRemove = [[5, 6, 2], [5, 6, 3], [5, 6, 4], 
-                        [5, 6, 7], [5, 6, 8], [5, 7, 2], 
-                        [5, 7, 3], [5, 7, 4], [5, 7, 6], 
-                        [5, 7, 8], [5, 8, 2], [5, 8, 3], 
-                        [5, 8, 4], [5, 8, 6], [5, 8, 7], 
-                        [6, 7, 2]]
-    nodeConfigs = [config for config in nodeConfigs if config not in configsToRemove]
+    # configsToRemove = [[5, 6, 2], [5, 6, 3], [5, 6, 4], 
+    #                     [5, 6, 7], [5, 6, 8], [5, 7, 2], 
+    #                     [5, 7, 3], [5, 7, 4], [5, 7, 6], 
+    #                     [5, 7, 8], [5, 8, 2], [5, 8, 3], 
+    #                     [5, 8, 4], [5, 8, 6], [5, 8, 7], 
+    #                     [6, 7, 2]]
+    # nodeConfigs = [config for config in nodeConfigs if config not in configsToRemove]
     # nodeConfigs = [[8,7,5]] # Testing with only one config
     print("Node configs: ", nodeConfigs)
     print(len(nodeConfigs))
@@ -1000,7 +1002,7 @@ if __name__ == "__main__":
 
     examples= 100
     freq = 3.450e9
-    samp_rate = 1000e3
+    samp_rate = 1e6
 
     paramsTx = {
         "x":"tx",

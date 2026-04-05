@@ -22,7 +22,7 @@ import time
 from scipy.stats import entropy
 import h5py
 import sys
-from DatasetHandler import DatasetHandler, ChannelSpectrogram, ChannelIQ, ChannelPolar
+from DatasetHandler import DatasetHandler, ChannelSpectrogram, ChannelIQ, ChannelPolar, load_cached_dataset, SOURCE_OTA_LAB, SOURCE_OTA_DENSE, SOURCE_SIONNA
 from reconciliation import ReedSolomonReconciliation, BitToSymbolTransformation
 from Quantization import Quantization
 from privacy_amplification import PrivacyAmplification
@@ -91,6 +91,50 @@ def infer_model_data_type(feature_extractor_name):
     if "_polar_" in name_l:
         return "Polar"
     return "Spectrogram"
+
+def infer_fft_len_from_name(feature_extractor_name, default=256):
+    """Extract FFT window length from model filename pattern '_inNNN_'."""
+    import re
+    m = re.search(r'_in(\d+)_', feature_extractor_name)
+    if m:
+        return int(m.group(1))
+    return default
+
+def infer_model_input_shape(feature_extractor):
+    input_shape = getattr(feature_extractor, "input_shape", None)
+    if isinstance(input_shape, list):
+        input_shape = input_shape[0] if input_shape else None
+    if not input_shape or len(input_shape) != 4:
+        return None
+    normalized = []
+    for dim in input_shape:
+        normalized.append(None if dim is None else int(dim))
+    return tuple(normalized)
+
+def align_tensor_to_input_shape(data, expected_input_shape):
+    if expected_input_shape is None or len(expected_input_shape) != 4:
+        return data
+    _, target_rows, target_cols, target_channels = expected_input_shape
+    if target_channels is not None and data.shape[-1] != target_channels:
+        if data.shape[-1] == 1 and target_channels == 2:
+            data = np.repeat(data, 2, axis=-1)
+        elif data.shape[-1] == 2 and target_channels == 1:
+            data = np.mean(data, axis=-1, keepdims=True)
+        else:
+            raise ValueError(
+                f"Cannot align tensor channels from {data.shape[-1]} to {target_channels}."
+            )
+    target_size = (
+        data.shape[1] if target_rows is None else target_rows,
+        data.shape[2] if target_cols is None else target_cols,
+    )
+    if data.shape[1] != target_size[0] or data.shape[2] != target_size[1]:
+        print(
+            f"Resizing extracted inputs from {data.shape[1:]} to "
+            f"{(target_size[0], target_size[1], data.shape[-1])} to match model input."
+        )
+        data = tf.image.resize(data, size=target_size, method="bilinear").numpy().astype(np.float32)
+    return data
 
 def load_trusted_feature_extractor(model_path):
     """Load trusted local feature extractor from native .keras format."""
@@ -271,7 +315,7 @@ def plot_scenario_bdr_from_h5_files(file_paths, scenario_labels=None, output_pat
         "output_path": output_path,
     }
 
-def extract_features_data(data, feature_extractor, fft_len, data_type="Spectrogram", spectrogram_processing="magnitude", rnn_format=False):
+def extract_features_data(data, feature_extractor, fft_len, data_type="Spectrogram", spectrogram_processing="magnitude", rnn_format=False, expected_input_shape=None):
     data = np.array(data)
     if data_type == "IQ":
         ChannelIQObj = ChannelIQ()
@@ -281,11 +325,16 @@ def extract_features_data(data, feature_extractor, fft_len, data_type="Spectrogr
         data = ChannelPolarObj.channel_polar(data)
     elif data_type == "Spectrogram":
         ChannelSpectrogramObj = ChannelSpectrogram()
+        expected_rows = None if expected_input_shape is None else expected_input_shape[1]
+        use_cropped_spectrogram = not (expected_rows is not None and int(expected_rows) == int(fft_len))
         data = ChannelSpectrogramObj.channel_spectrogram(
             data,
             fft_len,
             processing=spectrogram_processing,
+            crop=use_cropped_spectrogram,
         )
+    if getattr(data, "ndim", 0) == 4:
+        data = align_tensor_to_input_shape(data, expected_input_shape)
     features = feature_extractor.predict(data)
     return features
 
@@ -397,6 +446,30 @@ def tx_leakage_diagnostic(embeddings, tx_labels):
             "leakage_detected": leakage}
 
 
+def build_standard_test_environments(signal_type="Sinusoid"):
+    """Return the standardized 3-scenario OTA evaluation set."""
+    if signal_type != "Sinusoid":
+        raise ValueError("Standard test environments are only defined for the Sinusoid path.")
+    scenarios = [
+        ("OTA-Lab", [8, 5, 4]),
+        ("OTA-Dense", [1, 2, 3]),
+        ("OTA-Dense", [1, 3, 2]),
+    ]
+    environments = []
+    for band, node_ids in scenarios:
+        scenario_tag = "".join(str(node) for node in node_ids)
+        environments.append({
+            "scenario_id": f"{band}_{scenario_tag}".replace("-", "_"),
+            "test_band": f"{band}-{scenario_tag}",
+            "node_config": {
+                "dataset_name": "Key-Generation",
+                "config_name": f"{signal_type}-Powder-{band}-Nodes",
+                "repo_name": "CAAI-FAU",
+                "node_Ids": [node_ids],
+            },
+        })
+    return environments
+
 def _resolve_test_node_config(node_configurations, test_band="OTA-Lab"):
     """Pick OTA-Lab vs OTA-Dense when `node_configurations` is the OTA-All wrapper.
 
@@ -419,6 +492,58 @@ def _resolve_test_node_config(node_configurations, test_band="OTA-Lab"):
         return sub
     return node_configurations
 
+
+def evaluate_model_across_scenarios(
+    feature_extractor_name,
+    scenario_environments=None,
+    home="/home/Research/POWDER/",
+    signal_type="Sinusoid",
+    sample_source="auto",
+    preprocessing="magnitude_phase",
+):
+    scenario_environments = scenario_environments or build_standard_test_environments(signal_type)
+    per_scenario = []
+    for environment in scenario_environments:
+        result = test_model(
+            feature_extractor_name,
+            environment["node_config"],
+            home=home,
+            generate_results=True,
+            signal_type=signal_type,
+            sample_source=sample_source,
+            test_band=environment["test_band"],
+            preprocessing=preprocessing,
+        )
+        result["scenario_id"] = environment["scenario_id"]
+        per_scenario.append(result)
+
+    mean_kdr_ab = float(np.mean([row["KDR_AliceBob"] for row in per_scenario]))
+    mean_kdr_bobeve = float(np.mean([row["KDR_BobEve"] for row in per_scenario]))
+    mean_kdr_aliceeve = float(np.mean([row["KDR_AliceEve"] for row in per_scenario]))
+    mean_ones_fraction = float(np.mean([row["ones_fraction"] for row in per_scenario]))
+    min_eve_gap = float(min(
+        min(row["KDR_BobEve"] - row["KDR_AliceBob"], row["KDR_AliceEve"] - row["KDR_AliceBob"])
+        for row in per_scenario
+    ))
+    admissible = all(
+        (row["KDR_BobEve"] - row["KDR_AliceBob"] >= 0.05)
+        and (row["KDR_AliceEve"] - row["KDR_AliceBob"] >= 0.05)
+        and (0.35 <= row["ones_fraction"] <= 0.65)
+        for row in per_scenario
+    )
+
+    return {
+        "model_name": os.path.basename(feature_extractor_name),
+        "per_scenario": per_scenario,
+        "aggregate": {
+            "mean_KDR_AliceBob": mean_kdr_ab,
+            "mean_KDR_BobEve": mean_kdr_bobeve,
+            "mean_KDR_AliceEve": mean_kdr_aliceeve,
+            "mean_ones_fraction": mean_ones_fraction,
+            "min_eve_gap": min_eve_gap,
+            "admissible": bool(admissible),
+        },
+    }
 
 def select_latest_keras_model(models_dir, signal_type="Sinusoid", name_substring=None, preprocessing="magnitude_phase"):
     """Pick newest .keras under models_dir, optionally filtered by signal type / substring."""
@@ -491,37 +616,59 @@ def test_model(
     node_Ids = node_configurations["node_Ids"]
     config_name = node_configurations["config_name"]
 
+    explicit_model_path = feature_extractor_name if os.path.isabs(feature_extractor_name) else None
+    feature_extractor_name = os.path.basename(feature_extractor_name)
     extractor_name = feature_extractor_name.split("/")[-1]
     extractor_name = extractor_name.split(".")[0]
     test_configs_name = repo_name+"_"+dataset_name+"_"+str(node_Ids)+"_"+extractor_name
     results_directory = home+"Results/"
     results_file = "Results_"+test_configs_name
 
-    # Load the dataset first and feed that to the model
-    for idx, node_ids in enumerate(node_Ids):
-        node_config_name = config_name+"-"+"".join(str(node) for node in node_ids)
-        print("Config name: ", node_config_name)
-        # Check if config contains "Sionna-Ray-Tracing"
-        if idx == 0:
-            dataset = DatasetHandler(dataset_name, node_config_name, repo_name)
-        else:
-            dataset.add_dataset(dataset_name, node_config_name, repo_name)
-    configure_dataset_iq_source(dataset, signal_type, sample_source=sample_source)
-    dataset.get_dataframe_Info()
-    data, _, _, tx_labels = dataset.load_data()
-    
+    # Load the dataset -- try local HDF5 cache first, fall back to HuggingFace.
+    cache_path = os.path.join(home, "Data", f"{signal_type}_dataset.h5")
     source_l = str(sample_source).strip().lower()
-    if signal_type == "deltaPulse":
-        min_num_samples = int(8192 * 2)
-    elif signal_type == "WiFi":
-        if source_l == "csi":
-            min_num_samples = int(64)
+    loaded_from_cache = False
+
+    _band_to_source = {"OTA-Lab": SOURCE_OTA_LAB, "OTA-Dense": SOURCE_OTA_DENSE}
+    band_base = test_band.split("-")[0] + "-" + test_band.split("-")[1] if "-" in test_band else test_band
+    cache_source_filter = [_band_to_source[band_base]] if band_base in _band_to_source else None
+
+    if os.path.exists(cache_path):
+        cached = load_cached_dataset(
+            cache_path,
+            source_filter=cache_source_filter,
+            node_ids_filter=node_Ids,
+        )
+        if cached["data"].shape[0] > 0:
+            print(f"[CACHE HIT] Loaded {cached['data'].shape[0]} test samples from cache")
+            data = cached["data"]
+            tx_labels = cached["tx"]
+            loaded_from_cache = True
         else:
-            min_num_samples = int(128)
-    else:
-        min_num_samples = int(8192)
-    # Resize the data in examples to the least number of samples
-    data = np.array([example[-min_num_samples:] for example in data])
+            print(f"[CACHE MISS] Test scenarios {node_Ids} not in cache, loading from HuggingFace")
+
+    if not loaded_from_cache:
+        for idx, node_ids in enumerate(node_Ids):
+            node_config_name = config_name+"-"+"".join(str(node) for node in node_ids)
+            print("Config name: ", node_config_name)
+            if idx == 0:
+                dataset = DatasetHandler(dataset_name, node_config_name, repo_name)
+            else:
+                dataset.add_dataset(dataset_name, node_config_name, repo_name)
+        configure_dataset_iq_source(dataset, signal_type, sample_source=sample_source)
+        dataset.get_dataframe_Info()
+        data, _, _, tx_labels = dataset.load_data()
+
+        if signal_type == "deltaPulse":
+            min_num_samples = int(8192 * 2)
+        elif signal_type == "WiFi":
+            if source_l == "csi":
+                min_num_samples = int(64)
+            else:
+                min_num_samples = int(128)
+        else:
+            min_num_samples = int(8192)
+        data = np.array([example[-min_num_samples:] for example in data])
 
     # Plot test dataset scenarios using the same visualization utilities as training.
     if data.shape[0] >= data_per_scenario:
@@ -590,19 +737,19 @@ def test_model(
     if generate_results:
         # with tf.device('/CPU:0'):
         #     print("loading model")
-        feature_extractor_path = home+"Models/"+feature_extractor_name
+        feature_extractor_path = explicit_model_path or home+"Models/"+feature_extractor_name
         feature_extractor = load_trusted_feature_extractor(feature_extractor_path)
+        expected_input_shape = infer_model_input_shape(feature_extractor)
+        if expected_input_shape is not None:
+            print(f"Model input shape: {expected_input_shape}")
         model_data_type = infer_model_data_type(feature_extractor_name)
         # For CSI source, force raw input mode (no FFT/spectrogram).
         if source_l == "csi" and model_data_type == "Spectrogram":
             print("CSI sample_source selected; overriding model input preprocessing to IQ (no FFT).")
             model_data_type = "IQ"
 
-        # Infer fft_len from the model input shape if available (used only for Spectrogram).
-        try:
-            inferred_fft_len = int(feature_extractor.input_shape[1]) if feature_extractor.input_shape is not None else 256
-        except Exception:
-            inferred_fft_len = 256
+        # Infer fft_len from the model filename pattern '_inNNN_'.
+        inferred_fft_len = infer_fft_len_from_name(feature_extractor_name, default=256)
 
         is_rnn_model = "_RNN" in feature_extractor_name or "_RNN-Simple" in feature_extractor_name
         features = extract_features_data(
@@ -612,6 +759,7 @@ def test_model(
             data_type=model_data_type,
             spectrogram_processing=preprocessing,
             rnn_format=(is_rnn_model and model_data_type == "IQ"),
+            expected_input_shape=expected_input_shape,
         )
         if dataRayTracing:
             featuresRayTracing = extract_features_data(
@@ -621,6 +769,7 @@ def test_model(
                 data_type=model_data_type,
                 spectrogram_processing=preprocessing,
                 rnn_format=(is_rnn_model and model_data_type == "IQ"),
+                expected_input_shape=expected_input_shape,
             )
         
         # =====================================================================
@@ -681,8 +830,9 @@ def test_model(
         print(f"\nModel appears to have built-in quantization: {model_has_quantization}")
         print("="*70 + "\n")
 
+        tx_diagnostic = {"same_tx_kdr": None, "diff_tx_kdr": None, "leakage_detected": False}
         if tx_labels is not None and len(tx_labels) == len(features):
-            tx_leakage_diagnostic(features, tx_labels)
+            tx_diagnostic = tx_leakage_diagnostic(features, tx_labels)
         
         quantization_method["precision"] = 1 # 1, 2, 4
         t_start = time.time()
@@ -707,11 +857,32 @@ def test_model(
         print("Average KDR Bob-Eve: ", avg_KDR_AC)
         print("Average KDR Alice-Eve: ", avg_KDR_BC)
         
+        scenario_ids = node_Ids[0] if len(node_Ids) == 1 else node_Ids
+        return {
+            "model_name": feature_extractor_name,
+            "model_path": feature_extractor_path,
+            "test_band": test_band,
+            "scenario_node_ids": scenario_ids,
+            "KDR_AliceBob": float(avg_KDR_AB),
+            "KDR_BobEve": float(avg_KDR_AC),
+            "KDR_AliceEve": float(avg_KDR_BC),
+            "ones_fraction": float(ones_fraction),
+            "is_binary": bool(is_binary),
+            "model_has_quantization": bool(model_has_quantization),
+            "quantization_layer_used": bool(quantization_layer),
+            "tx_same_kdr": tx_diagnostic["same_tx_kdr"],
+            "tx_diff_kdr": tx_diagnostic["diff_tx_kdr"],
+            "tx_leakage_detected": bool(tx_diagnostic["leakage_detected"]),
+            "num_samples": int(len(features)),
+            "quantization_time_s": float(t_end - t_start),
+            "python_executable": sys.executable,
+        }
+        
         if dataRayTracing:
             avg_KDR_AA_RayTracing, avg_KDR_BB_RayTracing, KDR_AA, KDR_BB =  avg_KDR_data_RayTracing(quantized_data,quantized_dataRayTracing)
             print("Average KDR Alice-Eve (Ray Tracing): ", avg_KDR_AA_RayTracing)
             print("Average KDR Bob-Eve (Ray Tracing): ", avg_KDR_BB_RayTracing)
-        exit()
+        # exit()
         #Reconciliation
         L = quantized_data[0].shape[0]
         bits_per_symbol = 8
@@ -1678,7 +1849,7 @@ if __name__ == "__main__":
     data_collection_type_train = "OTA-Lab" # "OTA-Lab", "OTA-Dense"
     data_collection_type_test = "OTA-All" # "OTA-All" (nested) or "OTA-Lab" / "OTA-Dense" (flat)
     # When using OTA-All, which band to evaluate on (should match training: OTA-Lab for Powder-OTA-Lab-Nodes+Sionna).
-    test_band = "OTA-Lab"  # "OTA-Lab" or "OTA-Dense"
+    test_band = "OTA-Dense"  # "OTA-Lab" or "OTA-Dense"
     
     node_Ids = {"Sinusoid":
                     {"OTA-Lab": [#[1,2,3],
@@ -1690,9 +1861,9 @@ if __name__ == "__main__":
                             #[8,5,1], 
                             [8,5,4]
                             ],
-                    "OTA-Dense": [#[1,2,3],
+                    "OTA-Dense": [[1,2,3],
+                                 [1,3,2],
                                 #[1,2,5],
-                                    [1,3,2],
                                 # [4,3,5]
                                 ],
                     "Sionna-Ray-Tracing":[
@@ -1928,15 +2099,25 @@ if __name__ == "__main__":
     # model_name = "Spectrogram_FeatureExtractor_RNN_in256_out128_alpha0.5_beta0.5_gamma0.1_RMSprop_lr0.0001_Sinusoid-Powder-OTA-Lab-Nodes_1761276429.h5"
 
     print("Testing model name: ", model_name)
-    test_model(
-        model_name,
-        test_node_configurations[data_collection_type_test],
-        home=homeDir,
-        generate_results=True,
-        signal_type=signal_type,
-        sample_source=sample_source,
-        test_band=test_band,
-        preprocessing=preprocessing,
-    )
-    
-    # Spectrogram_FeatureExtractor_RNN_in2048_out128_alpha0.5_beta0.5_gamma0.1_RMSprop_lr0.0001_deltaPulse-Powder-OTA-Lab-Nodes_1769122091.h5
+    for band in ["OTA-Lab", "OTA-Dense"]:
+        band_node_ids = node_Ids[signal_type].get(band, [])
+        if not band_node_ids:
+            print(f"Skipping {band}: no test scenarios configured")
+            continue
+        for scenario_ids in band_node_ids:
+            scenario_config = dict(test_node_configurations[band])
+            scenario_config['node_Ids'] = [scenario_ids]
+            scenario_tag = "".join(str(n) for n in scenario_ids)
+            print(f"\n{'='*70}")
+            print(f"  TESTING ENVIRONMENT: {band}  Scenario: {scenario_ids}")
+            print(f"{'='*70}")
+            test_model(
+                model_name,
+                scenario_config,
+                home=homeDir,
+                generate_results=True,
+                signal_type=signal_type,
+                sample_source=sample_source,
+                test_band=f"{band}-{scenario_tag}",
+                preprocessing=preprocessing,
+            )

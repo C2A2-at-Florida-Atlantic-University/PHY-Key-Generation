@@ -8,34 +8,200 @@ import os
 
 from scipy import signal
 
-def normalize_complex_samples(data, method="rms", center=True, eps=1e-8):
-    """
-    Normalize a batch of complex samples per example.
+# ------------------------------------------------------------
+# Original code from gxhen repo https://github.com/gxhen/LoRa_RFFI.git
+# ------------------------------------------------------------
+# Dataset handler for the device fingerprinting dataset
+# ------------------------------------------------------------
 
-    method:
-      - "rms": unit-RMS normalization (power invariance)
-      - "peak": unit-peak normalization
-      - "none": no scaling
-    """
-    x = np.asarray(data, dtype=np.complex64).copy()
-    if x.ndim != 2:
-        raise ValueError(f"normalize_complex_samples expects shape (M,N), got {x.shape}")
+import numpy as np
+import h5py
+from numpy import sum,sqrt
+from numpy.random import standard_normal, uniform
 
-    if center:
-        x = x - np.mean(x, axis=1, keepdims=True)
+from scipy import signal
 
-    mode = str(method).strip().lower()
-    if mode == "none":
-        return x
-    if mode == "rms":
-        scale = np.sqrt(np.mean(np.abs(x) ** 2, axis=1, keepdims=True))
-    elif mode == "peak":
-        scale = np.max(np.abs(x), axis=1, keepdims=True)
-    else:
-        raise ValueError(f"Unsupported normalization method: {method}")
+# In[]
 
-    scale = np.maximum(scale, eps).astype(np.float32)
-    return (x / scale).astype(np.complex64)
+def awgn(data, snr_range):
+    
+    pkt_num = data.shape[0]
+    SNRdB = uniform(snr_range[0],snr_range[-1],pkt_num)
+    for pktIdx in range(pkt_num):
+        s = data[pktIdx]
+        # SNRdB = uniform(snr_range[0],snr_range[-1])
+        SNR_linear = 10**(SNRdB[pktIdx]/10)
+        P= sum(abs(s)**2)/len(s)
+        N0=P/SNR_linear
+        n = sqrt(N0/2)*(standard_normal(len(s))+1j*standard_normal(len(s)))
+        data[pktIdx] = s + n
+
+    return data 
+
+def _normalization(data):
+    """Normalize each complex example to reduce power/offset leakage."""
+    # return normalize_complex_samples(data, method=method, center=center)
+    # Taking normalization from gxhen repo https://github.com/gxhen/LoRa_RFFI.git
+    s_norm = np.zeros(data.shape, dtype=complex)
+    
+    for i in range(data.shape[0]):
+    
+        sig_amplitude = np.abs(data[i])
+        rms = np.sqrt(np.mean(sig_amplitude**2))
+        s_norm[i] = data[i]/rms
+    
+    return s_norm  
+
+class LoadDataset():
+    def __init__(self,):
+        self.dataset_name = 'data'
+        self.labelset_name = 'label'
+        
+    def _convert_to_complex(self, data):
+        '''Convert the loaded data to complex IQ samples.'''
+        num_row = data.shape[0]
+        num_col = data.shape[1] 
+        data_complex = np.zeros([num_row,round(num_col/2)],dtype=complex)
+     
+        data_complex = data[:,:round(num_col/2)] + 1j*data[:,round(num_col/2):] 
+        return data_complex
+    
+    def load_iq_samples(self, file_path, dev_range, pkt_range):
+        '''
+        Load IQ samples from a dataset.
+        
+        INPUT:
+            FILE_PATH is the dataset path.
+            
+            DEV_RANGE specifies the loaded device range.
+            
+            PKT_RANGE specifies the loaded packets range.
+            
+        RETURN:
+            DATA is the laoded complex IQ samples.
+            
+            LABLE is the true label of each received packet.
+        '''
+        
+        f = h5py.File(file_path,'r')
+        label = f[self.labelset_name][:]
+        label = label.astype(int)
+        label = np.transpose(label)
+        label = label - 1
+        
+        label_start = int(label[0]) + 1
+        label_end = int(label[-1]) + 1
+        num_dev = label_end - label_start + 1
+        num_pkt = len(label)
+        num_pkt_per_dev = int(num_pkt/num_dev)
+        
+        print('Dataset information: Dev ' + str(label_start) + ' to Dev ' + 
+              str(label_end) + ', ' + str(num_pkt_per_dev) + ' packets per device.')
+        
+        sample_index_list = []
+        
+        for dev_idx in dev_range:
+            sample_index_dev = np.where(label==dev_idx)[0][pkt_range].tolist()
+            sample_index_list.extend(sample_index_dev)
+    
+        data = f[self.dataset_name][sample_index_list]
+        data = self._convert_to_complex(data)
+        
+        label = label[sample_index_list]
+          
+        f.close()
+        return data,label
+
+
+
+class ChannelIndSpectrogram():
+    def __init__(self,):
+        pass
+
+    def _spec_crop(self, x):
+        '''Crop the generated channel independent spectrogram.'''
+        num_row = x.shape[0]
+        x_cropped = x[round(num_row*0.3):round(num_row*0.7)]
+    
+        return x_cropped
+
+
+    def _gen_single_channel_ind_spectrogram(self, sig, win_len=256, overlap=128):
+        '''
+        _gen_single_channel_ind_spectrogram converts the IQ samples to a channel
+        independent spectrogram according to set window and overlap length.
+        
+        INPUT:
+            SIG is the complex IQ samples.
+            
+            WIN_LEN is the window length used in STFT.
+            
+            OVERLAP is the overlap length used in STFT.
+            
+        RETURN:
+            
+            CHAN_IND_SPEC_AMP is the genereated channel independent spectrogram.
+        '''
+        # Short-time Fourier transform (STFT).
+        f, t, spec = signal.stft(sig, 
+                                window='boxcar', 
+                                nperseg= win_len, 
+                                noverlap= overlap, 
+                                nfft= win_len,
+                                return_onesided=False, 
+                                padded = False, 
+                                boundary = None)
+        
+        # FFT shift to adjust the central frequency.
+        spec = np.fft.fftshift(spec, axes=0)
+        
+        # Generate channel independent spectrogram.
+        chan_ind_spec = spec[:,1:]/spec[:,:-1]    
+        
+        # Take the logarithm of the magnitude.      
+        chan_ind_spec_amp = np.log10(np.abs(chan_ind_spec)**2)
+                  
+        return chan_ind_spec_amp
+    
+
+
+    def channel_ind_spectrogram(self, data):
+        '''
+        channel_ind_spectrogram converts IQ samples to channel independent 
+        spectrograms.
+        
+        INPUT:
+            DATA is the IQ samples.
+            
+        RETURN:
+            DATA_CHANNEL_IND_SPEC is channel independent spectrograms.
+        '''
+        
+        # Normalize the IQ samples.
+        data = _normalization(data)
+        
+        # Calculate the size of channel independent spectrograms.
+        num_sample = data.shape[0]
+        num_row = int(256*0.4)
+        num_column = int(np.floor((data.shape[1]-256)/128 + 1) - 1)
+        data_channel_ind_spec = np.zeros([num_sample, num_row, num_column, 1])
+        
+        # Convert each packet (IQ samples) to a channel independent spectrogram.
+        for i in range(num_sample):
+                   
+            chan_ind_spec_amp = self._gen_single_channel_ind_spectrogram(data[i])
+            chan_ind_spec_amp = self._spec_crop(chan_ind_spec_amp)
+            data_channel_ind_spec[i,:,:,0] = chan_ind_spec_amp
+            
+        return data_channel_ind_spec
+    
+# ------------------------------------------------------------
+# End of original code from gxhen repo https://github.com/gxhen/LoRa_RFFI.git
+# ------------------------------------------------------------
+
+# ------------------------------------------------------------
+# Custom dataset handler for the channel fingerprinting dataset
+# ------------------------------------------------------------
 
 class DatasetHandler():
     def __init__(self, dataset_name, config_name, repo_name="CAAI-FAU"):
@@ -596,14 +762,11 @@ class ChannelSpectrogram():
     def __init__(self,):
         pass
     
-    def _normalization(self, data, method="rms", center=True):
-        """Normalize each complex example to reduce power/offset leakage."""
-        return normalize_complex_samples(data, method=method, center=center)
-
     def _spec_crop(self, x):
         '''Crop the generated channel independent spectrogram.'''
         num_row = x.shape[0]
         x_cropped = x[round(num_row*0.3):round(num_row*0.7)]
+        # x_cropped = x[round(num_row*0.1):round(num_row*0.9)]
     
         return x_cropped
 
@@ -643,18 +806,20 @@ class ChannelSpectrogram():
         spec = np.fft.fftshift(spec, axes=0)
         
         mode = str(processing).strip().lower()
-        eps = 1e-12
         # Take the logarithm of the magnitude.
         if mode == "magnitude":
-            chan_spec_amp = np.log10(np.abs(spec) ** 2 + eps).astype(np.float32)
+            chan_spec_amp = np.log10(np.abs(spec) ** 2).astype(np.float32)
         elif mode == "complex":
             # Two-channel tensor [real, imag], analogous to multi-channel images.
             chan_spec_amp = np.stack([spec.real, spec.imag], axis=-1).astype(np.float32)
         elif mode in ("magnitude_phase", "mag_phase"):
-            chan_spec_log_mag = np.log10(np.abs(spec) ** 2 + eps).astype(np.float32)
+            # chan_spec_log_mag = np.log10(np.abs(spec) ** 2).astype(np.float32)
+            # Take the amplitude of the complex numbers
+            chan_spec_amplitude = np.sqrt(spec.real**2 + spec.imag**2).astype(np.float32)
+            # np.angle returns the arctan(b/a) where b is the imaginary part and a is the real part
             chan_spec_phase = np.angle(spec).astype(np.float32)
             # Two-channel tensor [magnitude, phase].
-            chan_spec_amp = np.stack([chan_spec_log_mag, chan_spec_phase], axis=-1)
+            chan_spec_amp = np.stack([chan_spec_amplitude, chan_spec_phase], axis=-1)
         else:
             raise ValueError(f"Invalid processing: {processing}")
         return chan_spec_amp
@@ -668,7 +833,7 @@ class ChannelSpectrogram():
         normalized_data = (data - min_val) / (max_val - min_val)
         return normalized_data
         
-    def channel_spectrogram(self, data, FFTwindow=512, processing="magnitude", normalize=True, normalization_method="rms", center=True):
+    def channel_spectrogram(self, data, FFTwindow=512, processing="magnitude", normalize=True, crop=True):
         '''
         channel_ind_spectrogram converts IQ samples to channel independent 
         spectrograms.
@@ -681,8 +846,9 @@ class ChannelSpectrogram():
         '''
         data = np.stack([np.asarray(pkt, dtype=np.complex64) for pkt in data])
         # Normalize complex IQ samples to reduce absolute-power shortcuts.
+        # Normalizing taking into account entire batch of samples
         if normalize:
-            data = self._normalization(data, method=normalization_method, center=center)
+            data = _normalization(data)
             
         # Calculate the size of channel independent spectrograms.
         win_len=FFTwindow # 128 | 256 | 512 --Smaller window will give better time resolution but worse freq. resolution and vice versa. 128 for N=8192 is the most balanced
@@ -693,6 +859,9 @@ class ChannelSpectrogram():
         first_spec = self._gen_single_channel_spectrogram(
             data[0], win_len, overlap, processing=processing
         )
+        if crop:
+            first_spec = self._spec_crop(first_spec)
+        # Getting spectrogram dimensions
         if first_spec.ndim == 2:
             num_row, num_column = first_spec.shape
             num_channels = 1
@@ -709,8 +878,8 @@ class ChannelSpectrogram():
             chan_spec_amp = self._gen_single_channel_spectrogram(
                 data[i], win_len, overlap, processing=processing
             )
-            # chan_spec_amp = self._spec_crop(chan_spec_amp)
-            # chan_spec_amp = self.normalize_data(chan_spec_amp)
+            if crop:
+                chan_spec_amp = self._spec_crop(chan_spec_amp)
             if chan_spec_amp.ndim == 2:
                 data_channel_spec[i, :, :, 0] = chan_spec_amp
             else:
@@ -722,10 +891,6 @@ class ChannelIQ():
     def __init__(self,):
         pass
     
-    def _normalization(self, data, method="rms", center=True):
-        """Normalize each complex example to reduce power/offset leakage."""
-        return normalize_complex_samples(data, method=method, center=center)
-    
     def channel_iq(self, data, normalize=True, normalization_method="rms", center=True, rnn_format=False):
         '''
         channel_iq converts IQ samples to channel independent IQ samples.
@@ -735,7 +900,7 @@ class ChannelIQ():
         '''
         data = np.stack([np.asarray(pkt, dtype=np.complex64) for pkt in data])
         if normalize:
-            data = self._normalization(data, method=normalization_method, center=center)
+            data = _normalization(data)
         M, N = data.shape[0], data.shape[1]
         if rnn_format:
             data_iq = np.empty((M, 1, N, 2), dtype=np.float32)
@@ -753,10 +918,6 @@ class ChannelPolar():
     def __init__(self,):
         pass
     
-    def _normalization(self, data, method="rms", center=True):
-        """Normalize each complex example to reduce power/offset leakage."""
-        return normalize_complex_samples(data, method=method, center=center)
-    
     def complex_to_polar(self, data):
         I = data.real
         Q = data.imag
@@ -770,7 +931,7 @@ class ChannelPolar():
         '''
         data = np.stack([np.asarray(pkt, dtype=np.complex64) for pkt in data])
         if normalize:
-            data = self._normalization(data, method=normalization_method, center=center)
+            data = _normalization(data)
         amplitude, phase = self.complex_to_polar(data)
         # Create (M, N, 2, 1) array: feature axis [Amplitude, Phase], trailing channel axis = 1
         M, N = amplitude.shape[0], amplitude.shape[1]
@@ -809,6 +970,104 @@ def build_group_names(config_names):
     return dense_config_names, lab_config_names
 
 
+
+
+SOURCE_OTA_LAB = 0
+SOURCE_OTA_DENSE = 1
+SOURCE_SIONNA = 2
+
+
+def load_cached_dataset(
+    cache_path,
+    source_filter=None,
+    node_ids_filter=None,
+):
+    """Load pre-built HDF5 dataset cache.
+
+    Parameters
+    ----------
+    cache_path : str
+        Path to the HDF5 file written by preload_dataset.py.
+    source_filter : list[int] | None
+        Keep only samples whose ``source`` value is in this list.
+        0 = OTA-Lab, 1 = OTA-Dense, 2 = Sionna.  None keeps everything.
+    node_ids_filter : list[list[int]] | None
+        Keep only samples matching specific [alice, bob, eve] triples.
+        Example: [[1,2,3], [5,8,7]] keeps scenarios with those exact nodes.
+        None keeps everything.
+
+    Returns
+    -------
+    dict with keys:
+        data        : np.ndarray complex64 (N, num_samples)
+        labels      : np.ndarray int32     (N,)
+        rx          : np.ndarray int32     (N,)
+        tx          : np.ndarray int32     (N,)
+        source      : np.ndarray uint8     (N,)
+        alice       : np.ndarray int32     (N,)
+        bob         : np.ndarray int32     (N,)
+        eve         : np.ndarray int32     (N,)
+        scenario_index : np.ndarray int32  (N,)
+        attrs       : dict of file-level attributes
+    """
+    import h5py as _h5py
+    import json as _json
+
+    with _h5py.File(cache_path, "r") as f:
+        iq = f["iq_data"][:]
+        labels = f["labels"][:]
+        rx = f["rx"][:]
+        tx = f["tx"][:]
+        source = f["source"][:]
+        alice = f["alice"][:]
+        bob = f["bob"][:]
+        eve = f["eve"][:]
+        scenario_index = f["scenario_index"][:]
+        attrs = dict(f.attrs)
+        if "source_names" in attrs:
+            attrs["source_names"] = _json.loads(attrs["source_names"])
+
+    data = iq[:, :, 0] + 1j * iq[:, :, 1]
+    data = data.astype(np.complex64)
+    del iq
+
+    mask = np.ones(len(data), dtype=bool)
+
+    if source_filter is not None:
+        source_set = set(int(s) for s in source_filter)
+        mask &= np.isin(source, list(source_set))
+
+    if node_ids_filter is not None:
+        node_mask = np.zeros(len(data), dtype=bool)
+        for nids in node_ids_filter:
+            node_mask |= (alice == nids[0]) & (bob == nids[1]) & (eve == nids[2])
+        mask &= node_mask
+
+    if not mask.all():
+        idx = np.where(mask)[0]
+        data = data[idx]
+        labels = labels[idx]
+        rx = rx[idx]
+        tx = tx[idx]
+        source = source[idx]
+        alice = alice[idx]
+        bob = bob[idx]
+        eve = eve[idx]
+        scenario_index = scenario_index[idx]
+
+    print(f"Loaded {len(data)} samples from cache: {cache_path}")
+    return {
+        "data": data,
+        "labels": labels,
+        "rx": rx,
+        "tx": tx,
+        "source": source,
+        "alice": alice,
+        "bob": bob,
+        "eve": eve,
+        "scenario_index": scenario_index,
+        "attrs": attrs,
+    }
 
 
 if __name__ == "__main__":
@@ -865,7 +1124,7 @@ if __name__ == "__main__":
     dataset_handler.get_dataframe_Info()
     data, labels, rx, tx = dataset_handler.load_data()
     signal_processor = ChannelSpectrogram()
-    # data = signal_processor._normalization(data)
+    data = _normalization(data)
     dense_config_names, lab_config_names = build_group_names(config_names)
     print("Dense config names:", dense_config_names)
     print("Lab config names:", lab_config_names)
