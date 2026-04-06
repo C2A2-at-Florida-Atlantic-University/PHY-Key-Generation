@@ -983,7 +983,7 @@ def loadOTARooftopConfig(
 if __name__ == "__main__":
     
     # nodeIDs = [2,3,4,5,6,7,8] #[1,2,3,4,5,6,7,8]
-    nodeIDs = [1,2,3,4,5] #[1,2,3,4,5,6,7,8]
+    nodeIDs = [1,2,3] #[1,2,3,4,5,6,7,8]
     # NodeIPs, NodeGains, nodeConfigs = loadOTALabConfig(nodeIDs = nodeIDs)
     NodeIPs, NodeGains, nodeConfigs = loadOTADenseConfig(nodeIDs = nodeIDs)
     # Removing certain nodes that data has been collected
@@ -993,7 +993,8 @@ if __name__ == "__main__":
     #                     [5, 7, 8], [5, 8, 2], [5, 8, 3], 
     #                     [5, 8, 4], [5, 8, 6], [5, 8, 7], 
     #                     [6, 7, 2]]
-    # nodeConfigs = [config for config in nodeConfigs if config not in configsToRemove]
+    configsToRemove = [[1,2,3]]
+    nodeConfigs = [config for config in nodeConfigs if config not in configsToRemove]
     # nodeConfigs = [[8,7,5]] # Testing with only one config
     print("Node configs: ", nodeConfigs)
     print(len(nodeConfigs))
@@ -1001,7 +1002,7 @@ if __name__ == "__main__":
     port = {'orch':'5001','radio':'5002','ai':'5003'}
 
     examples= 100
-    freq = 3.450e9
+    freq = 3.550e9
     samp_rate = 1e6
 
     paramsTx = {
@@ -1033,7 +1034,7 @@ if __name__ == "__main__":
             "payload": "probe_request",
             "interval_ms": 300,
             "encoding": 0,
-            "tx_amplitude": 0.6,
+            "tx_amplitude": 1,
             "chan_est": 0,
             "api_retries": 0,
             "strict_counts": False,

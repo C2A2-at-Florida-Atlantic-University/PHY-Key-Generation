@@ -1,4 +1,3 @@
-import argparse
 from pathlib import Path
 
 import datasets
@@ -7,6 +6,17 @@ import huggingface_hub as hf
 import numpy as np
 from datasets import Dataset, Features, Sequence, Value
 
+# ============================================================================
+# Configuration — edit these variables instead of using CLI arguments
+# ============================================================================
+
+INPUT_PATH = "./"                       # Path to a single .hdf5 file or directory containing .hdf5 files
+DATASET_NAME = "Key-Generation"         # Dataset repository name on Hugging Face (without owner)
+REPO_NAME = "CAAI-FAU"                  # Dataset owner/org. Use "" to use your logged-in username
+CONFIG_PREFIX = "WiFi-Powder"           # Prefix for config names; final config is <prefix>-<environment>-Nodes-<nodeIds>
+PRIVATE = True                          # Set to False to push as public dataset
+
+# ============================================================================
 
 OFDM_REQUIRED_KEYS = {
     "iq_I",
@@ -173,49 +183,13 @@ def push_files_to_hub(files, dataset_name, repo_name, config_prefix, private=Tru
         print("Verified upload. Loaded dataset:", loaded)
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(
-        description=(
-            "Push OFDM HDF5 datasets (iq/csi/chan_est_samples + metadata) "
-            "to Hugging Face Hub."
-        )
-    )
-    parser.add_argument(
-        "--input",
-        default="./",
-        help="Path to a single .hdf5 file or directory containing .hdf5 files.",
-    )
-    parser.add_argument(
-        "--dataset-name",
-        required=True,
-        help="Dataset repository name on Hugging Face (without owner).",
-    )
-    parser.add_argument(
-        "--repo-name",
-        default="CAAI-FAU",
-        help="Dataset owner/org. Use empty string to use your logged-in username.",
-    )
-    parser.add_argument(
-        "--config-prefix",
-        default="ofdm",
-        help="Prefix for config names; final config is <prefix>-<filename_stem>.",
-    )
-    parser.add_argument(
-        "--public",
-        action="store_true",
-        help="If set, push as public dataset (private=False).",
-    )
-    return parser.parse_args()
-
-
 if __name__ == "__main__":
-    args = parse_args()
-    files = collect_hdf5_files(args.input)
-    target_repo = args.repo_name if args.repo_name != "" else hf.whoami()["name"]
+    files = collect_hdf5_files(INPUT_PATH)
+    target_repo = REPO_NAME if REPO_NAME != "" else hf.whoami()["name"]
     push_files_to_hub(
         files=files,
-        dataset_name=args.dataset_name,
+        dataset_name=DATASET_NAME,
         repo_name=target_repo,
-        config_prefix=args.config_prefix,
-        private=not args.public,
+        config_prefix=CONFIG_PREFIX,
+        private=PRIVATE,
     )
