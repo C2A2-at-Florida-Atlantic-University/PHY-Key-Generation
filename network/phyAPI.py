@@ -130,7 +130,8 @@ class phyAPI(FlaskView):
         data = request.get_json() or {}
         sequence = data.get("sequence", "cast")
         guard_len = int(data.get("guard_len", 0))
-        phy.setTxCastProbe(sequence, guard_len=guard_len)
+        amplitude = float(data.get("amplitude", 1.0))
+        phy.setTxCastProbe(sequence, guard_len=guard_len, amplitude=amplitude)
         callback = {"contents": "setTxCastProbe" }
         return jsonify(callback), 201
     
@@ -266,6 +267,9 @@ class phyAPI(FlaskView):
                 estimation_mode=data.get("estimation_mode", "matched_filter"),
                 min_repetitions_detected=int(data.get("min_repetitions_detected", 1)),
                 repetition_detection_threshold=data.get("repetition_detection_threshold", None),
+                capture_repetitions=data.get("capture_repetitions", None),
+                capture_extra_repetitions=int(data.get("capture_extra_repetitions", 2)),
+                capture_mode=data.get("capture_mode", "n_plus_2"),
             )
             callback = {
                 "detected": bool(capture.get("detected", False)),

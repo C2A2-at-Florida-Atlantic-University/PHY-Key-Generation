@@ -155,7 +155,7 @@ class Transmitter():
             window=window,
             num_pulses=num_pulses)
         
-    def set_tx_pnSequence(self,sequence="glfsr"):
+    def set_tx_pnSequence(self,sequence="glfsr", amplitude=1.0, guard_len=0):
         self.type = "pnSequence"
         self._cleanup_tx()
         self.tx=pnSequence(
@@ -165,10 +165,12 @@ class Transmitter():
             buffer_size=self.buffer_size,
             bandwidth=self.bandwidth,
             SDR_ADDR=self.SDR_ADDR,
-            sequence=sequence
+            sequence=sequence,
+            guard_len=guard_len,
+            amplitude=amplitude,
         )
 
-    def set_tx_cast_probe(self, sequence="cast", guard_len=0):
+    def set_tx_cast_probe(self, sequence="cast", guard_len=0, amplitude=1.0):
         self.type = "castProbe"
         self._cleanup_tx()
         self.tx=pnSequence(
@@ -180,6 +182,7 @@ class Transmitter():
             SDR_ADDR=self.SDR_ADDR,
             sequence=sequence,
             guard_len=guard_len,
+            amplitude=amplitude,
         )
     
     def set_tx_fileSource(self,filename="'/home/siwn/siwn-node/network/Matlab/BPSK.dat"):

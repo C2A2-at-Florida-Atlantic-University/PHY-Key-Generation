@@ -12,6 +12,7 @@
 from pathlib import Path
 
 from gnuradio import blocks, gr, uhd
+import numpy as np
 import sys
 import signal
 
@@ -69,7 +70,8 @@ class pnSequence(gr.top_block):
                 bandwidth=20000000,
                 SDR_ADDR="",
                 sequence="glfsr",
-                guard_len=0):
+                guard_len=0,
+                amplitude=1.0):
         gr.top_block.__init__(self, "PN Sequence TX")
 
         ##################################################
@@ -82,6 +84,7 @@ class pnSequence(gr.top_block):
         self.bandwidth = bandwidth
         self.SDR_ADDR = SDR_ADDR
         self.guard_len = max(0, int(guard_len))
+        self.amplitude = float(amplitude)
         self.sequence = "glfsr"
         ### See https://ece.northeastern.edu/wineslab/papers/villa2022wintech.pdf for sequences ###
         self.sequences = {"ls2":(1,1,-1,1,1,1,1,-1,1,1,-1,1,-1,-1,-1,1,1,1,-1,1,1,1,1,-1,-1,-1,1,-1,1,1,1,-1,1,1,-1,1,1,1,1,-1,1,1,-1,1,-1,-1,-1,1,-1,-1,1,-1,-1,-1,-1,1,1,1,-1,1,-1,-1,-1,1,1,1,-1,1,1,1,1,-1,1,1,-1,1,-1,-1,-1,1,1,1,-1,1,1,1,1,-1,-1,-1,1,-1,1,1,1,-1,-1,-1,1,-1,-1,-1,-1,1,-1,-1,1,-1,1,1,1,-1,1,1,-1,1,1,1,1,-1,-1,-1,1,-1,1,1,1,-1,-1,-1,1,-1,-1,-1,-1,1,-1,-1,1,-1,1,1,1,-1,-1,-1,1,-1,-1,-1,-1,1,1,1,-1,1,-1,-1,-1,1,-1,-1,1,-1,-1,-1,-1,1,-1,-1,1,-1,1,1,1,-1,1,1,-1,1,1,1,1,-1,-1,-1,1,-1,1,1,1,-1,1,1,-1,1,1,1,1,-1,1,1,-1,1,-1,-1,-1,1,1,1,-1,1,1,1,1,-1,-1,-1,1,-1,1,1,1,-1,-1,-1,1,-1,-1,-1,-1,1,-1,-1,1,-1,1,1,1,-1,1,1,-1,1,1,1,1,-1,-1,-1,1,-1,1,1,1,-1),
@@ -118,19 +121,15 @@ class pnSequence(gr.top_block):
         self.usrp_sink.set_gain(self.gain, 0)
         # choose TX port on B200-series / X300-series
         self.usrp_sink.set_antenna("TX/RX", 0)
+        self.usrp_sink.set_bandwidth(self.bandwidth, 0)
         self.usrp_sink.set_max_output_buffer(self.max_buf)
-        self.usrp_sink.set_gpio_attr("FP0", "DDR", 0x10, 0x10, 0)
-        self.usrp_sink.set_gpio_attr("FP0", "OUT", 0x10, 0x10, 0)
-        self.blocks_vector_source_x_1 = blocks.vector_source_f(self._sequence_with_guard(), True, 1, [])
-        self.blocks_null_source_1 = blocks.null_source(gr.sizeof_float*1)
-        self.blocks_float_to_complex_0 = blocks.float_to_complex(1)
+        self._enable_frontend()
+        self.blocks_vector_source_x_1 = blocks.vector_source_c(self._sequence_with_guard(), True, 1, [])
 
         ##################################################
         # Connections
         ##################################################
-        self.connect((self.blocks_float_to_complex_0, 0), (self.usrp_sink, 0))
-        self.connect((self.blocks_null_source_1, 0), (self.blocks_float_to_complex_0, 1))
-        self.connect((self.blocks_vector_source_x_1, 0), (self.blocks_float_to_complex_0, 0))
+        self.connect((self.blocks_vector_source_x_1, 0), (self.usrp_sink, 0))
 
     def _load_cast_sequences(self):
         for canonical_name, csv_stem in CAST_SEQUENCE_CSV_STEMS.items():
@@ -153,10 +152,10 @@ class pnSequence(gr.top_block):
         return sequence_name
 
     def _sequence_with_guard(self):
-        samples = tuple(self.sequences[self.sequence])
-        if self.guard_len <= 0:
-            return samples
-        return samples + (0.0,) * self.guard_len
+        samples = np.asarray(self.sequences[self.sequence], dtype=np.complex64) * np.complex64(self.amplitude)
+        if self.guard_len > 0:
+            samples = np.concatenate([samples, np.zeros(self.guard_len, dtype=np.complex64)])
+        return samples.tolist()
 
     def get_samp_rate(self):
         return self.samp_rate
@@ -209,6 +208,13 @@ class pnSequence(gr.top_block):
         self.guard_len = max(0, int(guard_len))
         self.blocks_vector_source_x_1.set_data(self._sequence_with_guard(), [])
 
+    def get_amplitude(self):
+        return self.amplitude
+
+    def set_amplitude(self, amplitude):
+        self.amplitude = float(amplitude)
+        self.blocks_vector_source_x_1.set_data(self._sequence_with_guard(), [])
+
     def set_gain(self, gain):
         self.gain = gain
         self.usrp_sink.set_gain(self.gain, 0)
@@ -231,7 +237,7 @@ class pnSequence(gr.top_block):
 
     def set_bandwidth(self, bandwidth):
         self.bandwidth = bandwidth
-        # self.iio_pluto_sink_0.set_params(self.freq, self.samp_rate, self.bandwidth, self.gain, '', True)
+        self.usrp_sink.set_bandwidth(self.bandwidth, 0)
 
     def get_SDR_ID(self):
         return self.SDR_ID
@@ -239,14 +245,20 @@ class pnSequence(gr.top_block):
     def set_SDR_ID(self, SDR_ID):
         self.SDR_ID = SDR_ID
 
-    def start(self):
+    def _enable_frontend(self):
         self.usrp_sink.set_gpio_attr("FP0", "DDR", 0x10, 0x10, 0)
         self.usrp_sink.set_gpio_attr("FP0", "OUT", 0x10, 0x10, 0)
-        super().start()
+
+    def _disable_frontend(self):
+        self.usrp_sink.set_gpio_attr("FP0", "DDR", 0x10, 0x10, 0)
+        self.usrp_sink.set_gpio_attr("FP0", "OUT", 0x0, 0x10, 0)
+
+    def start(self):
+        self._enable_frontend()
+        return super().start()
 
     def stop(self):
-        self.usrp_sink.set_gpio_attr("FP0", "DDR", 0xFFFFFFFF, 0x0, 0)
-        self.usrp_sink.set_gpio_attr("FP0", "OUT", 0xFFFFFFFF, 0x0, 0)
+        self._disable_frontend()
         return super().stop()
 
 def main(top_block_cls=pnSequence, options=None):

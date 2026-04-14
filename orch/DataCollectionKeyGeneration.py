@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import h5py
 from concurrent.futures import ThreadPoolExecutor
 from requests.exceptions import RequestException
+from pathlib import Path
 
 _tx_config_cache = {}
 _rx_config_cache = {}
@@ -37,11 +38,14 @@ PIDML_CAST_PROFILE = {
     "rx_sampling_rate_hz": 2000000,
     "castProbe": {
         "sequence": "glfsr_bpsk",
-        "samples": 32768,
+        "samples": 0,
         "num_taps": 16,
         "num_repetitions": 8,
         "estimation_window_repetitions": 8,
+        "capture_mode": "n_plus_2",
+        "capture_extra_repetitions": 2,
         "guard_len": 32,
+        "amplitude": 1.0,
         "sample_rate_hz": 1000000,
         "rx_sample_rate_hz": 2000000,
         "estimation_mode": "matched_filter",
@@ -52,8 +56,9 @@ PIDML_CAST_PROFILE = {
         "min_repetitions_detected": 3,
         "max_capture_retries": 0,
         "receiver_arm_s": 0.5,
+        "tx_settle_s": 0.2,
         "tx_burst_s": 0.1,
-        "tx_probe_retries": 6,
+        "tx_probe_retries": 1,
         "tx_retry_gap_s": 0.2,
         "estimator_name": "CaST Matched Filter",
         "frame_shape": "sequence_plus_guard_zeros",
@@ -62,6 +67,62 @@ PIDML_CAST_PROFILE = {
         "plot_pause_s": 0.1,
     },
 }
+CAST_DEBUG_3P5_PROFILE = {
+    **PIDML_CAST_PROFILE,
+    "name": "cast_debug_3p5",
+    "freq": 3500000000,
+    "castProbe": {
+        **PIDML_CAST_PROFILE["castProbe"],
+        "profile": "cast_debug_3p5",
+    },
+}
+
+CAST_SEQUENCE_DIR = Path(__file__).resolve().parents[1] / "network" / "TX" / "cast_sequences"
+CAST_SEQUENCE_ALIASES = {
+    "cast": "glfsr_bpsk",
+    "cast_glfsr": "glfsr_bpsk",
+    "glfsr": "glfsr_bpsk",
+    "glfsr_bpsk": "glfsr_bpsk",
+    "ga128": "ga128_bpsk",
+    "ga128_bpsk": "ga128_bpsk",
+    "ls1": "ls1_bpsk",
+    "ls1_bpsk": "ls1_bpsk",
+    "ls1all": "ls1all_bpsk",
+    "ls1_all": "ls1all_bpsk",
+    "ls1all_bpsk": "ls1all_bpsk",
+    "gold": "gold_bpsk",
+    "gold_bpsk": "gold_bpsk",
+}
+
+def _cast_sequence_length(sequence):
+    sequence_name = CAST_SEQUENCE_ALIASES.get(str(sequence or "cast").strip().lower(), str(sequence or "cast").strip().lower())
+    sequence_path = CAST_SEQUENCE_DIR / f"{sequence_name}.csv"
+    values = np.genfromtxt(sequence_path, delimiter=",")
+    return int(np.asarray(values).reshape(-1).size)
+
+def _cast_probe_raw_frame_len(cast_metadata):
+    sequence_len = _cast_sequence_length(cast_metadata.get("sequence", "cast"))
+    guard_len = max(0, int(cast_metadata.get("guard_len", 0)))
+    tx_rate = float(cast_metadata.get("sample_rate_hz", cast_metadata.get("tx_sampling_rate_hz", 1e6)))
+    rx_rate = float(cast_metadata.get("rx_sample_rate_hz", cast_metadata.get("sample_rate_hz", tx_rate)))
+    return max(1, int(np.ceil((sequence_len + guard_len) * rx_rate / max(tx_rate, 1.0))))
+
+def _cast_probe_capture_samples(cast_metadata, default_samples=32768):
+    cast_metadata = cast_metadata or {}
+    sample_request = int(cast_metadata.get("samples", default_samples) or 0)
+    capture_mode = str(cast_metadata.get("capture_mode", "n_plus_2")).strip().lower()
+    if capture_mode == "fixed_samples":
+        return max(1, sample_request)
+
+    requested_repetitions = max(
+        1,
+        int(cast_metadata.get("num_repetitions", cast_metadata.get("estimation_window_repetitions", 4))),
+    )
+    capture_repetitions = cast_metadata.get("capture_repetitions", None)
+    if capture_repetitions is None:
+        capture_repetitions = requested_repetitions + max(0, int(cast_metadata.get("capture_extra_repetitions", 2)))
+    capture_repetitions = max(requested_repetitions, int(capture_repetitions))
+    return _cast_probe_raw_frame_len(cast_metadata) * capture_repetitions
 
 def APILink(IP,port,path):
     return "http://"+IP+":"+port+path    
@@ -192,8 +253,9 @@ def recordWiFiProbe(nodeID,port,samples,warmup=None):
 def recordCastProbe(nodeID,port,samples,warmup=None):
     path = "/rx/recordCastProbe"
     warmup = warmup or {}
+    sample_count = int(warmup.get("samples", 0) or samples)
     data = {
-        "samples": int(warmup.get("samples", samples)),
+        "samples": sample_count,
         "sequence": warmup.get("sequence", "cast"),
         "num_taps": int(warmup.get("num_taps", 128)),
         "detection_threshold": float(warmup.get("detection_threshold", 0.05)),
@@ -204,7 +266,11 @@ def recordCastProbe(nodeID,port,samples,warmup=None):
         "rx_sample_rate_hz": float(warmup.get("rx_sample_rate_hz", warmup.get("sample_rate_hz", 1e6))),
         "estimation_mode": warmup.get("estimation_mode", "matched_filter"),
         "min_repetitions_detected": int(warmup.get("min_repetitions_detected", 1)),
+        "capture_mode": warmup.get("capture_mode", "n_plus_2"),
+        "capture_extra_repetitions": int(warmup.get("capture_extra_repetitions", 2)),
     }
+    if warmup.get("capture_repetitions", None) is not None:
+        data["capture_repetitions"] = int(warmup["capture_repetitions"])
     if "repetition_detection_threshold" in warmup:
         data["repetition_detection_threshold"] = float(warmup["repetition_detection_threshold"])
     if "max_wait_s" in warmup:
@@ -310,6 +376,7 @@ def set_tx_castProbe(nodeID,port,metadata=None):
     data = {
         "sequence": _get_sequence_value({"castProbe": metadata}, "castProbe", "cast"),
         "guard_len": int(metadata.get("guard_len", 0)),
+        "amplitude": float(metadata.get("amplitude", 1.0)),
     }
     response = _request_with_recovery("POST", nodeID, port, path, data=data)
     return response
@@ -529,20 +596,41 @@ def recordNodesParallelDuringTx(
     listen_metadata = dict(metadata or {})
     if type == "castProbe":
         listen_cast_metadata = dict(listen_metadata.get("castProbe", {}))
-        attempts = max(1, int(tx_probe_retries))
+        attempts = 1
         listen_timeout_s = (
             float(rx_listen_timeout_s)
             if rx_listen_timeout_s is not None
             else (
                 max(0.0, float(receiver_arm_s)) +
-                attempts * max(0.0, float(tx_burst_s)) +
-                max(0, attempts - 1) * max(0.0, float(tx_retry_gap_s)) +
+                max(0.0, float(tx_burst_s)) +
                 1.0
             )
         )
         listen_cast_metadata["max_wait_s"] = max(float(listen_cast_metadata.get("max_wait_s", 0.0)), listen_timeout_s)
         listen_cast_metadata["record_timeout_s"] = max(float(listen_cast_metadata.get("record_timeout_s", 0.0)), listen_timeout_s + 5.0)
         listen_metadata["castProbe"] = listen_cast_metadata
+        tx_started = False
+        try:
+            if configure_tx_callback is not None:
+                configure_tx_callback()
+            print(f"Starting continuous CaST TX from node {tx_node}")
+            startTXNode(tx_node, configure_callback=configure_tx_callback)
+            tx_started = True
+            time.sleep(max(0.0, float(receiver_arm_s)))
+
+            results = {}
+            with ThreadPoolExecutor(max_workers=len(nodeIDs)) as executor:
+                futures = [
+                    executor.submit(_recordNodeDataWithTimestamp, nodeID, samples, type, listen_metadata)
+                    for nodeID in nodeIDs
+                ]
+                for future in futures:
+                    nodeID, data, ts = future.result()
+                    results[nodeID] = {"data": data, "timestamp": ts}
+            return results
+        finally:
+            if tx_started:
+                stopTXNode(tx_node)
     else:
         attempts = 1
 
@@ -562,7 +650,7 @@ def recordNodesParallelDuringTx(
                 attempts * max(0.0, float(tx_burst_s)) +
                 max(0, attempts - 1) * max(0.0, float(tx_retry_gap_s))
             )
-            print(f"Sending CaST TX probe window from node {tx_node} for {tx_active_s:.3f}s")
+            print(f"Sending TX window from node {tx_node} for {tx_active_s:.3f}s")
             startTXNode(tx_node, configure_callback=configure_tx_callback)
             tx_started = True
             time.sleep(max(0.0, tx_active_s))
@@ -813,6 +901,8 @@ def _cast_probe_debug_summary(node_id, probe_data):
         f"phase={int(metadata.get('decimation_phase', 0))}, "
         f"aligned={aligned_text}, "
         f"seen={int(metadata.get('capture_samples_seen', 0))}, "
+        f"target={int(metadata.get('capture_target_samples', len(iq)))}, "
+        f"capture_reps={int(metadata.get('capture_repetitions', metadata.get('num_repetitions', 0)))}, "
         f"power={iq_power:.4g}"
     )
 
@@ -1212,21 +1302,22 @@ def collect_data_ping_pong_3Nodes_cast_probe(params, nodes, packages, metadata, 
     Bob = nodes[1]
     Eve = nodes[2]
     cast_metadata = metadata.get("castProbe", {})
-    numberOfSamples = int(cast_metadata.get("samples", 32768))
+    numberOfSamples = _cast_probe_capture_samples(cast_metadata, default_samples=32768)
+    cast_metadata["samples"] = int(numberOfSamples)
     num_taps = int(cast_metadata.get("num_taps", 128))
     max_capture_retries = int(cast_metadata.get("max_capture_retries", 0))
     generatePlots = bool(cast_metadata.get("generate_plots", False))
     plot_iq_samples = int(cast_metadata.get("plot_iq_samples", min(numberOfSamples, 4096)))
     plot_pause_s = float(cast_metadata.get("plot_pause_s", 0.1))
-    receiver_arm_s = float(cast_metadata.get("receiver_arm_s", 0.5))
+    receiver_arm_s = float(cast_metadata.get("tx_settle_s", cast_metadata.get("receiver_arm_s", 0.2)))
     rx_sample_rate_hz = float(cast_metadata.get("rx_sample_rate_hz", params["rx"]["SamplingRate"]))
     configured_tx_burst_s = float(cast_metadata.get("tx_burst_s", 0.1))
     tx_burst_s = max(configured_tx_burst_s, 1.25 * numberOfSamples / max(rx_sample_rate_hz, 1.0))
-    tx_probe_retries = max(1, int(cast_metadata.get("tx_probe_retries", max_capture_retries + 1)))
+    tx_probe_retries = 1
     tx_retry_gap_s = float(cast_metadata.get("tx_retry_gap_s", 0.2))
     rx_listen_timeout_s = float(cast_metadata.get(
         "rx_listen_timeout_s",
-        receiver_arm_s + tx_probe_retries * tx_burst_s + max(0, tx_probe_retries - 1) * tx_retry_gap_s + 1.0
+        receiver_arm_s + tx_burst_s + 1.0
     ))
     fig = plt.figure(figsize=(14, 11)) if generatePlots else None
 
@@ -1594,8 +1685,9 @@ def loadOTARooftopConfig(
 if __name__ == "__main__":
     
     # nodeIDs = [2,3,4,5,6,7,8] #[1,2,3,4,5,6,7,8]
-    collection_profile = "pidml_cast"
-    nodeIDs = PIDML_CAST_PROFILE["node_ids"] if collection_profile == "pidml_cast" else [1,2,3,4] #[1,2,3,4,5,6,7,8]
+    collection_profile = "cast_debug_3p5"
+    cast_profile = CAST_DEBUG_3P5_PROFILE if collection_profile == "cast_debug_3p5" else PIDML_CAST_PROFILE
+    nodeIDs = cast_profile["node_ids"] if collection_profile in ("pidml_cast", "cast_debug_3p5") else [1,2,3,4] #[1,2,3,4,5,6,7,8]
     # NodeIPs, NodeGains, nodeConfigs = loadOTALabConfig(nodeIDs = nodeIDs)
     NodeIPs, NodeGains, nodeConfigs = loadOTADenseConfig(nodeIDs = nodeIDs)
     # Removing certain nodes that data has been collected
@@ -1613,9 +1705,9 @@ if __name__ == "__main__":
     # exit()
     port = {'orch':'5001','radio':'5002','ai':'5003'}
 
-    examples = PIDML_CAST_PROFILE["examples"] if collection_profile == "pidml_cast" else 100
-    freq = PIDML_CAST_PROFILE["freq"] if collection_profile == "pidml_cast" else 3.550e9
-    samp_rate = PIDML_CAST_PROFILE["tx_sampling_rate_hz"] if collection_profile == "pidml_cast" else 1e6
+    examples = cast_profile["examples"] if collection_profile in ("pidml_cast", "cast_debug_3p5") else 100
+    freq = cast_profile["freq"] if collection_profile in ("pidml_cast", "cast_debug_3p5") else 3.550e9
+    samp_rate = cast_profile["tx_sampling_rate_hz"] if collection_profile in ("pidml_cast", "cast_debug_3p5") else 1e6
 
     paramsTx = {
         "x":"tx",
@@ -1626,23 +1718,28 @@ if __name__ == "__main__":
     paramsRx = {
         "x":"rx",
         "freq":paramsTx["freq"],
-        "SamplingRate":PIDML_CAST_PROFILE["rx_sampling_rate_hz"] if collection_profile == "pidml_cast" else int(paramsTx["SamplingRate"]*2),
+        "SamplingRate":cast_profile["rx_sampling_rate_hz"] if collection_profile in ("pidml_cast", "cast_debug_3p5") else int(paramsTx["SamplingRate"]*2),
         "gain":NodeGains
     }
     params = {"tx":paramsTx,"rx":paramsRx}
 
-    type = PIDML_CAST_PROFILE["type"] if collection_profile == "pidml_cast" else "wifiProbe" #pnSequence, castProbe, MPSK, sinusoid, deltaPulse, wifiProbe
+    type = cast_profile["type"] if collection_profile in ("pidml_cast", "cast_debug_3p5") else "wifiProbe" #pnSequence, castProbe, MPSK, sinusoid, deltaPulse, wifiProbe
         
     metadata = {
         "pnSequence": "glfsr",
         "castProbe": {
             "sequence": "cast",
-            "samples": 32768,
+            "samples": 0,
             "num_taps": 128,
             "max_wait_s": 2.0,
             "record_timeout_s": 15.0,
             "detection_threshold": 0.05,
-            "estimation_window_repetitions": 4
+            "estimation_window_repetitions": 4,
+            "num_repetitions": 4,
+            "capture_mode": "n_plus_2",
+            "capture_extra_repetitions": 2,
+            "guard_len": 0,
+            "amplitude": 1.0,
         },
         "deltaPulse": {
             "num_bins": 1024,
@@ -1672,8 +1769,8 @@ if __name__ == "__main__":
             }
         }
     }
-    if collection_profile == "pidml_cast":
-        metadata["castProbe"].update(PIDML_CAST_PROFILE["castProbe"])
+    if collection_profile in ("pidml_cast", "cast_debug_3p5"):
+        metadata["castProbe"].update(cast_profile["castProbe"])
         metadata["castProbe"]["node_names"] = PIDML_DENSE_NODE_NAMES
         metadata["castProbe"]["profile"] = collection_profile
     

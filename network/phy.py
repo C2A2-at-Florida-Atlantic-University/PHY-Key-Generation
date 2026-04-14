@@ -103,15 +103,15 @@ class PHY:
         self.mode["tx"] = "deltaPulse"
         self.transmitter.set_tx_delta_pulse(num_bins=num_bins, amplitude=amplitude, center=center, repeat=repeat, window=window, num_pulses=num_pulses)
         
-    def setTxPnSequence(self,sequence="glfsr"):
+    def setTxPnSequence(self,sequence="glfsr", amplitude=1.0, guard_len=0):
         self.mode["tx"] = "pnSequence"
-        self.transmitter.set_tx_pnSequence(sequence)
+        self.transmitter.set_tx_pnSequence(sequence, amplitude=amplitude, guard_len=guard_len)
 
-    def setTxCastProbe(self, sequence="cast", guard_len=0):
+    def setTxCastProbe(self, sequence="cast", guard_len=0, amplitude=1.0):
         if hasattr(self.receiver, "_cleanup_rx"):
             self.receiver._cleanup_rx()
         self.mode["tx"] = "castProbe"
-        self.transmitter.set_tx_cast_probe(sequence, guard_len=guard_len)
+        self.transmitter.set_tx_cast_probe(sequence, guard_len=guard_len, amplitude=amplitude)
         
     def setTxFileSource(self,filename="/home/siwn/siwn-node/network/Matlab/BPSK.dat"):
         self.mode["tx"] = "fileSource"
@@ -209,6 +209,9 @@ class PHY:
         estimation_mode="matched_filter",
         min_repetitions_detected=1,
         repetition_detection_threshold=None,
+        capture_repetitions=None,
+        capture_extra_repetitions=2,
+        capture_mode="n_plus_2",
     ):
         self.set_receive_cast_probe()
         self.receiver.clear_UDP_socket()
@@ -228,6 +231,9 @@ class PHY:
                 estimation_mode=estimation_mode,
                 min_repetitions_detected=min_repetitions_detected,
                 repetition_detection_threshold=repetition_detection_threshold,
+                capture_repetitions=capture_repetitions,
+                capture_extra_repetitions=capture_extra_repetitions,
+                capture_mode=capture_mode,
             )
         finally:
             self.receiver.stop()

@@ -73,10 +73,9 @@ class Sinusoid(gr.top_block):
         self.usrp_source.set_center_freq(self.freq, 0)
         self.usrp_source.set_gain(self.gain, 0)
         self.usrp_source.set_antenna("RX2", 0)
+        self.usrp_source.set_bandwidth(self.bandwidth, 0)
         self.usrp_source.set_max_output_buffer(self.max_buf)
-        self.usrp_source.set_gpio_attr("FP0", "CTRL", 0)
-        self.usrp_source.set_gpio_attr("FP0", "DDR",  0x10, 0x10, 0)
-        self.usrp_source.set_gpio_attr("FP0", "OUT",  0x10, 0x10, 0)
+        self._enable_frontend()
         ##################################################
         # Connections
         ##################################################
@@ -118,18 +117,24 @@ class Sinusoid(gr.top_block):
 
     def set_bandwidth(self, bandwidth):
         self.bandwidth=bandwidth
-        # self.iio_pluto_source_0.set_params(self.freq, self.samp_rate, self.bandwidth, True, True, True, 'manual', self.gain, '', True)
+        self.usrp_source.set_bandwidth(self.bandwidth, 0)
     
-    def start(self):
+    def _enable_frontend(self):
         self.usrp_source.set_gpio_attr("FP0", "CTRL", 0x0)
         self.usrp_source.set_gpio_attr("FP0", "DDR",  0x10, 0x10, 0)
         self.usrp_source.set_gpio_attr("FP0", "OUT",  0x10, 0x10, 0)
-        super().start()
+
+    def _disable_frontend(self):
+        self.usrp_source.set_gpio_attr("FP0", "CTRL", 0x0)
+        self.usrp_source.set_gpio_attr("FP0", "DDR",  0x10, 0x10, 0)
+        self.usrp_source.set_gpio_attr("FP0", "OUT",  0x0, 0x10, 0)
+
+    def start(self):
+        self._enable_frontend()
+        return super().start()
 
     def stop(self):
-        self.usrp_source.set_gpio_attr("FP0", "CTRL", 0x10, 0x10, 0)
-        self.usrp_source.set_gpio_attr("FP0", "DDR",  0xFFFFFFFF, 0x0, 0)
-        self.usrp_source.set_gpio_attr("FP0", "OUT",  0xFFFFFFFF, 0x0, 0)
+        self._disable_frontend()
         return super().stop()
 
 def main(top_block_cls=Sinusoid):

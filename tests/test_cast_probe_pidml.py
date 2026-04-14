@@ -67,3 +67,39 @@ def test_powderkeygen_guarded_cast_matches_pidml_matched_filter(tmp_path: Path) 
         rtol=0,
         atol=0,
     )
+
+
+def test_continuous_guarded_cast_n_plus_two_capture_recovers_requested_repetitions() -> None:
+    sequence = load_cast_sequence("glfsr_bpsk")
+    guard_len = 32
+    requested_repetitions = 8
+    rx_to_tx_rate = 2
+    raw_frame_len = (sequence.size + guard_len) * rx_to_tx_rate
+    capture_samples = (requested_repetitions + 2) * raw_frame_len
+
+    taps = np.zeros(16, dtype=np.complex64)
+    taps[:4] = np.array([1.0 + 0.0j, 0.2 + 0.08j, -0.08 + 0.04j, 0.03 - 0.02j], dtype=np.complex64)
+    tx_frame = np.concatenate([sequence, np.zeros(guard_len, dtype=np.complex64)])
+    tx_stream = np.tile(tx_frame, requested_repetitions + 8)
+    rx_stream = np.convolve(tx_stream, taps, mode="full")[:tx_stream.size]
+    rx_stream = np.repeat(rx_stream, rx_to_tx_rate)
+    rx_capture = rx_stream[123:123 + capture_samples]
+
+    payload = estimate_cast_probe_channel(
+        rx_capture,
+        sequence="glfsr_bpsk",
+        num_taps=16,
+        detection_threshold=0.25,
+        estimation_window_repetitions=requested_repetitions,
+        num_repetitions=requested_repetitions,
+        guard_len=guard_len,
+        sample_rate_hz=1e6,
+        rx_sample_rate_hz=2e6,
+        estimation_mode="matched_filter",
+        min_repetitions_detected=3,
+        repetition_detection_threshold=0.25,
+    )
+
+    assert payload["detected"]
+    assert payload["metadata"]["num_repetitions_used"] == requested_repetitions
+    np.testing.assert_allclose(payload["taps"][:4], taps[:4], rtol=0, atol=2e-2)

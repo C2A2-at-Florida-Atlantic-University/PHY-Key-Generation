@@ -17,9 +17,10 @@ if __name__ != '__main__':
     except Exception:
         WiFiProbeRx = None
     try:
-        from RX.cast_probe import estimate_cast_probe_channel
+        from RX.cast_probe import estimate_cast_probe_channel, load_cast_sequence
     except Exception:
         estimate_cast_probe_channel = None
+        load_cast_sequence = None
 else:
     from mpsk import MPSK
     from pkt_rcv_gr38 import packetReceive
@@ -29,9 +30,10 @@ else:
     except Exception:
         WiFiProbeRx = None
     try:
-        from cast_probe import estimate_cast_probe_channel
+        from cast_probe import estimate_cast_probe_channel, load_cast_sequence
     except Exception:
         estimate_cast_probe_channel = None
+        load_cast_sequence = None
 import time
 
 WIFI_PROBE_FRAME_SAMPLES = {
@@ -273,11 +275,38 @@ class Receiver():
         estimation_mode="matched_filter",
         min_repetitions_detected=1,
         repetition_detection_threshold=None,
+        capture_repetitions=None,
+        capture_extra_repetitions=2,
+        capture_mode="n_plus_2",
     ):
         if estimate_cast_probe_channel is None:
             raise RuntimeError("CaST probe estimator is unavailable. Check RX/cast_probe.py imports.")
         wait_s = 2.0 if max_wait_s is None else float(max_wait_s)
-        target_samples = max(1, int(samples))
+        sample_request = 0 if samples is None else int(samples)
+        requested_repetitions = max(
+            1,
+            int(num_repetitions if num_repetitions is not None else estimation_window_repetitions),
+        )
+        capture_repetition_count = (
+            int(capture_repetitions)
+            if capture_repetitions is not None
+            else requested_repetitions + max(0, int(capture_extra_repetitions))
+        )
+        capture_repetition_count = max(requested_repetitions, capture_repetition_count)
+        tx_sample_rate = float(sample_rate_hz)
+        rx_sample_rate = float(self.samp_rate if rx_sample_rate_hz is None else rx_sample_rate_hz)
+        capture_frame_len = 0
+        target_samples = max(1, sample_request)
+        if str(capture_mode or "n_plus_2").strip().lower() != "fixed_samples":
+            if load_cast_sequence is None:
+                raise RuntimeError("CaST probe sequence loader is unavailable. Check RX/cast_probe.py imports.")
+            sequence_len = int(load_cast_sequence(sequence).size)
+            tx_frame_len = sequence_len + max(0, int(guard_len))
+            capture_frame_len = max(1, int(np.ceil(tx_frame_len * rx_sample_rate / max(tx_sample_rate, 1.0))))
+            target_samples = max(1, capture_frame_len * capture_repetition_count)
+        elif sample_request <= 0:
+            raise ValueError("samples must be positive when capture_mode='fixed_samples'")
+
         history_samples = target_samples + max(1024, int(dataSize) // 8)
         latest_samples = deque(maxlen=history_samples)
         start_time = time.time()
@@ -287,7 +316,7 @@ class Receiver():
         best_capture = None
 
         def _estimate_values(values):
-            return estimate_cast_probe_channel(
+            capture = estimate_cast_probe_channel(
                 values,
                 sequence=sequence,
                 num_taps=num_taps,
@@ -301,6 +330,14 @@ class Receiver():
                 min_repetitions_detected=min_repetitions_detected,
                 repetition_detection_threshold=repetition_detection_threshold,
             )
+            metadata = capture.setdefault("metadata", {})
+            metadata["capture_mode"] = str(capture_mode or "n_plus_2")
+            metadata["capture_target_samples"] = int(target_samples)
+            metadata["capture_requested_repetitions"] = int(requested_repetitions)
+            metadata["capture_repetitions"] = int(capture_repetition_count)
+            if capture_frame_len:
+                metadata["capture_raw_frame_len"] = int(capture_frame_len)
+            return capture
 
         def _estimate_current_window():
             return _estimate_values(list(latest_samples))
