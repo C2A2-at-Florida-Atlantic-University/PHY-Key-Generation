@@ -119,6 +119,8 @@ class pnSequence(gr.top_block):
         # choose TX port on B200-series / X300-series
         self.usrp_sink.set_antenna("TX/RX", 0)
         self.usrp_sink.set_max_output_buffer(self.max_buf)
+        self.usrp_sink.set_gpio_attr("FP0", "DDR", 0x10, 0x10, 0)
+        self.usrp_sink.set_gpio_attr("FP0", "OUT", 0x10, 0x10, 0)
         self.blocks_vector_source_x_1 = blocks.vector_source_f(self._sequence_with_guard(), True, 1, [])
         self.blocks_null_source_1 = blocks.null_source(gr.sizeof_float*1)
         self.blocks_float_to_complex_0 = blocks.float_to_complex(1)
@@ -236,6 +238,16 @@ class pnSequence(gr.top_block):
 
     def set_SDR_ID(self, SDR_ID):
         self.SDR_ID = SDR_ID
+
+    def start(self):
+        self.usrp_sink.set_gpio_attr("FP0", "DDR", 0x10, 0x10, 0)
+        self.usrp_sink.set_gpio_attr("FP0", "OUT", 0x10, 0x10, 0)
+        super().start()
+
+    def stop(self):
+        self.usrp_sink.set_gpio_attr("FP0", "DDR", 0xFFFFFFFF, 0x0, 0)
+        self.usrp_sink.set_gpio_attr("FP0", "OUT", 0xFFFFFFFF, 0x0, 0)
+        return super().stop()
 
 def main(top_block_cls=pnSequence, options=None):
     tb = top_block_cls()
