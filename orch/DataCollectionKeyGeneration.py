@@ -34,25 +34,27 @@ PIDML_CAST_PROFILE = {
     "examples": 10,
     "freq": 2485000000,
     "tx_sampling_rate_hz": 1000000,
-        "rx_sampling_rate_hz": 2000000,
-        "castProbe": {
-            "sequence": "glfsr_bpsk",
-            "samples": 32768,
-            "num_taps": 16,
-            "num_repetitions": 8,
-            "estimation_window_repetitions": 8,
-            "guard_len": 32,
-            "sample_rate_hz": 1000000,
-            "rx_sample_rate_hz": 2000000,
-            "estimation_mode": "matched_filter",
-            "max_wait_s": 2.0,
-            "record_timeout_s": 15.0,
-            "detection_threshold": 0.25,
-            "repetition_detection_threshold": 0.25,
-            "min_repetitions_detected": 3,
-            "max_capture_retries": 5,
-            "estimator_name": "CaST Matched Filter",
-            "frame_shape": "sequence_plus_guard_zeros",
+    "rx_sampling_rate_hz": 2000000,
+    "castProbe": {
+        "sequence": "glfsr_bpsk",
+        "samples": 32768,
+        "num_taps": 16,
+        "num_repetitions": 8,
+        "estimation_window_repetitions": 8,
+        "guard_len": 32,
+        "sample_rate_hz": 1000000,
+        "rx_sample_rate_hz": 2000000,
+        "estimation_mode": "matched_filter",
+        "max_wait_s": 2.0,
+        "record_timeout_s": 15.0,
+        "detection_threshold": 0.25,
+        "repetition_detection_threshold": 0.25,
+        "min_repetitions_detected": 3,
+        "max_capture_retries": 5,
+        "receiver_arm_s": 0.5,
+        "tx_burst_s": 0.1,
+        "estimator_name": "CaST Matched Filter",
+        "frame_shape": "sequence_plus_guard_zeros",
         "generate_plots": True,
         "plot_iq_samples": 4096,
         "plot_pause_s": 0.1,
@@ -390,7 +392,7 @@ def plotTimeDomainSideBySide(I1, Q1, I2, Q2, samples=-1, id1=0, id2=0, ax1=None,
     plt.tight_layout()
     plt.pause(0.1)
 
-def setTXNode(params,type,nodeID,metadata = {"pnSequence":"glfsr"}):
+def setTXNode(params,type,nodeID,metadata = {"pnSequence":"glfsr"}, start=True):
     metadata = metadata or {}
     print("type:",type)
     _node_active_role[nodeID] = "tx"
@@ -433,17 +435,8 @@ def setTXNode(params,type,nodeID,metadata = {"pnSequence":"glfsr"}):
     if type == "castProbe" or _tx_config_cache.get(nodeID) != tx_signature:
         _configure_tx()
 
-    while True:
-        response = start_tx(nodeID,port["radio"],retry_on_5xx=False)
-        if response.status_code < 500:
-            break
-        print(
-            f"[WARN] Node {nodeID} returned {response.status_code} for /tx/start. "
-            "Reconfiguring transmitter before retry..."
-        )
-        _tx_config_cache.pop(nodeID, None)
-        _configure_tx()
-        time.sleep(REQUEST_RETRY_DELAY_S)
+    if start:
+        startTXNode(nodeID, configure_callback=_configure_tx)
     
 def setRXNode(params,nodeID,type="IQ",metadata=None):
     metadata = metadata or {}
@@ -512,7 +505,44 @@ def recordNodesParallel(nodeIDs, samples, type="IQ", metadata=None):
             nodeID, data, ts = future.result()
             results[nodeID] = {"data": data, "timestamp": ts}
     return results
-    
+
+def recordNodesParallelDuringTx(nodeIDs, samples, type, metadata, tx_node, receiver_arm_s=0.5, tx_burst_s=0.1):
+    results = {}
+    with ThreadPoolExecutor(max_workers=len(nodeIDs)) as executor:
+        futures = [
+            executor.submit(_recordNodeDataWithTimestamp, nodeID, samples, type, metadata)
+            for nodeID in nodeIDs
+        ]
+        time.sleep(max(0.0, float(receiver_arm_s)))
+        tx_started = False
+        try:
+            startTXNode(tx_node)
+            tx_started = True
+            time.sleep(max(0.0, float(tx_burst_s)))
+        finally:
+            if tx_started:
+                stopTXNode(tx_node)
+
+        for future in futures:
+            nodeID, data, ts = future.result()
+            results[nodeID] = {"data": data, "timestamp": ts}
+    return results
+
+def startTXNode(nodeID, configure_callback=None):
+    while True:
+        response = start_tx(nodeID,port["radio"],retry_on_5xx=False)
+        if response.status_code < 500:
+            return response
+        print(
+            f"[WARN] Node {nodeID} returned {response.status_code} for /tx/start. "
+            "Reconfiguring transmitter before retry..."
+        )
+        _tx_config_cache.pop(nodeID, None)
+        if configure_callback is None:
+            raise RuntimeError(f"Node {nodeID} failed to start configured transmitter")
+        configure_callback()
+        time.sleep(REQUEST_RETRY_DELAY_S)
+
 def stopTXNode(nodeID):
     stop_tx(nodeID,port["radio"])
     _tx_config_cache.pop(nodeID, None)
@@ -1137,6 +1167,10 @@ def collect_data_ping_pong_3Nodes_cast_probe(params, nodes, packages, metadata, 
     generatePlots = bool(cast_metadata.get("generate_plots", False))
     plot_iq_samples = int(cast_metadata.get("plot_iq_samples", min(numberOfSamples, 4096)))
     plot_pause_s = float(cast_metadata.get("plot_pause_s", 0.1))
+    receiver_arm_s = float(cast_metadata.get("receiver_arm_s", 0.5))
+    rx_sample_rate_hz = float(cast_metadata.get("rx_sample_rate_hz", params["rx"]["SamplingRate"]))
+    configured_tx_burst_s = float(cast_metadata.get("tx_burst_s", 0.1))
+    tx_burst_s = max(configured_tx_burst_s, 1.25 * numberOfSamples / max(rx_sample_rate_hz, 1.0))
     fig = plt.figure(figsize=(14, 11)) if generatePlots else None
 
     feature_store = {
@@ -1171,18 +1205,25 @@ def collect_data_ping_pong_3Nodes_cast_probe(params, nodes, packages, metadata, 
             labels = [channel_Labels[0], channel_Labels[2]]
             instances = [3, 4]
 
-        print("Setting TX Node: ", tx_node)
-        setTXNode(params, "castProbe", tx_node, metadata)
         print("Setting RX Nodes: ", *rx_nodes)
         setRXNodesParallel(params, rx_nodes, type="castProbe", metadata=metadata)
-        time.sleep(timeSleep)
 
         rx_results = None
         valid_capture = False
         retry_idx = 0
         while retry_idx <= max_capture_retries:
-            print("Recording RX Nodes: ", *rx_nodes)
-            rx_results = recordNodesParallel(rx_nodes, samples=numberOfSamples, type="castProbe", metadata=metadata)
+            print("Preparing TX Node: ", tx_node)
+            setTXNode(params, "castProbe", tx_node, metadata, start=False)
+            print("Recording RX Nodes passively: ", *rx_nodes)
+            rx_results = recordNodesParallelDuringTx(
+                rx_nodes,
+                samples=numberOfSamples,
+                type="castProbe",
+                metadata=metadata,
+                tx_node=tx_node,
+                receiver_arm_s=receiver_arm_s,
+                tx_burst_s=tx_burst_s,
+            )
             valid_capture = all(
                 _cast_probe_is_valid(rx_results[node]["data"], min_iq_samples=1, min_taps=num_taps)
                 for node in rx_nodes
@@ -1203,7 +1244,6 @@ def collect_data_ping_pong_3Nodes_cast_probe(params, nodes, packages, metadata, 
 
         if not valid_capture:
             print(f"[WARN] Skipping CaST probe capture for TX node {tx_node} after {max_capture_retries + 1} attempts")
-        stopTXNode(tx_node)
 
         if valid_capture:
             if generatePlots:

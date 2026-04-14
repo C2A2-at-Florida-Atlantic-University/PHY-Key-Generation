@@ -277,21 +277,72 @@ class Receiver():
         if estimate_cast_probe_channel is None:
             raise RuntimeError("CaST probe estimator is unavailable. Check RX/cast_probe.py imports.")
         wait_s = 2.0 if max_wait_s is None else float(max_wait_s)
-        iq_samples = self.retrieve_IQ(dataSize=dataSize, samples=samples, max_wait_s=wait_s)
-        return estimate_cast_probe_channel(
-            iq_samples,
-            sequence=sequence,
-            num_taps=num_taps,
-            detection_threshold=detection_threshold,
-            estimation_window_repetitions=estimation_window_repetitions,
-            num_repetitions=num_repetitions,
-            guard_len=guard_len,
-            sample_rate_hz=sample_rate_hz,
-            rx_sample_rate_hz=self.samp_rate if rx_sample_rate_hz is None else rx_sample_rate_hz,
-            estimation_mode=estimation_mode,
-            min_repetitions_detected=min_repetitions_detected,
-            repetition_detection_threshold=repetition_detection_threshold,
-        )
+        target_samples = max(1, int(samples))
+        latest_samples = deque(maxlen=target_samples)
+        start_time = time.time()
+        total_samples = 0
+        last_checked_total = 0
+        check_interval = max(1024, min(target_samples, target_samples // 4))
+        best_capture = None
+
+        def _estimate_current_window():
+            return estimate_cast_probe_channel(
+                list(latest_samples),
+                sequence=sequence,
+                num_taps=num_taps,
+                detection_threshold=detection_threshold,
+                estimation_window_repetitions=estimation_window_repetitions,
+                num_repetitions=num_repetitions,
+                guard_len=guard_len,
+                sample_rate_hz=sample_rate_hz,
+                rx_sample_rate_hz=self.samp_rate if rx_sample_rate_hz is None else rx_sample_rate_hz,
+                estimation_mode=estimation_mode,
+                min_repetitions_detected=min_repetitions_detected,
+                repetition_detection_threshold=repetition_detection_threshold,
+            )
+
+        while time.time() - start_time < wait_s:
+            try:
+                data = self.retrieve_raw_data(dataSize)
+            except socket.timeout:
+                continue
+
+            valid_len = len(data) - (len(data) % 8)
+            if valid_len <= 0:
+                continue
+            float_view = np.frombuffer(data[:valid_len], dtype=np.float32)
+            complex_view = float_view[0::2] + 1j * float_view[1::2]
+            latest_samples.extend(complex_view.tolist())
+            total_samples += int(complex_view.size)
+
+            if len(latest_samples) < target_samples:
+                continue
+            if total_samples - last_checked_total < check_interval:
+                continue
+
+            capture = _estimate_current_window()
+            capture["metadata"]["capture_elapsed_s"] = float(time.time() - start_time)
+            capture["metadata"]["capture_samples_seen"] = int(total_samples)
+            last_checked_total = total_samples
+            if (
+                best_capture is None or
+                float(capture.get("metadata", {}).get("periodic_peak_mean", 0.0)) >
+                float(best_capture.get("metadata", {}).get("periodic_peak_mean", 0.0))
+            ):
+                best_capture = capture
+            if capture.get("detected", False):
+                capture["metadata"]["capture_detected_early"] = True
+                return capture
+
+        if best_capture is not None:
+            best_capture["metadata"]["capture_detected_early"] = False
+            return best_capture
+
+        capture = _estimate_current_window()
+        capture["metadata"]["capture_elapsed_s"] = float(time.time() - start_time)
+        capture["metadata"]["capture_samples_seen"] = int(total_samples)
+        capture["metadata"]["capture_detected_early"] = False
+        return capture
 
     def clear_UDP_socket(self):
         print("clearing socket")
