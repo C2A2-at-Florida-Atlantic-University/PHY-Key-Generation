@@ -163,7 +163,7 @@ class Transmitter():
             sequence=sequence
         )
 
-    def set_tx_cast_probe(self, sequence="cast"):
+    def set_tx_cast_probe(self, sequence="cast", guard_len=0):
         self.type = "castProbe"
         self._cleanup_tx()
         self.tx=pnSequence(
@@ -173,7 +173,8 @@ class Transmitter():
             buffer_size=self.buffer_size,
             bandwidth=self.bandwidth,
             SDR_ADDR=self.SDR_ADDR,
-            sequence=sequence
+            sequence=sequence,
+            guard_len=guard_len,
         )
     
     def set_tx_fileSource(self,filename="'/home/siwn/siwn-node/network/Matlab/BPSK.dat"):

@@ -107,9 +107,9 @@ class PHY:
         self.mode["tx"] = "pnSequence"
         self.transmitter.set_tx_pnSequence(sequence)
 
-    def setTxCastProbe(self, sequence="cast"):
+    def setTxCastProbe(self, sequence="cast", guard_len=0):
         self.mode["tx"] = "castProbe"
-        self.transmitter.set_tx_cast_probe(sequence)
+        self.transmitter.set_tx_cast_probe(sequence, guard_len=guard_len)
         
     def setTxFileSource(self,filename="/home/siwn/siwn-node/network/Matlab/BPSK.dat"):
         self.mode["tx"] = "fileSource"
@@ -198,6 +198,10 @@ class PHY:
         max_wait_s=2.0,
         detection_threshold=0.05,
         estimation_window_repetitions=4,
+        num_repetitions=None,
+        guard_len=0,
+        sample_rate_hz=1e6,
+        estimation_mode="matched_filter",
     ):
         if self.mode["rx"] != "castProbe":
             self.set_receive_cast_probe()
@@ -211,6 +215,10 @@ class PHY:
                 num_taps=num_taps,
                 detection_threshold=detection_threshold,
                 estimation_window_repetitions=estimation_window_repetitions,
+                num_repetitions=num_repetitions,
+                guard_len=guard_len,
+                sample_rate_hz=sample_rate_hz,
+                estimation_mode=estimation_mode,
             )
         finally:
             self.receiver.stop()

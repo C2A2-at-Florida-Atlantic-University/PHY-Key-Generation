@@ -15,6 +15,43 @@ _last_rx_setup = {}
 _recovery_in_progress = set()
 REQUEST_RETRY_DELAY_S = 1
 REQUEST_TIMEOUT_S = 10
+PIDML_DENSE_NODE_NAMES = {
+    1: "EBC",
+    2: "Guest House",
+    3: "Moran",
+    4: "USTAR",
+}
+CAST_INSTANCE_ROLES = {
+    1: "BA",
+    2: "BE",
+    3: "AB",
+    4: "AE",
+}
+PIDML_CAST_PROFILE = {
+    "name": "pidml_cast",
+    "type": "castProbe",
+    "node_ids": [1, 2, 3, 4],
+    "examples": 10,
+    "freq": 2485000000,
+    "tx_sampling_rate_hz": 1000000,
+    "rx_sampling_rate_hz": 2000000,
+    "castProbe": {
+        "sequence": "glfsr_bpsk",
+        "samples": 32768,
+        "num_taps": 16,
+        "num_repetitions": 8,
+        "estimation_window_repetitions": 8,
+        "guard_len": 32,
+        "sample_rate_hz": 1000000,
+        "estimation_mode": "matched_filter",
+        "max_wait_s": 2.0,
+        "record_timeout_s": 15.0,
+        "detection_threshold": 0.05,
+        "max_capture_retries": 5,
+        "estimator_name": "CaST Matched Filter",
+        "frame_shape": "sequence_plus_guard_zeros",
+    },
+}
 
 def APILink(IP,port,path):
     return "http://"+IP+":"+port+path    
@@ -150,7 +187,11 @@ def recordCastProbe(nodeID,port,samples,warmup=None):
         "sequence": warmup.get("sequence", "cast"),
         "num_taps": int(warmup.get("num_taps", 128)),
         "detection_threshold": float(warmup.get("detection_threshold", 0.05)),
-        "estimation_window_repetitions": int(warmup.get("estimation_window_repetitions", 4)),
+        "estimation_window_repetitions": int(warmup.get("estimation_window_repetitions", warmup.get("num_repetitions", 4))),
+        "num_repetitions": int(warmup.get("num_repetitions", warmup.get("estimation_window_repetitions", 4))),
+        "guard_len": int(warmup.get("guard_len", 0)),
+        "sample_rate_hz": float(warmup.get("sample_rate_hz", warmup.get("tx_sampling_rate_hz", 1e6))),
+        "estimation_mode": warmup.get("estimation_mode", "matched_filter"),
     }
     if "max_wait_s" in warmup:
         data["max_wait_s"] = float(warmup["max_wait_s"])
@@ -251,8 +292,10 @@ def _get_sequence_value(metadata, key, default):
 
 def set_tx_castProbe(nodeID,port,metadata=None):
     path = "/tx/set/castProbe"
+    metadata = metadata or {}
     data = {
-        "sequence": _get_sequence_value({"castProbe": metadata}, "castProbe", "cast")
+        "sequence": _get_sequence_value({"castProbe": metadata}, "castProbe", "cast"),
+        "guard_len": int(metadata.get("guard_len", 0)),
     }
     response = _request_with_recovery("POST", nodeID, port, path, data=data)
     return response
@@ -615,6 +658,11 @@ def _slice_samples(values, samples):
         return values
     return values[-samples:]
 
+def _node_name(node_id, metadata=None):
+    cast_metadata = (metadata or {}).get("castProbe", {})
+    node_names = cast_metadata.get("node_names", PIDML_DENSE_NODE_NAMES)
+    return node_names.get(node_id, node_names.get(str(node_id), str(node_id)))
+
 def _iq_samples_valid(real_values, imag_values, min_samples=1):
     if real_values is None or imag_values is None:
         return False
@@ -663,12 +711,17 @@ def _cast_probe_is_valid(probe_data, min_iq_samples=1, min_taps=1):
 def _append_cast_probe_sample(feature_store, probe_data, numberOfSamples, num_taps):
     metadata = probe_data.get("metadata", {})
     iq_real, iq_imag = _extract_iq_record(probe_data)
+    tap_delays_s = probe_data.get("tap_delays_s", metadata.get("tap_delays_s", []))
+    if tap_delays_s is None or len(tap_delays_s) == 0:
+        sample_rate_hz = float(metadata.get("sample_rate_hz", 1e6))
+        tap_delays_s = (np.arange(num_taps, dtype=np.float32) / sample_rate_hz).tolist()
     feature_store["iq_I"].append(_slice_samples(iq_real, numberOfSamples))
     feature_store["iq_Q"].append(_slice_samples(iq_imag, numberOfSamples))
     feature_store["taps_I"].append(_slice_samples(probe_data["taps"]["real"], num_taps))
     feature_store["taps_Q"].append(_slice_samples(probe_data["taps"]["imag"], num_taps))
     feature_store["cir_I"].append(_slice_samples(probe_data["cir"]["real"], num_taps))
     feature_store["cir_Q"].append(_slice_samples(probe_data["cir"]["imag"], num_taps))
+    feature_store["tap_delays_s"].append(_slice_samples(tap_delays_s, num_taps))
     feature_store["pdp_db"].append(_slice_samples(probe_data.get("pdp_db", []), num_taps))
     feature_store["detected"].append(bool(probe_data.get("detected", False)))
     feature_store["normalized_peak"].append(float(metadata.get("normalized_peak", 0.0)))
@@ -945,12 +998,16 @@ def collect_data_ping_pong_3Nodes_cast_probe(params, nodes, packages, metadata, 
         "taps_Q": [],
         "cir_I": [],
         "cir_Q": [],
+        "tap_delays_s": [],
         "pdp_db": [],
         "detected": [],
         "normalized_peak": [],
         "pathloss_db": [],
         "frame_phase": [],
         "peak_index": [],
+        "role": [],
+        "tx_name": [],
+        "rx_name": [],
     }
 
     while i < packages * 2 + 1:
@@ -1003,6 +1060,9 @@ def collect_data_ping_pong_3Nodes_cast_probe(params, nodes, packages, metadata, 
                 tx.append(tx_node)
                 rx.append(rx_node)
                 timestamp.append(rx_results[rx_node]["timestamp"])
+                feature_store["role"].append(CAST_INSTANCE_ROLES.get(inst, ""))
+                feature_store["tx_name"].append(_node_name(tx_node, metadata))
+                feature_store["rx_name"].append(_node_name(rx_node, metadata))
 
         i += 1
 
@@ -1013,12 +1073,16 @@ def collect_data_ping_pong_3Nodes_cast_probe(params, nodes, packages, metadata, 
         feature_store["taps_Q"],
         feature_store["cir_I"],
         feature_store["cir_Q"],
+        feature_store["tap_delays_s"],
         feature_store["pdp_db"],
         feature_store["detected"],
         feature_store["normalized_peak"],
         feature_store["pathloss_db"],
         feature_store["frame_phase"],
         feature_store["peak_index"],
+        feature_store["role"],
+        feature_store["tx_name"],
+        feature_store["rx_name"],
         channel,
         instance,
         ids,
@@ -1048,18 +1112,23 @@ def create_cast_probe_dataset(
         taps_Q,
         cir_I,
         cir_Q,
+        tap_delays_s,
         pdp_db,
         detected,
         normalized_peak,
         pathloss_db,
         frame_phase,
         peak_index,
+        role,
+        tx_name,
+        rx_name,
         channel,
         instance,
         ids,
         tx,
         rx,
-        timestamp
+        timestamp,
+        attrs=None
     ):
     with h5py.File(filename, "w") as data_file:
         data_file.create_dataset("iq_I", data=iq_I)
@@ -1068,18 +1137,28 @@ def create_cast_probe_dataset(
         data_file.create_dataset("taps_Q", data=taps_Q)
         data_file.create_dataset("cir_I", data=cir_I)
         data_file.create_dataset("cir_Q", data=cir_Q)
+        data_file.create_dataset("tap_delays_s", data=tap_delays_s)
         data_file.create_dataset("pdp_db", data=pdp_db)
         data_file.create_dataset("detected", data=detected)
         data_file.create_dataset("normalized_peak", data=normalized_peak)
         data_file.create_dataset("pathloss_db", data=pathloss_db)
         data_file.create_dataset("frame_phase", data=frame_phase)
         data_file.create_dataset("peak_index", data=peak_index)
+        string_dtype = h5py.string_dtype(encoding="utf-8")
+        data_file.create_dataset("role", data=np.asarray(role, dtype=object), dtype=string_dtype)
+        data_file.create_dataset("tx_name", data=np.asarray(tx_name, dtype=object), dtype=string_dtype)
+        data_file.create_dataset("rx_name", data=np.asarray(rx_name, dtype=object), dtype=string_dtype)
         data_file.create_dataset("ids", data=[ids])
         data_file.create_dataset("instance", data=[instance])
         data_file.create_dataset("channel", data=[channel])
         data_file.create_dataset("tx", data=[tx])
         data_file.create_dataset("rx", data=[rx])
         data_file.create_dataset("timestamp", data=[timestamp])
+        for key, value in (attrs or {}).items():
+            if isinstance(value, (dict, list, tuple)):
+                data_file.attrs[key] = json.dumps(value, sort_keys=True)
+            else:
+                data_file.attrs[key] = value
     print("CaST probe dataset saved to", filename)
 
 def create_wifi_probe_dataset(
@@ -1239,7 +1318,8 @@ def loadOTARooftopConfig(
 if __name__ == "__main__":
     
     # nodeIDs = [2,3,4,5,6,7,8] #[1,2,3,4,5,6,7,8]
-    nodeIDs = [1,2,3,4] #[1,2,3,4,5,6,7,8]
+    collection_profile = "pidml_cast"
+    nodeIDs = PIDML_CAST_PROFILE["node_ids"] if collection_profile == "pidml_cast" else [1,2,3,4] #[1,2,3,4,5,6,7,8]
     # NodeIPs, NodeGains, nodeConfigs = loadOTALabConfig(nodeIDs = nodeIDs)
     NodeIPs, NodeGains, nodeConfigs = loadOTADenseConfig(nodeIDs = nodeIDs)
     # Removing certain nodes that data has been collected
@@ -1257,9 +1337,9 @@ if __name__ == "__main__":
     # exit()
     port = {'orch':'5001','radio':'5002','ai':'5003'}
 
-    examples= 100
-    freq = 3.550e9
-    samp_rate = 1e6
+    examples = PIDML_CAST_PROFILE["examples"] if collection_profile == "pidml_cast" else 100
+    freq = PIDML_CAST_PROFILE["freq"] if collection_profile == "pidml_cast" else 3.550e9
+    samp_rate = PIDML_CAST_PROFILE["tx_sampling_rate_hz"] if collection_profile == "pidml_cast" else 1e6
 
     paramsTx = {
         "x":"tx",
@@ -1270,12 +1350,12 @@ if __name__ == "__main__":
     paramsRx = {
         "x":"rx",
         "freq":paramsTx["freq"],
-        "SamplingRate":int(paramsTx["SamplingRate"]*2),
+        "SamplingRate":PIDML_CAST_PROFILE["rx_sampling_rate_hz"] if collection_profile == "pidml_cast" else int(paramsTx["SamplingRate"]*2),
         "gain":NodeGains
     }
     params = {"tx":paramsTx,"rx":paramsRx}
 
-    type = "wifiProbe" #pnSequence, castProbe, MPSK, sinusoid, deltaPulse, wifiProbe
+    type = PIDML_CAST_PROFILE["type"] if collection_profile == "pidml_cast" else "wifiProbe" #pnSequence, castProbe, MPSK, sinusoid, deltaPulse, wifiProbe
         
     metadata = {
         "pnSequence": "glfsr",
@@ -1316,6 +1396,10 @@ if __name__ == "__main__":
             }
         }
     }
+    if collection_profile == "pidml_cast":
+        metadata["castProbe"].update(PIDML_CAST_PROFILE["castProbe"])
+        metadata["castProbe"]["node_names"] = PIDML_DENSE_NODE_NAMES
+        metadata["castProbe"]["profile"] = collection_profile
     
     for nodes in nodeConfigs:
         print(f"Collecting data for node config: Alice={nodes[0]}, Bob={nodes[1]}, Eve={nodes[2]}")
@@ -1348,7 +1432,7 @@ if __name__ == "__main__":
                 np.array(timestamp)
             )
         elif type == "castProbe":
-            iq_I, iq_Q, taps_I, taps_Q, cir_I, cir_Q, pdp_db, detected, normalized_peak, pathloss_db, frame_phase, peak_index, channel, instance, ids, tx, rx, timestamp = collect_data_ping_pong_3Nodes_cast_probe(
+            iq_I, iq_Q, taps_I, taps_Q, cir_I, cir_Q, tap_delays_s, pdp_db, detected, normalized_peak, pathloss_db, frame_phase, peak_index, role, tx_name, rx_name, channel, instance, ids, tx, rx, timestamp = collect_data_ping_pong_3Nodes_cast_probe(
                                                 params,
                                                 nodes,
                                                 examples,
@@ -1363,18 +1447,32 @@ if __name__ == "__main__":
                 np.array(taps_Q),
                 np.array(cir_I),
                 np.array(cir_Q),
+                np.array(tap_delays_s),
                 np.array(pdp_db),
                 np.array(detected),
                 np.array(normalized_peak),
                 np.array(pathloss_db),
                 np.array(frame_phase),
                 np.array(peak_index),
+                np.array(role),
+                np.array(tx_name),
+                np.array(rx_name),
                 np.array(channel),
                 np.array(instance),
                 np.array(ids),
                 np.array(tx),
                 np.array(rx),
-                np.array(timestamp)
+                np.array(timestamp),
+                attrs={
+                    "profile": collection_profile,
+                    "probe_type": type,
+                    "freq_hz": int(paramsTx["freq"]),
+                    "tx_sampling_rate_hz": int(paramsTx["SamplingRate"]),
+                    "rx_sampling_rate_hz": int(paramsRx["SamplingRate"]),
+                    "castProbe": metadata["castProbe"],
+                    "node_names": PIDML_DENSE_NODE_NAMES,
+                    "role_order": ["AB", "AE", "BA", "BE"],
+                }
             )
         else:
             i_samples, q_samples, channel, instance, ids, tx, rx, timestamp = collect_data_ping_pong_3Nodes(

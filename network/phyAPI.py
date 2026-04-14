@@ -129,7 +129,8 @@ class phyAPI(FlaskView):
     def tx_set_castProbe(self):
         data = request.get_json() or {}
         sequence = data.get("sequence", "cast")
-        phy.setTxCastProbe(sequence)
+        guard_len = int(data.get("guard_len", 0))
+        phy.setTxCastProbe(sequence, guard_len=guard_len)
         callback = {"contents": "setTxCastProbe" }
         return jsonify(callback), 201
     
@@ -258,6 +259,10 @@ class phyAPI(FlaskView):
                 max_wait_s=None if max_wait_s is None else float(max_wait_s),
                 detection_threshold=float(data.get("detection_threshold", 0.05)),
                 estimation_window_repetitions=int(data.get("estimation_window_repetitions", 4)),
+                num_repetitions=data.get("num_repetitions", data.get("estimation_window_repetitions", None)),
+                guard_len=int(data.get("guard_len", 0)),
+                sample_rate_hz=float(data.get("sample_rate_hz", 1e6)),
+                estimation_mode=data.get("estimation_mode", "matched_filter"),
             )
             callback = {
                 "detected": bool(capture.get("detected", False)),
@@ -266,6 +271,7 @@ class phyAPI(FlaskView):
                 "cir": self._complex_payload(capture.get("cir", [])),
                 "taps": self._complex_payload(capture.get("taps", [])),
                 "pdp_db": np.asarray(capture.get("pdp_db", []), dtype=np.float32).tolist(),
+                "tap_delays_s": np.asarray(capture.get("tap_delays_s", []), dtype=np.float32).tolist(),
                 "metadata": capture.get("metadata", {}),
             }
             return jsonify(callback), 200

@@ -68,7 +68,8 @@ class pnSequence(gr.top_block):
                 buffer_size=32768,
                 bandwidth=20000000,
                 SDR_ADDR="",
-                sequence="glfsr"):
+                sequence="glfsr",
+                guard_len=0):
         gr.top_block.__init__(self, "PN Sequence TX")
 
         ##################################################
@@ -80,6 +81,7 @@ class pnSequence(gr.top_block):
         self.buffer_size = buffer_size
         self.bandwidth = bandwidth
         self.SDR_ADDR = SDR_ADDR
+        self.guard_len = max(0, int(guard_len))
         self.sequence = "glfsr"
         ### See https://ece.northeastern.edu/wineslab/papers/villa2022wintech.pdf for sequences ###
         self.sequences = {"ls2":(1,1,-1,1,1,1,1,-1,1,1,-1,1,-1,-1,-1,1,1,1,-1,1,1,1,1,-1,-1,-1,1,-1,1,1,1,-1,1,1,-1,1,1,1,1,-1,1,1,-1,1,-1,-1,-1,1,-1,-1,1,-1,-1,-1,-1,1,1,1,-1,1,-1,-1,-1,1,1,1,-1,1,1,1,1,-1,1,1,-1,1,-1,-1,-1,1,1,1,-1,1,1,1,1,-1,-1,-1,1,-1,1,1,1,-1,-1,-1,1,-1,-1,-1,-1,1,-1,-1,1,-1,1,1,1,-1,1,1,-1,1,1,1,1,-1,-1,-1,1,-1,1,1,1,-1,-1,-1,1,-1,-1,-1,-1,1,-1,-1,1,-1,1,1,1,-1,-1,-1,1,-1,-1,-1,-1,1,1,1,-1,1,-1,-1,-1,1,-1,-1,1,-1,-1,-1,-1,1,-1,-1,1,-1,1,1,1,-1,1,1,-1,1,1,1,1,-1,-1,-1,1,-1,1,1,1,-1,1,1,-1,1,1,1,1,-1,1,1,-1,1,-1,-1,-1,1,1,1,-1,1,1,1,1,-1,-1,-1,1,-1,1,1,1,-1,-1,-1,1,-1,-1,-1,-1,1,-1,-1,1,-1,1,1,1,-1,1,1,-1,1,1,1,1,-1,-1,-1,1,-1,1,1,1,-1),
@@ -116,7 +118,7 @@ class pnSequence(gr.top_block):
         # choose TX port on B200-series / X300-series
         self.usrp_sink.set_antenna("TX/RX", 0)
         self.usrp_sink.set_max_output_buffer(self.max_buf)
-        self.blocks_vector_source_x_1 = blocks.vector_source_f(self.sequences[self.sequence], True, 1, [])
+        self.blocks_vector_source_x_1 = blocks.vector_source_f(self._sequence_with_guard(), True, 1, [])
         self.blocks_null_source_1 = blocks.null_source(gr.sizeof_float*1)
         self.blocks_float_to_complex_0 = blocks.float_to_complex(1)
 
@@ -146,6 +148,12 @@ class pnSequence(gr.top_block):
             available = ", ".join(sorted(self.sequences))
             raise ValueError(f"Unknown PN/CaST sequence {sequence!r}. Available sequences: {available}")
         return sequence_name
+
+    def _sequence_with_guard(self):
+        samples = tuple(self.sequences[self.sequence])
+        if self.guard_len <= 0:
+            return samples
+        return samples + (0.0,) * self.guard_len
 
     def get_samp_rate(self):
         return self.samp_rate
@@ -189,7 +197,14 @@ class pnSequence(gr.top_block):
     
     def set_sequence(self,sequence):
         self.sequence = self._resolve_sequence_name(sequence)
-        self.blocks_vector_source_x_1.set_data(self.sequences[self.sequence], [])
+        self.blocks_vector_source_x_1.set_data(self._sequence_with_guard(), [])
+
+    def get_guard_len(self):
+        return self.guard_len
+
+    def set_guard_len(self, guard_len):
+        self.guard_len = max(0, int(guard_len))
+        self.blocks_vector_source_x_1.set_data(self._sequence_with_guard(), [])
 
     def set_gain(self, gain):
         self.gain = gain
