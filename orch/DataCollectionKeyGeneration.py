@@ -50,9 +50,11 @@ PIDML_CAST_PROFILE = {
         "detection_threshold": 0.25,
         "repetition_detection_threshold": 0.25,
         "min_repetitions_detected": 3,
-        "max_capture_retries": 5,
+        "max_capture_retries": 0,
         "receiver_arm_s": 0.5,
         "tx_burst_s": 0.1,
+        "tx_probe_retries": 6,
+        "tx_retry_gap_s": 0.2,
         "estimator_name": "CaST Matched Filter",
         "frame_shape": "sequence_plus_guard_zeros",
         "generate_plots": True,
@@ -506,22 +508,63 @@ def recordNodesParallel(nodeIDs, samples, type="IQ", metadata=None):
             results[nodeID] = {"data": data, "timestamp": ts}
     return results
 
-def recordNodesParallelDuringTx(nodeIDs, samples, type, metadata, tx_node, receiver_arm_s=0.5, tx_burst_s=0.1):
+def recordNodesParallelDuringTx(
+        nodeIDs,
+        samples,
+        type,
+        metadata,
+        tx_node,
+        receiver_arm_s=0.5,
+        tx_burst_s=0.1,
+        tx_probe_retries=1,
+        tx_retry_gap_s=0.2,
+        rx_listen_timeout_s=None,
+        configure_tx_callback=None
+    ):
+    listen_metadata = dict(metadata or {})
+    if type == "castProbe":
+        listen_cast_metadata = dict(listen_metadata.get("castProbe", {}))
+        attempts = max(1, int(tx_probe_retries))
+        listen_timeout_s = (
+            float(rx_listen_timeout_s)
+            if rx_listen_timeout_s is not None
+            else (
+                max(0.0, float(receiver_arm_s)) +
+                attempts * max(0.0, float(tx_burst_s)) +
+                max(0, attempts - 1) * max(0.0, float(tx_retry_gap_s)) +
+                1.0
+            )
+        )
+        listen_cast_metadata["max_wait_s"] = max(float(listen_cast_metadata.get("max_wait_s", 0.0)), listen_timeout_s)
+        listen_cast_metadata["record_timeout_s"] = max(float(listen_cast_metadata.get("record_timeout_s", 0.0)), listen_timeout_s + 5.0)
+        listen_metadata["castProbe"] = listen_cast_metadata
+    else:
+        attempts = 1
+
     results = {}
     with ThreadPoolExecutor(max_workers=len(nodeIDs)) as executor:
         futures = [
-            executor.submit(_recordNodeDataWithTimestamp, nodeID, samples, type, metadata)
+            executor.submit(_recordNodeDataWithTimestamp, nodeID, samples, type, listen_metadata)
             for nodeID in nodeIDs
         ]
         time.sleep(max(0.0, float(receiver_arm_s)))
-        tx_started = False
-        try:
-            startTXNode(tx_node)
-            tx_started = True
-            time.sleep(max(0.0, float(tx_burst_s)))
-        finally:
-            if tx_started:
-                stopTXNode(tx_node)
+
+        for attempt_idx in range(attempts):
+            if all(future.done() for future in futures):
+                break
+            tx_started = False
+            try:
+                print(f"Sending CaST TX probe burst {attempt_idx + 1}/{attempts} from node {tx_node}")
+                if configure_tx_callback is not None:
+                    configure_tx_callback()
+                startTXNode(tx_node, configure_callback=configure_tx_callback)
+                tx_started = True
+                time.sleep(max(0.0, float(tx_burst_s)))
+            finally:
+                if tx_started:
+                    stopTXNode(tx_node)
+            if attempt_idx < attempts - 1:
+                time.sleep(max(0.0, float(tx_retry_gap_s)))
 
         for future in futures:
             nodeID, data, ts = future.result()
@@ -755,6 +798,8 @@ def _cast_probe_debug_summary(node_id, probe_data):
     metadata = probe_data.get("metadata", {})
     iq = _section_complex(probe_data, "iq")
     iq_power = float(np.mean(np.abs(iq) ** 2)) if iq.size else 0.0
+    aligned = metadata.get("capture_aligned_to_frame", None)
+    aligned_text = "n/a" if aligned is None else str(bool(aligned))
     return (
         f"node {node_id}: detected={bool(probe_data.get('detected', False))}, "
         f"peak={float(metadata.get('normalized_peak', 0.0)):.3f}, "
@@ -762,6 +807,8 @@ def _cast_probe_debug_summary(node_id, probe_data):
         f"{int(metadata.get('min_repetitions_detected', 1))}, "
         f"decim={int(metadata.get('estimation_decimation', 1))}, "
         f"phase={int(metadata.get('decimation_phase', 0))}, "
+        f"aligned={aligned_text}, "
+        f"seen={int(metadata.get('capture_samples_seen', 0))}, "
         f"power={iq_power:.4g}"
     )
 
@@ -1163,7 +1210,7 @@ def collect_data_ping_pong_3Nodes_cast_probe(params, nodes, packages, metadata, 
     cast_metadata = metadata.get("castProbe", {})
     numberOfSamples = int(cast_metadata.get("samples", 32768))
     num_taps = int(cast_metadata.get("num_taps", 128))
-    max_capture_retries = int(cast_metadata.get("max_capture_retries", 5))
+    max_capture_retries = int(cast_metadata.get("max_capture_retries", 0))
     generatePlots = bool(cast_metadata.get("generate_plots", False))
     plot_iq_samples = int(cast_metadata.get("plot_iq_samples", min(numberOfSamples, 4096)))
     plot_pause_s = float(cast_metadata.get("plot_pause_s", 0.1))
@@ -1171,6 +1218,12 @@ def collect_data_ping_pong_3Nodes_cast_probe(params, nodes, packages, metadata, 
     rx_sample_rate_hz = float(cast_metadata.get("rx_sample_rate_hz", params["rx"]["SamplingRate"]))
     configured_tx_burst_s = float(cast_metadata.get("tx_burst_s", 0.1))
     tx_burst_s = max(configured_tx_burst_s, 1.25 * numberOfSamples / max(rx_sample_rate_hz, 1.0))
+    tx_probe_retries = max(1, int(cast_metadata.get("tx_probe_retries", max_capture_retries + 1)))
+    tx_retry_gap_s = float(cast_metadata.get("tx_retry_gap_s", 0.2))
+    rx_listen_timeout_s = float(cast_metadata.get(
+        "rx_listen_timeout_s",
+        receiver_arm_s + tx_probe_retries * tx_burst_s + max(0, tx_probe_retries - 1) * tx_retry_gap_s + 1.0
+    ))
     fig = plt.figure(figsize=(14, 11)) if generatePlots else None
 
     feature_store = {
@@ -1212,9 +1265,11 @@ def collect_data_ping_pong_3Nodes_cast_probe(params, nodes, packages, metadata, 
         valid_capture = False
         retry_idx = 0
         while retry_idx <= max_capture_retries:
-            print("Preparing TX Node: ", tx_node)
-            setTXNode(params, "castProbe", tx_node, metadata, start=False)
             print("Recording RX Nodes passively: ", *rx_nodes)
+            def _configure_tx_for_burst():
+                print("Preparing TX Node: ", tx_node)
+                setTXNode(params, "castProbe", tx_node, metadata, start=False)
+
             rx_results = recordNodesParallelDuringTx(
                 rx_nodes,
                 samples=numberOfSamples,
@@ -1223,13 +1278,11 @@ def collect_data_ping_pong_3Nodes_cast_probe(params, nodes, packages, metadata, 
                 tx_node=tx_node,
                 receiver_arm_s=receiver_arm_s,
                 tx_burst_s=tx_burst_s,
+                tx_probe_retries=tx_probe_retries,
+                tx_retry_gap_s=tx_retry_gap_s,
+                rx_listen_timeout_s=rx_listen_timeout_s,
+                configure_tx_callback=_configure_tx_for_burst,
             )
-            valid_capture = all(
-                _cast_probe_is_valid(rx_results[node]["data"], min_iq_samples=1, min_taps=num_taps)
-                for node in rx_nodes
-            )
-            if valid_capture:
-                break
             print(
                 "[CaSTProbe RX] "
                 + "; ".join(
@@ -1237,6 +1290,12 @@ def collect_data_ping_pong_3Nodes_cast_probe(params, nodes, packages, metadata, 
                     for node in rx_nodes
                 )
             )
+            valid_capture = all(
+                _cast_probe_is_valid(rx_results[node]["data"], min_iq_samples=1, min_taps=num_taps)
+                for node in rx_nodes
+            )
+            if valid_capture:
+                break
             retry_idx += 1
             if retry_idx <= max_capture_retries:
                 print(f"Retrying read: invalid/undetected CaST probe capture (attempt {retry_idx})")

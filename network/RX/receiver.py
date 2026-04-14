@@ -278,16 +278,17 @@ class Receiver():
             raise RuntimeError("CaST probe estimator is unavailable. Check RX/cast_probe.py imports.")
         wait_s = 2.0 if max_wait_s is None else float(max_wait_s)
         target_samples = max(1, int(samples))
-        latest_samples = deque(maxlen=target_samples)
+        history_samples = target_samples + max(1024, int(dataSize) // 8)
+        latest_samples = deque(maxlen=history_samples)
         start_time = time.time()
         total_samples = 0
         last_checked_total = 0
         check_interval = max(1024, min(target_samples, target_samples // 4))
         best_capture = None
 
-        def _estimate_current_window():
+        def _estimate_values(values):
             return estimate_cast_probe_channel(
-                list(latest_samples),
+                values,
                 sequence=sequence,
                 num_taps=num_taps,
                 detection_threshold=detection_threshold,
@@ -301,19 +302,57 @@ class Receiver():
                 repetition_detection_threshold=repetition_detection_threshold,
             )
 
-        while time.time() - start_time < wait_s:
-            try:
-                data = self.retrieve_raw_data(dataSize)
-            except socket.timeout:
-                continue
+        def _estimate_current_window():
+            return _estimate_values(list(latest_samples))
 
+        def _read_iq_packet():
+            data = self.retrieve_raw_data(dataSize)
             valid_len = len(data) - (len(data) % 8)
             if valid_len <= 0:
-                continue
+                return 0
             float_view = np.frombuffer(data[:valid_len], dtype=np.float32)
             complex_view = float_view[0::2] + 1j * float_view[1::2]
             latest_samples.extend(complex_view.tolist())
-            total_samples += int(complex_view.size)
+            return int(complex_view.size)
+
+        def _align_capture_to_detected_frame(capture):
+            nonlocal total_samples
+
+            metadata = capture.get("metadata", {})
+            latest_start_total = total_samples - len(latest_samples)
+            first_frame = max(0, int(metadata.get("first_detected_frame", metadata.get("peak_index", 0))))
+            target_start_total = latest_start_total + first_frame
+            target_stop_total = target_start_total + target_samples
+
+            while total_samples < target_stop_total and time.time() - start_time < wait_s:
+                try:
+                    total_samples += _read_iq_packet()
+                except socket.timeout:
+                    continue
+
+            latest_start_total = total_samples - len(latest_samples)
+            if latest_start_total <= target_start_total and target_stop_total <= total_samples:
+                buffer = np.asarray(list(latest_samples), dtype=np.complex64)
+                offset = int(target_start_total - latest_start_total)
+                aligned = buffer[offset:offset + target_samples]
+                if aligned.size == target_samples:
+                    aligned_capture = _estimate_values(aligned.tolist())
+                    aligned_capture["metadata"]["capture_aligned_to_frame"] = True
+                    aligned_capture["metadata"]["capture_alignment_offset"] = int(offset)
+                    return aligned_capture
+
+            capture["metadata"]["capture_aligned_to_frame"] = False
+            return capture
+
+        while time.time() - start_time < wait_s:
+            try:
+                packet_samples = _read_iq_packet()
+            except socket.timeout:
+                continue
+
+            if packet_samples <= 0:
+                continue
+            total_samples += packet_samples
 
             if len(latest_samples) < target_samples:
                 continue
@@ -331,8 +370,11 @@ class Receiver():
             ):
                 best_capture = capture
             if capture.get("detected", False):
-                capture["metadata"]["capture_detected_early"] = True
-                return capture
+                aligned_capture = _align_capture_to_detected_frame(capture)
+                aligned_capture["metadata"]["capture_elapsed_s"] = float(time.time() - start_time)
+                aligned_capture["metadata"]["capture_samples_seen"] = int(total_samples)
+                aligned_capture["metadata"]["capture_detected_early"] = True
+                return aligned_capture
 
         if best_capture is not None:
             best_capture["metadata"]["capture_detected_early"] = False
