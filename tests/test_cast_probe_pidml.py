@@ -40,7 +40,7 @@ def test_powderkeygen_guarded_cast_matches_pidml_matched_filter(tmp_path: Path) 
     pidml_payload = pidml_estimator.simulate_and_estimate(taps, snr_db=float("inf"))
 
     powder_payload = estimate_cast_probe_channel(
-        pidml_payload["rx_waveform"],
+        np.repeat(pidml_payload["rx_waveform"], 2),
         sequence="glfsr_bpsk",
         num_taps=16,
         detection_threshold=0.01,
@@ -48,10 +48,12 @@ def test_powderkeygen_guarded_cast_matches_pidml_matched_filter(tmp_path: Path) 
         num_repetitions=8,
         guard_len=32,
         sample_rate_hz=1e6,
+        rx_sample_rate_hz=2e6,
         estimation_mode="matched_filter",
     )
 
     assert powder_payload["detected"]
+    assert powder_payload["metadata"]["estimation_decimation"] == 2
     assert powder_payload["metadata"]["num_repetitions_used"] == 8
     np.testing.assert_allclose(
         powder_payload["taps"],

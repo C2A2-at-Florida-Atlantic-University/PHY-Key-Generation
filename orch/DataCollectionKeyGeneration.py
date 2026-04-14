@@ -34,22 +34,28 @@ PIDML_CAST_PROFILE = {
     "examples": 10,
     "freq": 2485000000,
     "tx_sampling_rate_hz": 1000000,
-    "rx_sampling_rate_hz": 2000000,
-    "castProbe": {
-        "sequence": "glfsr_bpsk",
-        "samples": 32768,
-        "num_taps": 16,
-        "num_repetitions": 8,
-        "estimation_window_repetitions": 8,
-        "guard_len": 32,
-        "sample_rate_hz": 1000000,
-        "estimation_mode": "matched_filter",
-        "max_wait_s": 2.0,
-        "record_timeout_s": 15.0,
-        "detection_threshold": 0.05,
-        "max_capture_retries": 5,
-        "estimator_name": "CaST Matched Filter",
-        "frame_shape": "sequence_plus_guard_zeros",
+        "rx_sampling_rate_hz": 2000000,
+        "castProbe": {
+            "sequence": "glfsr_bpsk",
+            "samples": 32768,
+            "num_taps": 16,
+            "num_repetitions": 8,
+            "estimation_window_repetitions": 8,
+            "guard_len": 32,
+            "sample_rate_hz": 1000000,
+            "rx_sample_rate_hz": 2000000,
+            "estimation_mode": "matched_filter",
+            "max_wait_s": 2.0,
+            "record_timeout_s": 15.0,
+            "detection_threshold": 0.25,
+            "repetition_detection_threshold": 0.25,
+            "min_repetitions_detected": 3,
+            "max_capture_retries": 5,
+            "estimator_name": "CaST Matched Filter",
+            "frame_shape": "sequence_plus_guard_zeros",
+        "generate_plots": True,
+        "plot_iq_samples": 4096,
+        "plot_pause_s": 0.1,
     },
 }
 
@@ -191,8 +197,12 @@ def recordCastProbe(nodeID,port,samples,warmup=None):
         "num_repetitions": int(warmup.get("num_repetitions", warmup.get("estimation_window_repetitions", 4))),
         "guard_len": int(warmup.get("guard_len", 0)),
         "sample_rate_hz": float(warmup.get("sample_rate_hz", warmup.get("tx_sampling_rate_hz", 1e6))),
+        "rx_sample_rate_hz": float(warmup.get("rx_sample_rate_hz", warmup.get("sample_rate_hz", 1e6))),
         "estimation_mode": warmup.get("estimation_mode", "matched_filter"),
+        "min_repetitions_detected": int(warmup.get("min_repetitions_detected", 1)),
     }
+    if "repetition_detection_threshold" in warmup:
+        data["repetition_detection_threshold"] = float(warmup["repetition_detection_threshold"])
     if "max_wait_s" in warmup:
         data["max_wait_s"] = float(warmup["max_wait_s"])
     record_timeout_s = warmup.get("record_timeout_s", REQUEST_TIMEOUT_S)
@@ -420,7 +430,7 @@ def setTXNode(params,type,nodeID,metadata = {"pnSequence":"glfsr"}):
         setPHY(nodeID,port["radio"],params["tx"])
         _tx_config_cache[nodeID] = tx_signature
 
-    if _tx_config_cache.get(nodeID) != tx_signature:
+    if type == "castProbe" or _tx_config_cache.get(nodeID) != tx_signature:
         _configure_tx()
 
     while True:
@@ -447,7 +457,7 @@ def setRXNode(params,nodeID,type="IQ",metadata=None):
         rx_gain,
         json.dumps(metadata.get(type, {}), sort_keys=True),
     )
-    if _rx_config_cache.get(nodeID) == rx_signature:
+    if type != "castProbe" and _rx_config_cache.get(nodeID) == rx_signature:
         return
     if type == "wifiProbe":
         chan_est = metadata.get(type, {}).get("chan_est", 0)
@@ -505,6 +515,7 @@ def recordNodesParallel(nodeIDs, samples, type="IQ", metadata=None):
     
 def stopTXNode(nodeID):
     stop_tx(nodeID,port["radio"])
+    _tx_config_cache.pop(nodeID, None)
 
 def setupNodesPingPong(RX1,RX2,TX,params,type,metadata = {"pnSequence":"glfsr"}):
     setRXNode(params,TX,type=type,metadata=metadata)    
@@ -708,6 +719,22 @@ def _cast_probe_is_valid(probe_data, min_iq_samples=1, min_taps=1):
             return False
     return True
 
+def _cast_probe_debug_summary(node_id, probe_data):
+    if probe_data is None:
+        return f"node {node_id}: no response"
+    metadata = probe_data.get("metadata", {})
+    iq = _section_complex(probe_data, "iq")
+    iq_power = float(np.mean(np.abs(iq) ** 2)) if iq.size else 0.0
+    return (
+        f"node {node_id}: detected={bool(probe_data.get('detected', False))}, "
+        f"peak={float(metadata.get('normalized_peak', 0.0)):.3f}, "
+        f"reps={int(metadata.get('num_repetitions_used', 0))}/"
+        f"{int(metadata.get('min_repetitions_detected', 1))}, "
+        f"decim={int(metadata.get('estimation_decimation', 1))}, "
+        f"phase={int(metadata.get('decimation_phase', 0))}, "
+        f"power={iq_power:.4g}"
+    )
+
 def _append_cast_probe_sample(feature_store, probe_data, numberOfSamples, num_taps):
     metadata = probe_data.get("metadata", {})
     iq_real, iq_imag = _extract_iq_record(probe_data)
@@ -749,6 +776,123 @@ def _append_wifi_probe_sample(feature_store, probe_data, sample_counts):
         section_samples = sample_counts[section]
         feature_store[section]["I"].append(_slice_samples(probe_data[section]["real"], section_samples))
         feature_store[section]["Q"].append(_slice_samples(probe_data[section]["imag"], section_samples))
+
+def _section_complex(probe_data, section):
+    if probe_data is None or section not in probe_data:
+        return np.zeros(0, dtype=np.complex64)
+    payload = probe_data[section]
+    real_values = np.asarray(payload.get("real", []), dtype=np.float32)
+    imag_values = np.asarray(payload.get("imag", []), dtype=np.float32)
+    if real_values.size == 0 and imag_values.size == 0:
+        return np.zeros(0, dtype=np.complex64)
+    keep = min(real_values.size, imag_values.size)
+    return (real_values[:keep] + 1j * imag_values[:keep]).astype(np.complex64)
+
+def _plot_cast_probe_pair(
+        probe_data_1,
+        probe_data_2,
+        tx_node,
+        rx_node_1,
+        rx_node_2,
+        role_1,
+        role_2,
+        num_taps,
+        iq_samples,
+        metadata=None,
+        fig=None,
+        pause_s=0.1
+    ):
+    if fig is None:
+        fig = plt.figure(figsize=(14, 11))
+
+    fig.clf()
+    axes = fig.subplots(4, 2)
+    cast_metadata = (metadata or {}).get("castProbe", {})
+    tx_label = _node_name(tx_node, metadata)
+
+    for col_idx, (probe_data, rx_node, role) in enumerate([
+        (probe_data_1, rx_node_1, role_1),
+        (probe_data_2, rx_node_2, role_2),
+    ]):
+        rx_label = _node_name(rx_node, metadata)
+        capture_metadata = probe_data.get("metadata", {}) if probe_data else {}
+
+        probe = _section_complex(probe_data, "probe")
+        guard_len = int(capture_metadata.get("guard_len", cast_metadata.get("guard_len", 0)))
+        if probe.size and guard_len > 0:
+            probe = np.concatenate([probe, np.zeros(guard_len, dtype=np.complex64)])
+        probe_ax = axes[0, col_idx]
+        probe_ax.plot(probe.real, color="red", linewidth=0.8, label="I")
+        probe_ax.plot(probe.imag, color="blue", linewidth=0.8, label="Q")
+        if guard_len > 0 and probe.size >= guard_len:
+            probe_ax.axvspan(probe.size - guard_len, probe.size, color="gray", alpha=0.15, label="guard")
+        probe_ax.set_title(f"{role}: CaST probe frame")
+        probe_ax.set_xlabel("Sample")
+        probe_ax.set_ylabel("Amplitude")
+        probe_ax.grid(True)
+        probe_ax.legend(loc="upper right")
+
+        iq = _section_complex(probe_data, "iq")
+        peak_index = int(capture_metadata.get("peak_index", -1))
+        frame_starts = capture_metadata.get("detected_frame_starts", [])
+        if isinstance(frame_starts, list) and frame_starts:
+            anchor_index = int(frame_starts[0])
+        else:
+            anchor_index = peak_index if peak_index >= 0 else 0
+        raw_frame_len = int(capture_metadata.get(
+            "raw_frame_len",
+            capture_metadata.get("frame_len", probe.size if probe.size else 1)
+        ))
+        window_len = int(iq_samples) if int(iq_samples) > 0 else int(iq.size)
+        plot_start = max(0, anchor_index - raw_frame_len)
+        plot_stop = min(iq.size, plot_start + window_len)
+        if plot_stop - plot_start < window_len:
+            plot_start = max(0, plot_stop - window_len)
+        iq_window = iq[plot_start:plot_stop] if iq.size else iq
+        iq_offset = plot_start
+
+        iq_ax = axes[1, col_idx]
+        iq_ax.plot(iq_window.real, color="red", linewidth=0.8, label="I")
+        iq_ax.plot(iq_window.imag, color="blue", linewidth=0.8, label="Q")
+        if iq_offset <= peak_index < iq_offset + iq_window.size:
+            iq_ax.axvline(peak_index - iq_offset, color="black", linestyle=":", linewidth=1.0, label="peak")
+        if isinstance(frame_starts, list):
+            for frame_start in frame_starts:
+                frame_start = int(frame_start)
+                if iq_offset <= frame_start < iq_offset + iq_window.size:
+                    iq_ax.axvline(frame_start - iq_offset, color="green", linestyle="--", linewidth=0.8)
+        iq_ax.set_title(f"{role}: {tx_label} -> {rx_label} IQ")
+        iq_ax.set_xlabel("Sample")
+        iq_ax.set_ylabel("Amplitude")
+        iq_ax.grid(True)
+        iq_ax.legend(loc="upper right")
+
+        taps = _section_complex(probe_data, "taps")[:int(num_taps)]
+        tap_axis = np.arange(taps.size, dtype=np.int32)
+        tap_ax = axes[2, col_idx]
+        tap_ax.plot(tap_axis, taps.real, color="red", marker="o", linewidth=1.0, label="Real")
+        tap_ax.plot(tap_axis, taps.imag, color="blue", marker="o", linewidth=1.0, label="Imag")
+        tap_ax.set_title(
+            f"{role}: taps, peak={float(capture_metadata.get('normalized_peak', 0.0)):.3f}"
+        )
+        tap_ax.set_xlabel("Tap")
+        tap_ax.set_ylabel("Coefficient")
+        tap_ax.grid(True)
+        tap_ax.legend(loc="upper right")
+
+        pdp = np.asarray(probe_data.get("pdp_db", []), dtype=np.float32)[:int(num_taps)] if probe_data else np.zeros(0, dtype=np.float32)
+        pdp_ax = axes[3, col_idx]
+        pdp_ax.plot(np.arange(pdp.size, dtype=np.int32), pdp, color="green", marker="o", linewidth=1.0)
+        pdp_ax.set_title(
+            f"{role}: PDP, reps={capture_metadata.get('num_repetitions_used', cast_metadata.get('num_repetitions', 'n/a'))}"
+        )
+        pdp_ax.set_xlabel("Tap")
+        pdp_ax.set_ylabel("dB")
+        pdp_ax.grid(True)
+
+    fig.suptitle(f"CaST probe capture from {_node_name(tx_node, metadata)}", fontsize=12)
+    plt.tight_layout()
+    plt.pause(float(pause_s))
 
 def _plot_wifi_probe_sections_side_by_side(probe_data_1, probe_data_2, sample_counts, id1, id2, ax1=None, ax2=None, fig=None):
     sections = ["iq", "csi", "chan_est_samples"]
@@ -990,6 +1134,10 @@ def collect_data_ping_pong_3Nodes_cast_probe(params, nodes, packages, metadata, 
     numberOfSamples = int(cast_metadata.get("samples", 32768))
     num_taps = int(cast_metadata.get("num_taps", 128))
     max_capture_retries = int(cast_metadata.get("max_capture_retries", 5))
+    generatePlots = bool(cast_metadata.get("generate_plots", False))
+    plot_iq_samples = int(cast_metadata.get("plot_iq_samples", min(numberOfSamples, 4096)))
+    plot_pause_s = float(cast_metadata.get("plot_pause_s", 0.1))
+    fig = plt.figure(figsize=(14, 11)) if generatePlots else None
 
     feature_store = {
         "iq_I": [],
@@ -1041,6 +1189,13 @@ def collect_data_ping_pong_3Nodes_cast_probe(params, nodes, packages, metadata, 
             )
             if valid_capture:
                 break
+            print(
+                "[CaSTProbe RX] "
+                + "; ".join(
+                    _cast_probe_debug_summary(node, rx_results[node]["data"])
+                    for node in rx_nodes
+                )
+            )
             retry_idx += 1
             if retry_idx <= max_capture_retries:
                 print(f"Retrying read: invalid/undetected CaST probe capture (attempt {retry_idx})")
@@ -1051,6 +1206,21 @@ def collect_data_ping_pong_3Nodes_cast_probe(params, nodes, packages, metadata, 
         stopTXNode(tx_node)
 
         if valid_capture:
+            if generatePlots:
+                _plot_cast_probe_pair(
+                    rx_results[rx_nodes[0]]["data"],
+                    rx_results[rx_nodes[1]]["data"],
+                    tx_node=tx_node,
+                    rx_node_1=rx_nodes[0],
+                    rx_node_2=rx_nodes[1],
+                    role_1=CAST_INSTANCE_ROLES.get(instances[0], ""),
+                    role_2=CAST_INSTANCE_ROLES.get(instances[1], ""),
+                    num_taps=num_taps,
+                    iq_samples=plot_iq_samples,
+                    metadata=metadata,
+                    fig=fig,
+                    pause_s=plot_pause_s,
+                )
             for rx_node, label, inst in zip(rx_nodes, labels, instances):
                 probe_data = rx_results[rx_node]["data"]
                 _append_cast_probe_sample(feature_store, probe_data, numberOfSamples, num_taps)
@@ -1065,6 +1235,9 @@ def collect_data_ping_pong_3Nodes_cast_probe(params, nodes, packages, metadata, 
                 feature_store["rx_name"].append(_node_name(rx_node, metadata))
 
         i += 1
+
+    if fig is not None:
+        plt.close(fig)
 
     return (
         feature_store["iq_I"],

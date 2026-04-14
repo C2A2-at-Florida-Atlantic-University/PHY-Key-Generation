@@ -201,10 +201,12 @@ class PHY:
         num_repetitions=None,
         guard_len=0,
         sample_rate_hz=1e6,
+        rx_sample_rate_hz=None,
         estimation_mode="matched_filter",
+        min_repetitions_detected=1,
+        repetition_detection_threshold=None,
     ):
-        if self.mode["rx"] != "castProbe":
-            self.set_receive_cast_probe()
+        self.set_receive_cast_probe()
         self.receiver.clear_UDP_socket()
         self.receiver.start()
         try:
@@ -218,7 +220,10 @@ class PHY:
                 num_repetitions=num_repetitions,
                 guard_len=guard_len,
                 sample_rate_hz=sample_rate_hz,
+                rx_sample_rate_hz=self.samplingRate["rx"] if rx_sample_rate_hz is None else rx_sample_rate_hz,
                 estimation_mode=estimation_mode,
+                min_repetitions_detected=min_repetitions_detected,
+                repetition_detection_threshold=repetition_detection_threshold,
             )
         finally:
             self.receiver.stop()

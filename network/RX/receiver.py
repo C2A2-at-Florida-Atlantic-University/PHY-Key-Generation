@@ -269,7 +269,10 @@ class Receiver():
         num_repetitions=None,
         guard_len=0,
         sample_rate_hz=1e6,
+        rx_sample_rate_hz=None,
         estimation_mode="matched_filter",
+        min_repetitions_detected=1,
+        repetition_detection_threshold=None,
     ):
         if estimate_cast_probe_channel is None:
             raise RuntimeError("CaST probe estimator is unavailable. Check RX/cast_probe.py imports.")
@@ -284,7 +287,10 @@ class Receiver():
             num_repetitions=num_repetitions,
             guard_len=guard_len,
             sample_rate_hz=sample_rate_hz,
+            rx_sample_rate_hz=self.samp_rate if rx_sample_rate_hz is None else rx_sample_rate_hz,
             estimation_mode=estimation_mode,
+            min_repetitions_detected=min_repetitions_detected,
+            repetition_detection_threshold=repetition_detection_threshold,
         )
 
     def clear_UDP_socket(self):

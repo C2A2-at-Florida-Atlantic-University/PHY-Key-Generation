@@ -79,7 +79,7 @@ def _matched_filter_taps(rx_segment, tx, tap_count, tx_energy):
     return taps
 
 
-def _detected_frame_starts(norm_corr, peak_index, frame_len, detection_threshold, requested_repetitions):
+def _detected_frame_starts(norm_corr, peak_index, frame_len, repetition_threshold, requested_repetitions):
     max_start = int(norm_corr.size - 1)
     requested = max(1, int(requested_repetitions))
     if frame_len <= 0 or max_start < 0:
@@ -91,17 +91,16 @@ def _detected_frame_starts(norm_corr, peak_index, frame_len, detection_threshold
 
     starts = []
     candidate = first_start
-    relaxed_threshold = 0.5 * float(detection_threshold)
+    threshold = float(repetition_threshold)
     while candidate <= max_start:
-        if candidate == int(peak_index) or float(norm_corr[candidate]) >= relaxed_threshold:
+        if float(norm_corr[candidate]) >= threshold:
             starts.append(int(candidate))
             if len(starts) >= requested:
                 break
         candidate += frame_len
 
-    if int(peak_index) not in starts and 0 <= int(peak_index) <= max_start:
+    if not starts and 0 <= int(peak_index) <= max_start:
         starts.append(int(peak_index))
-        starts = sorted(starts)[:requested]
     return starts
 
 
@@ -114,7 +113,10 @@ def estimate_cast_probe_channel(
     num_repetitions=None,
     guard_len=0,
     sample_rate_hz=1e6,
+    rx_sample_rate_hz=None,
     estimation_mode="matched_filter",
+    min_repetitions_detected=1,
+    repetition_detection_threshold=None,
     pre_periods=1,
 ):
     """Detect a repeated CaST probe in RX IQ and estimate a matched-filter CIR."""
@@ -126,6 +128,17 @@ def estimate_cast_probe_channel(
     repetitions = max(1, int(num_repetitions if num_repetitions is not None else estimation_window_repetitions))
     frame_len = period + guard_samples
     sample_rate = float(sample_rate_hz)
+    rx_sample_rate = sample_rate if rx_sample_rate_hz is None else float(rx_sample_rate_hz)
+    sample_rate_ratio = rx_sample_rate / sample_rate if sample_rate > 0 else 1.0
+    decimation = 1
+    if sample_rate_ratio > 1.0 and abs(sample_rate_ratio - round(sample_rate_ratio)) < 1e-6:
+        decimation = int(round(sample_rate_ratio))
+    repetition_threshold = (
+        max(float(detection_threshold), 0.25)
+        if repetition_detection_threshold is None
+        else float(repetition_detection_threshold)
+    )
+    min_repetitions = max(1, int(min_repetitions_detected))
     tap_delays_s = (np.arange(tap_count, dtype=np.float32) / sample_rate).astype(np.float32)
     mode = str(estimation_mode or "matched_filter").strip().lower()
     if mode != "matched_filter":
@@ -150,44 +163,110 @@ def estimate_cast_probe_channel(
                 "num_taps": tap_count,
                 "guard_len": guard_samples,
                 "frame_len": frame_len,
+                "raw_frame_len": int(frame_len * decimation),
                 "num_repetitions": repetitions,
                 "sample_rate_hz": sample_rate,
+                "rx_sample_rate_hz": rx_sample_rate,
+                "estimation_decimation": decimation,
                 "estimation_mode": mode,
+                "min_repetitions_detected": min_repetitions,
+                "repetition_detection_threshold": repetition_threshold,
             },
         }
 
-    valid_corr, norm_corr, tx_energy = _normalized_valid_correlation(rx, tx)
-    peak_index = int(np.argmax(norm_corr))
-    normalized_peak = float(norm_corr[peak_index])
-    matched_peak = valid_corr[peak_index] / tx_energy
-    detected = normalized_peak >= float(detection_threshold)
+    candidates = []
+    for phase in range(decimation):
+        estimation_rx = rx[phase::decimation] if decimation > 1 else rx
+        if estimation_rx.size < tx.size:
+            continue
+        valid_corr, norm_corr, tx_energy = _normalized_valid_correlation(estimation_rx, tx)
+        peak_index = int(np.argmax(norm_corr))
+        normalized_peak = float(norm_corr[peak_index])
+        frame_starts = _detected_frame_starts(
+            norm_corr=norm_corr,
+            peak_index=peak_index,
+            frame_len=frame_len,
+            repetition_threshold=repetition_threshold,
+            requested_repetitions=repetitions,
+        )
+        periodic_values = [float(norm_corr[start]) for start in frame_starts if 0 <= start < norm_corr.size]
+        periodic_mean = float(np.mean(periodic_values)) if periodic_values else 0.0
+        score = periodic_mean + 0.05 * len(frame_starts) + normalized_peak
+        candidates.append({
+            "phase": phase,
+            "rx": estimation_rx,
+            "valid_corr": valid_corr,
+            "norm_corr": norm_corr,
+            "tx_energy": tx_energy,
+            "peak_index": peak_index,
+            "normalized_peak": normalized_peak,
+            "frame_starts": frame_starts,
+            "periodic_mean": periodic_mean,
+            "score": score,
+        })
 
-    frame_starts = _detected_frame_starts(
-        norm_corr=norm_corr,
-        peak_index=peak_index,
-        frame_len=frame_len,
-        detection_threshold=detection_threshold,
-        requested_repetitions=repetitions,
-    )
-    if not frame_starts:
-        frame_starts = [peak_index]
+    if not candidates:
+        return {
+            "detected": False,
+            "iq": rx,
+            "probe": tx,
+            "taps": empty_taps,
+            "cir": empty_taps,
+            "pdp_db": _pdp_db(empty_taps),
+            "tap_delays_s": tap_delays_s,
+            "metadata": {
+                "reason": "decimated_rx_shorter_than_probe",
+                "sequence": normalize_sequence_name(sequence),
+                "sequence_name": canonical_sequence_metadata_name(sequence),
+                "sequence_length": period,
+                "rx_samples": int(rx.size),
+                "num_taps": tap_count,
+                "guard_len": guard_samples,
+                "frame_len": frame_len,
+                "raw_frame_len": int(frame_len * decimation),
+                "num_repetitions": repetitions,
+                "sample_rate_hz": sample_rate,
+                "rx_sample_rate_hz": rx_sample_rate,
+                "estimation_decimation": decimation,
+                "estimation_mode": mode,
+                "min_repetitions_detected": min_repetitions,
+                "repetition_detection_threshold": repetition_threshold,
+            },
+        }
+
+    best = max(candidates, key=lambda candidate: candidate["score"])
+    estimation_rx = best["rx"]
+    valid_corr = best["valid_corr"]
+    norm_corr = best["norm_corr"]
+    tx_energy = best["tx_energy"]
+    peak_index = int(best["peak_index"])
+    normalized_peak = float(best["normalized_peak"])
+    matched_peak = valid_corr[peak_index] / tx_energy
+    frame_starts = list(best["frame_starts"]) or [peak_index]
+    detected = normalized_peak >= float(detection_threshold) and len(frame_starts) >= min_repetitions
 
     response_len = tx.size + tap_count - 1
     per_probe_taps = [
-        _matched_filter_taps(rx[start:start + response_len], tx, tap_count, tx_energy)
+        _matched_filter_taps(estimation_rx[start:start + response_len], tx, tap_count, tx_energy)
         for start in frame_starts
     ]
     taps = np.mean(np.stack(per_probe_taps, axis=0), axis=0).astype(np.complex64)
 
     window_start = int(frame_starts[0])
-    window_stop = int(min(rx.size, frame_starts[-1] + response_len))
-    rx_window = rx[window_start:window_stop]
+    window_stop = int(min(estimation_rx.size, frame_starts[-1] + response_len))
+    rx_window = estimation_rx[window_start:window_stop]
     full_corr = np.convolve(rx_window, np.conj(tx[::-1]), mode="full") / tx_energy
     full_peak_index = int(np.argmax(np.abs(full_corr))) if full_corr.size else 0
 
     # The frame phase is useful for tracking a continuous repeated probe stream.
     frame_phase = int(peak_index % frame_len)
     first_detected_frame = int(frame_starts[0])
+    phase = int(best["phase"])
+    raw_peak_index = int(peak_index * decimation + phase)
+    raw_frame_len = int(frame_len * decimation)
+    raw_frame_starts = [int(start * decimation + phase) for start in frame_starts]
+    raw_window_start = int(window_start * decimation + phase)
+    raw_window_stop = int(min(rx.size, window_stop * decimation + phase))
 
     return {
         "detected": bool(detected),
@@ -208,19 +287,32 @@ def estimate_cast_probe_channel(
             "correlation_peak_real": float(np.real(matched_peak)),
             "correlation_peak_imag": float(np.imag(matched_peak)),
             "pathloss_db": float(20.0 * np.log10(max(abs(matched_peak), 1e-12))),
-            "peak_index": peak_index,
-            "frame_phase": frame_phase,
-            "first_detected_frame": first_detected_frame,
-            "detected_frame_starts": [int(start) for start in frame_starts],
-            "window_start": int(window_start),
-            "window_stop": int(window_stop),
+            "peak_index": raw_peak_index,
+            "frame_phase": int(raw_peak_index % max(raw_frame_len, 1)),
+            "first_detected_frame": raw_frame_starts[0],
+            "detected_frame_starts": raw_frame_starts,
+            "window_start": raw_window_start,
+            "window_stop": raw_window_stop,
+            "estimation_peak_index": peak_index,
+            "estimation_frame_phase": frame_phase,
+            "estimation_first_detected_frame": first_detected_frame,
+            "estimation_detected_frame_starts": [int(start) for start in frame_starts],
+            "estimation_window_start": int(window_start),
+            "estimation_window_stop": int(window_stop),
             "full_correlation_peak_index": full_peak_index,
             "estimation_window_repetitions": int(estimation_window_repetitions),
             "num_repetitions": repetitions,
             "num_repetitions_used": int(len(frame_starts)),
+            "min_repetitions_detected": min_repetitions,
+            "periodic_peak_mean": float(best["periodic_mean"]),
+            "repetition_detection_threshold": repetition_threshold,
             "guard_len": guard_samples,
             "frame_len": frame_len,
+            "raw_frame_len": raw_frame_len,
             "sample_rate_hz": sample_rate,
+            "rx_sample_rate_hz": rx_sample_rate,
+            "estimation_decimation": decimation,
+            "decimation_phase": phase,
             "estimation_mode": mode,
             "tap_delays_s": tap_delays_s.tolist(),
         },

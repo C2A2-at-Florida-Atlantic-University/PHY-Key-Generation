@@ -262,7 +262,10 @@ class phyAPI(FlaskView):
                 num_repetitions=data.get("num_repetitions", data.get("estimation_window_repetitions", None)),
                 guard_len=int(data.get("guard_len", 0)),
                 sample_rate_hz=float(data.get("sample_rate_hz", 1e6)),
+                rx_sample_rate_hz=float(data.get("rx_sample_rate_hz", phy.samplingRate["rx"])),
                 estimation_mode=data.get("estimation_mode", "matched_filter"),
+                min_repetitions_detected=int(data.get("min_repetitions_detected", 1)),
+                repetition_detection_threshold=data.get("repetition_detection_threshold", None),
             )
             callback = {
                 "detected": bool(capture.get("detected", False)),
