@@ -1298,17 +1298,6 @@ def collect_data_ping_pong_3Nodes_cast_probe(params, nodes, packages, metadata, 
                 _cast_probe_is_valid(rx_results[node]["data"], min_iq_samples=1, min_taps=num_taps)
                 for node in rx_nodes
             )
-            if valid_capture:
-                break
-            retry_idx += 1
-            if retry_idx <= max_capture_retries:
-                print(f"Retrying read: invalid/undetected CaST probe capture (attempt {retry_idx})")
-                time.sleep(timeSleep)
-
-        if not valid_capture:
-            print(f"[WARN] Skipping CaST probe capture for TX node {tx_node} after {max_capture_retries + 1} attempts")
-
-        if valid_capture:
             if generatePlots:
                 _plot_cast_probe_pair(
                     rx_results[rx_nodes[0]]["data"],
@@ -1324,6 +1313,17 @@ def collect_data_ping_pong_3Nodes_cast_probe(params, nodes, packages, metadata, 
                     fig=fig,
                     pause_s=plot_pause_s,
                 )
+            if valid_capture:
+                break
+            retry_idx += 1
+            if retry_idx <= max_capture_retries:
+                print(f"Retrying read: invalid/undetected CaST probe capture (attempt {retry_idx})")
+                time.sleep(timeSleep)
+
+        if not valid_capture:
+            print(f"[WARN] Skipping CaST probe capture for TX node {tx_node} after {max_capture_retries + 1} attempts")
+
+        if valid_capture:
             for rx_node, label, inst in zip(rx_nodes, labels, instances):
                 probe_data = rx_results[rx_node]["data"]
                 _append_cast_probe_sample(feature_store, probe_data, numberOfSamples, num_taps)
