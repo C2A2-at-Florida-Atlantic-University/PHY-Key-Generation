@@ -112,6 +112,7 @@ class pnSequence(gr.top_block):
             ),
             ""  # XML or args string (unused here)
         )
+        self.usrp_sink.set_clock_rate(32e6, uhd.ALL_MBOARDS)
         self.usrp_sink.set_samp_rate(self.samp_rate)
         self.usrp_sink.set_center_freq(self.freq, 0)
         self.usrp_sink.set_gain(self.gain, 0)

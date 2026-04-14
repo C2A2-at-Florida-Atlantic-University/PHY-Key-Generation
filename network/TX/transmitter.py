@@ -45,23 +45,28 @@ class Transmitter():
         
     def setFreq(self,freq):
         self.freq = freq
-        self.tx.set_freq(self.freq)
+        if self.tx is not None:
+            self.tx.set_freq(self.freq)
     
     def setGain(self,gain):
         self.gain = gain
-        self.tx.set_gain(self.gain)
+        if self.tx is not None:
+            self.tx.set_gain(self.gain)
     
     def setSamplingRate(self,samp_rate):
         self.samp_rate = samp_rate
-        self.tx.set_samp_rate(self.samp_rate)
+        if self.tx is not None:
+            self.tx.set_samp_rate(self.samp_rate)
     
     def setBandwidth(self,bandwidth):
         self.bandwidth = bandwidth
-        self.tx.set_bandwidth(self.bandwidth)
+        if self.tx is not None:
+            self.tx.set_bandwidth(self.bandwidth)
     
     def set_buffer_size(self,buffer_size):
         self.buffer_size = buffer_size
-        self.tx.set_buffer_size(self.buffer_size)
+        if self.tx is not None:
+            self.tx.set_buffer_size(self.buffer_size)
 
     def str_to_length_and_decimals(self,text):
         if isinstance(text, bytes):
@@ -222,15 +227,7 @@ class Transmitter():
         self.tx.start()
 
     def stop(self):
-        if self.tx is not None:
-            try:
-                self.tx.stop()
-                self.tx.wait()
-            except Exception:
-                pass
-        # Keep the configured TX block alive so repeated start/stop cycles do not
-        # pay full graph reconstruction cost. Switching TX mode still calls
-        # _cleanup_tx(), which performs full teardown.
+        self._cleanup_tx()
 
 def create_data_packet(data):
     UUID=str(uuid.uuid4())

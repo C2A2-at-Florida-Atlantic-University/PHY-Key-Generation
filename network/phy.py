@@ -108,6 +108,8 @@ class PHY:
         self.transmitter.set_tx_pnSequence(sequence)
 
     def setTxCastProbe(self, sequence="cast", guard_len=0):
+        if hasattr(self.receiver, "_cleanup_rx"):
+            self.receiver._cleanup_rx()
         self.mode["tx"] = "castProbe"
         self.transmitter.set_tx_cast_probe(sequence, guard_len=guard_len)
         
@@ -143,6 +145,8 @@ class PHY:
             return "Omitting setting mode: "+self.mode["rx"]
 
     def set_receive_cast_probe(self):
+        if hasattr(self.transmitter, "_cleanup_tx"):
+            self.transmitter._cleanup_tx()
         self.receiver.set_rx_cast_probe()
         if self.mode["rx"] != "castProbe":
             self.mode["rx"] = "castProbe"

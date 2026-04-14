@@ -79,25 +79,72 @@ def _matched_filter_taps(rx_segment, tx, tap_count, tx_energy):
     return taps
 
 
-def _detected_frame_starts(norm_corr, peak_index, frame_len, repetition_threshold, requested_repetitions):
+def _peak_near(norm_corr, center, radius, threshold):
+    max_start = int(norm_corr.size - 1)
+    if max_start < 0:
+        return None
+    center = int(center)
+    radius = max(0, int(radius))
+    left = max(0, center - radius)
+    right = min(max_start + 1, center + radius + 1)
+    if left >= right:
+        return None
+    local = norm_corr[left:right]
+    local_index = int(np.argmax(local))
+    candidate = int(left + local_index)
+    if float(norm_corr[candidate]) >= float(threshold):
+        return candidate
+    return None
+
+
+def _detected_frame_starts(
+    norm_corr,
+    peak_index,
+    frame_len,
+    repetition_threshold,
+    requested_repetitions,
+    frame_search_radius=None,
+):
     max_start = int(norm_corr.size - 1)
     requested = max(1, int(requested_repetitions))
     if frame_len <= 0 or max_start < 0:
         return []
+    search_radius = (
+        max(2, int(round(0.015 * frame_len)))
+        if frame_search_radius is None
+        else max(0, int(frame_search_radius))
+    )
+    search_radius = min(search_radius, max(0, (frame_len - 1) // 3))
 
     first_start = int(peak_index)
     while first_start - frame_len >= 0:
-        first_start -= frame_len
+        previous_start = _peak_near(
+            norm_corr,
+            center=first_start - frame_len,
+            radius=search_radius,
+            threshold=repetition_threshold,
+        )
+        if previous_start is None:
+            break
+        first_start = previous_start
 
     starts = []
     candidate = first_start
     threshold = float(repetition_threshold)
     while candidate <= max_start:
-        if float(norm_corr[candidate]) >= threshold:
-            starts.append(int(candidate))
+        next_start = _peak_near(
+            norm_corr,
+            center=candidate,
+            radius=search_radius,
+            threshold=threshold,
+        )
+        if next_start is not None and (not starts or next_start > starts[-1]):
+            starts.append(int(next_start))
             if len(starts) >= requested:
                 break
-        candidate += frame_len
+            candidate = next_start + frame_len
+        else:
+            candidate += frame_len
 
     if not starts and 0 <= int(peak_index) <= max_start:
         starts.append(int(peak_index))
@@ -127,6 +174,10 @@ def estimate_cast_probe_channel(
     guard_samples = max(0, int(guard_len))
     repetitions = max(1, int(num_repetitions if num_repetitions is not None else estimation_window_repetitions))
     frame_len = period + guard_samples
+    frame_search_radius = min(
+        max(0, (frame_len - 1) // 3),
+        max(2, int(round(0.015 * frame_len))),
+    )
     sample_rate = float(sample_rate_hz)
     rx_sample_rate = sample_rate if rx_sample_rate_hz is None else float(rx_sample_rate_hz)
     sample_rate_ratio = rx_sample_rate / sample_rate if sample_rate > 0 else 1.0
@@ -163,6 +214,7 @@ def estimate_cast_probe_channel(
                 "num_taps": tap_count,
                 "guard_len": guard_samples,
                 "frame_len": frame_len,
+                "frame_search_radius": frame_search_radius,
                 "raw_frame_len": int(frame_len * decimation),
                 "num_repetitions": repetitions,
                 "sample_rate_hz": sample_rate,
@@ -188,6 +240,7 @@ def estimate_cast_probe_channel(
             frame_len=frame_len,
             repetition_threshold=repetition_threshold,
             requested_repetitions=repetitions,
+            frame_search_radius=frame_search_radius,
         )
         periodic_values = [float(norm_corr[start]) for start in frame_starts if 0 <= start < norm_corr.size]
         periodic_mean = float(np.mean(periodic_values)) if periodic_values else 0.0
@@ -223,6 +276,7 @@ def estimate_cast_probe_channel(
                 "num_taps": tap_count,
                 "guard_len": guard_samples,
                 "frame_len": frame_len,
+                "frame_search_radius": frame_search_radius,
                 "raw_frame_len": int(frame_len * decimation),
                 "num_repetitions": repetitions,
                 "sample_rate_hz": sample_rate,
@@ -308,6 +362,7 @@ def estimate_cast_probe_channel(
             "repetition_detection_threshold": repetition_threshold,
             "guard_len": guard_samples,
             "frame_len": frame_len,
+            "frame_search_radius": frame_search_radius,
             "raw_frame_len": raw_frame_len,
             "sample_rate_hz": sample_rate,
             "rx_sample_rate_hz": rx_sample_rate,

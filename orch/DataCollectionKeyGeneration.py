@@ -442,6 +442,11 @@ def setTXNode(params,type,nodeID,metadata = {"pnSequence":"glfsr"}, start=True):
     
 def setRXNode(params,nodeID,type="IQ",metadata=None):
     metadata = metadata or {}
+    if _node_active_role.get(nodeID) == "tx":
+        try:
+            stopTXNode(nodeID)
+        except Exception as error:
+            print(f"Warning: Could not stop transmitter before RX setup on node {nodeID}: {error}")
     _node_active_role[nodeID] = "rx"
     _last_rx_setup[nodeID] = {"params": params, "type": type, "metadata": metadata}
     rx_gain = params["rx"]["gain"][nodeID]["rx"]
@@ -549,22 +554,21 @@ def recordNodesParallelDuringTx(
         ]
         time.sleep(max(0.0, float(receiver_arm_s)))
 
-        for attempt_idx in range(attempts):
-            if all(future.done() for future in futures):
-                break
-            tx_started = False
-            try:
-                print(f"Sending CaST TX probe burst {attempt_idx + 1}/{attempts} from node {tx_node}")
-                if configure_tx_callback is not None:
-                    configure_tx_callback()
-                startTXNode(tx_node, configure_callback=configure_tx_callback)
-                tx_started = True
-                time.sleep(max(0.0, float(tx_burst_s)))
-            finally:
-                if tx_started:
-                    stopTXNode(tx_node)
-            if attempt_idx < attempts - 1:
-                time.sleep(max(0.0, float(tx_retry_gap_s)))
+        tx_started = False
+        try:
+            if configure_tx_callback is not None:
+                configure_tx_callback()
+            tx_active_s = (
+                attempts * max(0.0, float(tx_burst_s)) +
+                max(0, attempts - 1) * max(0.0, float(tx_retry_gap_s))
+            )
+            print(f"Sending CaST TX probe window from node {tx_node} for {tx_active_s:.3f}s")
+            startTXNode(tx_node, configure_callback=configure_tx_callback)
+            tx_started = True
+            time.sleep(max(0.0, tx_active_s))
+        finally:
+            if tx_started:
+                stopTXNode(tx_node)
 
         for future in futures:
             nodeID, data, ts = future.result()
