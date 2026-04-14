@@ -106,6 +106,10 @@ class PHY:
     def setTxPnSequence(self,sequence="glfsr"):
         self.mode["tx"] = "pnSequence"
         self.transmitter.set_tx_pnSequence(sequence)
+
+    def setTxCastProbe(self, sequence="cast"):
+        self.mode["tx"] = "castProbe"
+        self.transmitter.set_tx_cast_probe(sequence)
         
     def setTxFileSource(self,filename="/home/siwn/siwn-node/network/Matlab/BPSK.dat"):
         self.mode["tx"] = "fileSource"
@@ -137,6 +141,13 @@ class PHY:
             return "Setting mode: "+self.mode["rx"]
         else:
             return "Omitting setting mode: "+self.mode["rx"]
+
+    def set_receive_cast_probe(self):
+        self.receiver.set_rx_cast_probe()
+        if self.mode["rx"] != "castProbe":
+            self.mode["rx"] = "castProbe"
+            return "Setting mode: "+self.mode["rx"]
+        return "Omitting setting mode: "+self.mode["rx"]
         
     def set_receive_MPSK(self,M=2):
         if self.mode["rx"] != str(M)+"PSK":
@@ -163,17 +174,44 @@ class PHY:
             "chan_est": scalar_samples,
         }
 
-    def record_wifi_probe_data(self, samples=1024):
+    def record_wifi_probe_data(self, samples=1024, max_wait_s=None):
         if self.mode["rx"] != "wifiProbe":
             self.set_receive_wifi_probe()
+        if hasattr(self.receiver, "clear_wifi_probe_sockets"):
+            self.receiver.clear_wifi_probe_sockets()
         self.receiver.start()
         try:
             required_counts = self._normalize_wifi_probe_required_counts(samples)
-            eq = self.receiver.retrieve_wifi_probe_data(samples=required_counts)
+            eq = self.receiver.retrieve_wifi_probe_data(samples=required_counts, max_wait_s=max_wait_s)
             # expose timings for API/debug without changing existing keys
             if hasattr(self.receiver, "last_wifi_probe_timing"):
                 eq["__timings__"] = self.receiver.last_wifi_probe_timing
             return eq
+        finally:
+            self.receiver.stop()
+
+    def record_cast_probe_data(
+        self,
+        samples=32768,
+        sequence="cast",
+        num_taps=128,
+        max_wait_s=2.0,
+        detection_threshold=0.05,
+        estimation_window_repetitions=4,
+    ):
+        if self.mode["rx"] != "castProbe":
+            self.set_receive_cast_probe()
+        self.receiver.clear_UDP_socket()
+        self.receiver.start()
+        try:
+            return self.receiver.retrieve_cast_probe_data(
+                samples=samples,
+                max_wait_s=max_wait_s,
+                sequence=sequence,
+                num_taps=num_taps,
+                detection_threshold=detection_threshold,
+                estimation_window_repetitions=estimation_window_repetitions,
+            )
         finally:
             self.receiver.stop()
 

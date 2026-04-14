@@ -9,9 +9,55 @@
 # GNU Radio version: 3.8.5.0
 # Ref: https://github.com/wineslab/cast/blob/main/radio_api/gnuradio_gui/tx.py
 
+from pathlib import Path
+
 from gnuradio import blocks, gr, uhd
 import sys
 import signal
+
+CAST_SEQUENCE_DIR = Path(__file__).resolve().parent / "cast_sequences"
+CAST_SEQUENCE_CSV_STEMS = {
+    "ga128": "ga128_bpsk",
+    "glfsr": "glfsr_bpsk",
+    "ls1": "ls1_bpsk",
+    "ls1_all": "ls1all_bpsk",
+    "gold": "gold_bpsk",
+}
+CAST_SEQUENCE_ALIASES = {
+    "cast": "glfsr",
+    "cast_glfsr": "glfsr",
+    "ga128_bpsk": "ga128",
+    "glfsr_bpsk": "glfsr",
+    "ls1_bpsk": "ls1",
+    "ls1all": "ls1_all",
+    "ls1all_bpsk": "ls1_all",
+    "ls1_all_bpsk": "ls1_all",
+    "gold_bpsk": "gold",
+}
+
+
+def normalize_sequence_name(sequence):
+    key = str(sequence or "glfsr").strip().lower()
+    return CAST_SEQUENCE_ALIASES.get(key, key)
+
+
+def _load_bpsk_csv(csv_path):
+    values = []
+    with csv_path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            for token in line.strip().split(","):
+                if token:
+                    values.append(float(token))
+    return tuple(values)
+
+
+def load_cast_sequence(sequence="glfsr"):
+    canonical_name = normalize_sequence_name(sequence)
+    csv_stem = CAST_SEQUENCE_CSV_STEMS.get(canonical_name)
+    if csv_stem is None:
+        raise ValueError(f"Unsupported CaST probe sequence: {sequence!r}")
+    return _load_bpsk_csv(CAST_SEQUENCE_DIR / f"{csv_stem}.csv")
+
 
 class pnSequence(gr.top_block):
 
@@ -34,7 +80,7 @@ class pnSequence(gr.top_block):
         self.buffer_size = buffer_size
         self.bandwidth = bandwidth
         self.SDR_ADDR = SDR_ADDR
-        self.sequence = sequence
+        self.sequence = "glfsr"
         ### See https://ece.northeastern.edu/wineslab/papers/villa2022wintech.pdf for sequences ###
         self.sequences = {"ls2":(1,1,-1,1,1,1,1,-1,1,1,-1,1,-1,-1,-1,1,1,1,-1,1,1,1,1,-1,-1,-1,1,-1,1,1,1,-1,1,1,-1,1,1,1,1,-1,1,1,-1,1,-1,-1,-1,1,-1,-1,1,-1,-1,-1,-1,1,1,1,-1,1,-1,-1,-1,1,1,1,-1,1,1,1,1,-1,1,1,-1,1,-1,-1,-1,1,1,1,-1,1,1,1,1,-1,-1,-1,1,-1,1,1,1,-1,-1,-1,1,-1,-1,-1,-1,1,-1,-1,1,-1,1,1,1,-1,1,1,-1,1,1,1,1,-1,-1,-1,1,-1,1,1,1,-1,-1,-1,1,-1,-1,-1,-1,1,-1,-1,1,-1,1,1,1,-1,-1,-1,1,-1,-1,-1,-1,1,1,1,-1,1,-1,-1,-1,1,-1,-1,1,-1,-1,-1,-1,1,-1,-1,1,-1,1,1,1,-1,1,1,-1,1,1,1,1,-1,-1,-1,1,-1,1,1,1,-1,1,1,-1,1,1,1,1,-1,1,1,-1,1,-1,-1,-1,1,1,1,-1,1,1,1,1,-1,-1,-1,1,-1,1,1,1,-1,-1,-1,1,-1,-1,-1,-1,1,-1,-1,1,-1,1,1,1,-1,1,1,-1,1,1,1,1,-1,-1,-1,1,-1,1,1,1,-1),
                         "ls1_all":(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,-1,1,1,1,1,-1,1,1,-1,1,-1,-1,-1,1,1,1,-1,1,1,1,1,-1,-1,-1,1,-1,1,1,1,-1,1,1,-1,1,1,1,1,-1,1,1,-1,1,-1,-1,-1,1,-1,-1,1,-1,-1,-1,-1,1,1,1,-1,1,-1,-1,-1,1,1,1,-1,1,1,1,1,-1,1,1,-1,1,-1,-1,-1,1,1,1,-1,1,1,1,1,-1,-1,-1,1,-1,1,1,1,-1,-1,-1,1,-1,-1,-1,-1,1,-1,-1,1,-1,1,1,1,-1,1,1,-1,1,1,1,1,-1,-1,-1,1,-1,1,1,1,-1,1,1,-1,1,1,1,1,-1,1,1,-1,1,-1,-1,-1,1,1,1,-1,1,1,1,1,-1,-1,-1,1,-1,1,1,1,-1,1,1,-1,1,1,1,1,-1,1,1,-1,1,-1,-1,-1,1,-1,-1,1,-1,-1,-1,-1,1,1,1,-1,1,-1,-1,-1,1,-1,-1,1,-1,-1,-1,-1,1,-1,-1,1,-1,1,1,1,-1,-1,-1,1,-1,-1,-1,-1,1,1,1,-1,1,-1,-1,-1,1,1,1,-1,1,1,1,1,-1,1,1,-1,1,-1,-1,-1,1,-1,-1,1,-1,-1,-1,-1,1,1,1,-1,1,-1,-1,-1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,-1,-1,-1,1,-1,1,1,1,-1,-1,-1,-1,1,-1,-1,1,-1,-1,-1,1,-1,1,1,-1,1,1,1,1,-1,1,1,1,-1,-1,-1,1,-1,1,1,1,-1,-1,-1,-1,1,-1,-1,-1,1,1,1,-1,1,-1,-1,1,-1,-1,-1,-1,1,-1,-1,1,-1,-1,-1,1,-1,1,1,1,-1,-1,-1,-1,1,-1,-1,1,-1,-1,-1,1,-1,1,1,-1,1,1,1,1,-1,1,1,-1,1,1,1,-1,1,-1,-1,-1,1,1,1,1,-1,1,1,1,-1,-1,-1,1,-1,1,1,-1,1,1,1,1,-1,1,1,1,-1,-1,-1,1,-1,1,1,1,-1,-1,-1,-1,1,-1,-1,1,-1,-1,-1,1,-1,1,1,-1,1,1,1,1,-1,1,1,1,-1,-1,-1,1,-1,1,1,1,-1,-1,-1,-1,1,-1,-1,-1,1,1,1,-1,1,-1,-1,1,-1,-1,-1,-1,1,-1,-1,-1,1,1,1,-1,1,-1,-1,-1,1,1,1,1,-1,1,1,-1,1,1,1,-1,1,-1,-1,1,-1,-1,-1,-1,1,-1,-1,1,-1,-1,-1,1,-1,1,1,1,-1,-1,-1,-1,1,-1,-1,-1,1,1,1,-1,1,-1,-1,1,-1,-1,-1,-1,1,-1,-1),
@@ -44,6 +90,9 @@ class pnSequence(gr.top_block):
                         "glfsr":(1,-1,1,1,-1,-1,-1,1,1,1,1,-1,1,-1,-1,-1,-1,1,1,1,1,1,1,1,1,-1,-1,1,-1,-1,-1,-1,1,-1,1,-1,-1,1,1,1,1,1,-1,1,-1,1,-1,1,-1,1,1,1,-1,-1,-1,-1,-1,1,1,-1,-1,-1,1,-1,1,-1,1,1,-1,-1,1,1,-1,-1,1,-1,1,1,1,1,1,1,-1,1,1,1,1,-1,-1,1,1,-1,1,1,1,-1,1,1,1,-1,-1,1,-1,1,-1,1,-1,-1,1,-1,1,-1,-1,-1,1,-1,-1,1,-1,1,1,-1,1,-1,-1,-1,1,1,-1,-1,1,1,1,-1,-1,1,1,1,1,-1,-1,-1,1,1,-1,1,1,-1,-1,-1,-1,1,-1,-1,-1,1,-1,1,1,1,-1,1,-1,1,1,1,1,-1,1,1,-1,1,1,1,1,1,-1,-1,-1,-1,1,1,-1,1,-1,-1,1,1,-1,1,-1,1,1,-1,1,1,-1,1,-1,1,-1,-1,-1,-1,-1,1,-1,-1,1,1,1,-1,1,1,-1,-1,1,-1,-1,1,-1,-1,1,1,-1,-1,-1,-1,-1,-1,1,1,1,-1,1,-1,-1,1,-1,-1,-1,1,1,1,-1,-1,-1,1,-1,-1,-1,-1,-1,-1,-1),
                         "ga128":(1,1,-1,-1,-1,-1,-1,-1,-1,1,-1,1,1,-1,-1,1,1,1,-1,-1,1,1,1,1,-1,1,-1,1,-1,1,1,-1,-1,-1,1,1,1,1,1,1,1,-1,1,-1,-1,1,1,-1,1,1,-1,-1,1,1,1,1,-1,1,-1,1,-1,1,1,-1,1,1,-1,-1,-1,-1,-1,-1,-1,1,-1,1,1,-1,-1,1,1,1,-1,-1,1,1,1,1,-1,1,-1,1,-1,1,1,-1,1,1,-1,-1,-1,-1,-1,-1,-1,1,-1,1,1,-1,-1,1,-1,-1,1,1,-1,-1,-1,-1,1,-1,1,-1,1,-1,-1,1)}
         
+        self._load_cast_sequences()
+        self.sequence = self._resolve_sequence_name(sequence)
+
         ##################################################
         # Blocks
         ##################################################
@@ -77,6 +126,26 @@ class pnSequence(gr.top_block):
         self.connect((self.blocks_float_to_complex_0, 0), (self.usrp_sink, 0))
         self.connect((self.blocks_null_source_1, 0), (self.blocks_float_to_complex_0, 1))
         self.connect((self.blocks_vector_source_x_1, 0), (self.blocks_float_to_complex_0, 0))
+
+    def _load_cast_sequences(self):
+        for canonical_name, csv_stem in CAST_SEQUENCE_CSV_STEMS.items():
+            csv_path = CAST_SEQUENCE_DIR / f"{csv_stem}.csv"
+            if not csv_path.exists():
+                continue
+            samples = _load_bpsk_csv(csv_path)
+            self.sequences[canonical_name] = samples
+            self.sequences[csv_stem] = samples
+
+        for alias, canonical_name in CAST_SEQUENCE_ALIASES.items():
+            if canonical_name in self.sequences:
+                self.sequences[alias] = self.sequences[canonical_name]
+
+    def _resolve_sequence_name(self, sequence):
+        sequence_name = normalize_sequence_name(sequence)
+        if sequence_name not in self.sequences:
+            available = ", ".join(sorted(self.sequences))
+            raise ValueError(f"Unknown PN/CaST sequence {sequence!r}. Available sequences: {available}")
+        return sequence_name
 
     def get_samp_rate(self):
         return self.samp_rate
@@ -112,12 +181,15 @@ class pnSequence(gr.top_block):
     def get_ga128(self):
         return self.sequences["ga128"]
 
+    def get_gold(self):
+        return self.sequences["gold"]
+
     def get_gain(self):
         return self.gain
     
     def set_sequence(self,sequence):
-        self.sequence = sequence
-        self.blocks_vector_source_x_1 = blocks.vector_source_f(self.sequences[self.sequence], True, 1, [])
+        self.sequence = self._resolve_sequence_name(sequence)
+        self.blocks_vector_source_x_1.set_data(self.sequences[self.sequence], [])
 
     def set_gain(self, gain):
         self.gain = gain

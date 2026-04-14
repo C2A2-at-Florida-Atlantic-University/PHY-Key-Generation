@@ -99,6 +99,7 @@ def recordIQ(nodeID,port,samples):
     data = {
         "samples": samples
     }
+    response_json = None
     try:
         response = _request_with_recovery("POST", nodeID, port, path, data=data, timeout_s=None)
         response_json = response.json()
@@ -120,9 +121,12 @@ def recordWiFiProbe(nodeID,port,samples,warmup=None):
     if warmup:
         data["api_retries"] = int(warmup.get("api_retries", 0))
         data["strict_counts"] = bool(warmup.get("strict_counts", False))
-        record_timeout_s = warmup.get("record_timeout_s", None)
+        if "max_wait_s" in warmup:
+            data["max_wait_s"] = float(warmup["max_wait_s"])
+        record_timeout_s = warmup.get("record_timeout_s", REQUEST_TIMEOUT_S)
     else:
-        record_timeout_s = None
+        record_timeout_s = REQUEST_TIMEOUT_S
+    response_json = None
     try:
         response = _request_with_recovery("POST", nodeID, port, path, data=data, timeout_s=record_timeout_s)
         response_json = response.json()
@@ -132,6 +136,34 @@ def recordWiFiProbe(nodeID,port,samples,warmup=None):
                 raise KeyError(f"Missing '{section}' in WiFi probe response")
             if "real" not in response_json[section] or "imag" not in response_json[section]:
                 raise KeyError(f"Missing 'real'/'imag' in WiFi probe section '{section}'")
+        return response_json
+    except Exception as error:
+        print("Error: ", error)
+        print("Response:",response_json)
+        return None
+
+def recordCastProbe(nodeID,port,samples,warmup=None):
+    path = "/rx/recordCastProbe"
+    warmup = warmup or {}
+    data = {
+        "samples": int(warmup.get("samples", samples)),
+        "sequence": warmup.get("sequence", "cast"),
+        "num_taps": int(warmup.get("num_taps", 128)),
+        "detection_threshold": float(warmup.get("detection_threshold", 0.05)),
+        "estimation_window_repetitions": int(warmup.get("estimation_window_repetitions", 4)),
+    }
+    if "max_wait_s" in warmup:
+        data["max_wait_s"] = float(warmup["max_wait_s"])
+    record_timeout_s = warmup.get("record_timeout_s", REQUEST_TIMEOUT_S)
+    response_json = None
+    try:
+        response = _request_with_recovery("POST", nodeID, port, path, data=data, timeout_s=record_timeout_s)
+        response_json = response.json()
+        for section in ["iq", "probe", "cir", "taps"]:
+            if section not in response_json:
+                raise KeyError(f"Missing '{section}' in CaST probe response")
+            if "real" not in response_json[section] or "imag" not in response_json[section]:
+                raise KeyError(f"Missing 'real'/'imag' in CaST probe section '{section}'")
         return response_json
     except Exception as error:
         print("Error: ", error)
@@ -150,6 +182,14 @@ def setRxWiFiProbe(nodeID,port,chan_est=0):
     path = "/rx/set/wifiProbe"
     data = {
         "chan_est": chan_est
+    }
+    response = _request_with_recovery("POST", nodeID, port, path, data=data)
+    return response
+
+def setRxCastProbe(nodeID,port):
+    path = "/rx/set/castProbe"
+    data = {
+        "contents": "castProbe"
     }
     response = _request_with_recovery("POST", nodeID, port, path, data=data)
     return response
@@ -198,6 +238,21 @@ def set_tx_pnSequence(nodeID,port,sequence):
     path = "/tx/set/pnSequence"
     data = {
         "sequence": sequence
+    }
+    response = _request_with_recovery("POST", nodeID, port, path, data=data)
+    return response
+
+def _get_sequence_value(metadata, key, default):
+    metadata = metadata or {}
+    value = metadata.get(key, default)
+    if isinstance(value, dict):
+        return value.get("sequence", default)
+    return value if value is not None else default
+
+def set_tx_castProbe(nodeID,port,metadata=None):
+    path = "/tx/set/castProbe"
+    data = {
+        "sequence": _get_sequence_value({"castProbe": metadata}, "castProbe", "cast")
     }
     response = _request_with_recovery("POST", nodeID, port, path, data=data)
     return response
@@ -283,6 +338,7 @@ def plotTimeDomainSideBySide(I1, Q1, I2, Q2, samples=-1, id1=0, id2=0, ax1=None,
     plt.pause(0.1)
 
 def setTXNode(params,type,nodeID,metadata = {"pnSequence":"glfsr"}):
+    metadata = metadata or {}
     print("type:",type)
     _node_active_role[nodeID] = "tx"
     _last_tx_setup[nodeID] = {"params": params, "type": type, "metadata": metadata}
@@ -309,7 +365,9 @@ def setTXNode(params,type,nodeID,metadata = {"pnSequence":"glfsr"}):
         if type == "sinusoid":
             set_tx_sinusoid(nodeID,port["radio"])
         elif type == "pnSequence":
-            set_tx_pnSequence(nodeID,port["radio"],metadata[type])
+            set_tx_pnSequence(nodeID,port["radio"],_get_sequence_value(metadata, type, "glfsr"))
+        elif type == "castProbe":
+            set_tx_castProbe(nodeID,port["radio"],metadata.get(type, {}))
         elif type == "deltaPulse":
             set_tx_deltaPulse(nodeID,port["radio"],metadata[type])
         elif type == "wifiProbe":
@@ -352,6 +410,9 @@ def setRXNode(params,nodeID,type="IQ",metadata=None):
         chan_est = metadata.get(type, {}).get("chan_est", 0)
         response = setRxWiFiProbe(nodeID,port["radio"],chan_est=chan_est)
         print("Response SetRXNode WiFiProbe: ", response)
+    elif type == "castProbe":
+        response = setRxCastProbe(nodeID,port["radio"])
+        print("Response SetRXNode CastProbe: ", response)
     else:
         response = setRxIQ(nodeID,port["radio"])
         print("Response SetRXNode IQ: ", response)
@@ -364,6 +425,10 @@ def RecordNodeData(nodeID,samples,type="IQ",metadata=None):
         metadata = metadata or {}
         warmup_cfg = metadata.get("wifiProbe", {})
         return recordWiFiProbe(nodeID,port["radio"],samples,warmup=warmup_cfg)
+    if type == "castProbe":
+        metadata = metadata or {}
+        cast_cfg = metadata.get("castProbe", {})
+        return recordCastProbe(nodeID,port["radio"],samples,warmup=cast_cfg)
     return recordIQ(nodeID,port["radio"],samples)
 
 def setRXNodesParallel(params, nodeIDs, type="IQ", metadata=None):
@@ -430,7 +495,7 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
             print("Setting TX Node: ", Bob)
             setTXNode(params,type,Bob,metadata)
             print("Setting RX Nodes: ", Alice, Eve)
-            setRXNodesParallel(params, [Alice, Eve])
+            setRXNodesParallel(params, [Alice, Eve], type=type, metadata=metadata)
             time.sleep(timeSleep)
             
             valid_capture = False
@@ -440,10 +505,10 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
             retry_idx = 0
             while True:
                 print("Recording RX Nodes: ", Alice, Eve)
-                rx_results = recordNodesParallel([Alice, Eve], samples=numberOfSamples)
-                real1, imaginary1 = rx_results[Alice]["data"]
+                rx_results = recordNodesParallel([Alice, Eve], samples=numberOfSamples, type=type, metadata=metadata)
+                real1, imaginary1 = _extract_iq_record(rx_results[Alice]["data"])
                 timestamp1 = rx_results[Alice]["timestamp"]
-                real2, imaginary2 = rx_results[Eve]["data"]
+                real2, imaginary2 = _extract_iq_record(rx_results[Eve]["data"])
                 timestamp2 = rx_results[Eve]["timestamp"]
 
                 valid_capture = _iq_samples_valid(real1, imaginary1, min_samples=1) and _iq_samples_valid(real2, imaginary2, min_samples=1)
@@ -487,7 +552,7 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
             print(("Setting TX Node: ", Alice))
             setTXNode(params,type,Alice,metadata)
             print("Setting RX Nodes: ", Bob, Eve)
-            setRXNodesParallel(params, [Bob, Eve])
+            setRXNodesParallel(params, [Bob, Eve], type=type, metadata=metadata)
             time.sleep(timeSleep)
             
             valid_capture = False
@@ -497,10 +562,10 @@ def collect_data_ping_pong_3Nodes(params, nodes, packages, type, channel_Labels 
             retry_idx = 0
             while True:
                 print("Recording RX Nodes: ", Bob, Eve)
-                rx_results = recordNodesParallel([Bob, Eve], samples=numberOfSamples)
-                real1, imaginary1 = rx_results[Bob]["data"]
+                rx_results = recordNodesParallel([Bob, Eve], samples=numberOfSamples, type=type, metadata=metadata)
+                real1, imaginary1 = _extract_iq_record(rx_results[Bob]["data"])
                 timestamp1 = rx_results[Bob]["timestamp"]
-                real2, imaginary2 = rx_results[Eve]["data"]
+                real2, imaginary2 = _extract_iq_record(rx_results[Eve]["data"])
                 timestamp2 = rx_results[Eve]["timestamp"]
 
                 valid_capture = _iq_samples_valid(real1, imaginary1, min_samples=1) and _iq_samples_valid(real2, imaginary2, min_samples=1)
@@ -559,6 +624,11 @@ def _iq_samples_valid(real_values, imag_values, min_samples=1):
         return False
     return True
 
+def _extract_iq_record(record):
+    if isinstance(record, dict) and "iq" in record:
+        return record["iq"].get("real"), record["iq"].get("imag")
+    return record
+
 def _wifi_probe_is_valid(probe_data, sample_counts=None):
     if probe_data is None:
         return False
@@ -578,12 +648,40 @@ def _wifi_probe_is_valid(probe_data, sample_counts=None):
             return False
     return True
 
+def _cast_probe_is_valid(probe_data, min_iq_samples=1, min_taps=1):
+    if probe_data is None or not bool(probe_data.get("detected", False)):
+        return False
+    for section, min_samples in [("iq", min_iq_samples), ("taps", min_taps), ("cir", min_taps)]:
+        if section not in probe_data:
+            return False
+        if "real" not in probe_data[section] or "imag" not in probe_data[section]:
+            return False
+        if not _iq_samples_valid(probe_data[section]["real"], probe_data[section]["imag"], min_samples=min_samples):
+            return False
+    return True
+
+def _append_cast_probe_sample(feature_store, probe_data, numberOfSamples, num_taps):
+    metadata = probe_data.get("metadata", {})
+    iq_real, iq_imag = _extract_iq_record(probe_data)
+    feature_store["iq_I"].append(_slice_samples(iq_real, numberOfSamples))
+    feature_store["iq_Q"].append(_slice_samples(iq_imag, numberOfSamples))
+    feature_store["taps_I"].append(_slice_samples(probe_data["taps"]["real"], num_taps))
+    feature_store["taps_Q"].append(_slice_samples(probe_data["taps"]["imag"], num_taps))
+    feature_store["cir_I"].append(_slice_samples(probe_data["cir"]["real"], num_taps))
+    feature_store["cir_Q"].append(_slice_samples(probe_data["cir"]["imag"], num_taps))
+    feature_store["pdp_db"].append(_slice_samples(probe_data.get("pdp_db", []), num_taps))
+    feature_store["detected"].append(bool(probe_data.get("detected", False)))
+    feature_store["normalized_peak"].append(float(metadata.get("normalized_peak", 0.0)))
+    feature_store["pathloss_db"].append(float(metadata.get("pathloss_db", 0.0)))
+    feature_store["frame_phase"].append(int(metadata.get("frame_phase", -1)))
+    feature_store["peak_index"].append(int(metadata.get("peak_index", -1)))
+
 def _get_wifi_probe_sample_counts(metadata):
-    # Default to twice the nominal WiFi probe lengths.
+    # Default to one complete WiFi-probe frame so CSI, pilots, and symbols stay aligned.
     sample_counts = {
-        "iq": 96,
-        "pilots": 8,
-        "csi": 104,
+        "iq": 720,
+        "pilots": 4,
+        "csi": 52,
         "chan_est_samples": 128,
     }
     wifi_metadata = metadata.get("wifiProbe", {})
@@ -657,6 +755,8 @@ def collect_data_ping_pong_3Nodes_wifi_probe(params, nodes, packages, metadata, 
     Bob = nodes[1]
     Eve = nodes[2]
     sample_counts = _get_wifi_probe_sample_counts(metadata)
+    wifi_metadata = metadata.get("wifiProbe", {})
+    max_capture_retries = int(wifi_metadata.get("max_capture_retries", 5))
 
     feature_store = {
         "iq": {"I": [], "Q": []},
@@ -665,7 +765,7 @@ def collect_data_ping_pong_3Nodes_wifi_probe(params, nodes, packages, metadata, 
         "chan_est_samples": {"I": [], "Q": []},
     }
 
-    generatePlots = True
+    generatePlots = bool(wifi_metadata.get("generate_plots", False))
     fig = None
     ax1 = None
     ax2 = None
@@ -686,7 +786,7 @@ def collect_data_ping_pong_3Nodes_wifi_probe(params, nodes, packages, metadata, 
             probe_data_2 = None
             timestamp1, timestamp2 = None, None
             retry_idx = 0
-            while True:
+            while retry_idx <= max_capture_retries:
                 print("Recording RX Nodes: ", Alice, Eve)
                 rx_results = recordNodesParallel([Alice, Eve], samples=sample_counts, type="wifiProbe", metadata=metadata)
                 probe_data_1 = rx_results[Alice]["data"]
@@ -698,9 +798,12 @@ def collect_data_ping_pong_3Nodes_wifi_probe(params, nodes, packages, metadata, 
                 if valid_capture:
                     break
                 retry_idx += 1
-                print(f"Retrying read (no RX rearm): empty/invalid WiFi probe samples detected (attempt {retry_idx})")
-                time.sleep(timeSleep)
+                if retry_idx <= max_capture_retries:
+                    print(f"Retrying read (no RX rearm): empty/invalid WiFi probe samples detected (attempt {retry_idx})")
+                    time.sleep(timeSleep)
 
+            if not valid_capture:
+                print(f"[WARN] Skipping WiFi probe capture for TX node {Bob} after {max_capture_retries + 1} attempts")
             stopTXNode(Bob)
 
             if valid_capture:
@@ -745,7 +848,7 @@ def collect_data_ping_pong_3Nodes_wifi_probe(params, nodes, packages, metadata, 
             probe_data_2 = None
             timestamp1, timestamp2 = None, None
             retry_idx = 0
-            while True:
+            while retry_idx <= max_capture_retries:
                 print("Recording RX Nodes: ", Bob, Eve)
                 rx_results = recordNodesParallel([Bob, Eve], samples=sample_counts, type="wifiProbe", metadata=metadata)
                 probe_data_1 = rx_results[Bob]["data"]
@@ -757,9 +860,12 @@ def collect_data_ping_pong_3Nodes_wifi_probe(params, nodes, packages, metadata, 
                 if valid_capture:
                     break
                 retry_idx += 1
-                print(f"Retrying read (no RX rearm): empty/invalid WiFi probe samples detected (attempt {retry_idx})")
-                time.sleep(timeSleep)
+                if retry_idx <= max_capture_retries:
+                    print(f"Retrying read (no RX rearm): empty/invalid WiFi probe samples detected (attempt {retry_idx})")
+                    time.sleep(timeSleep)
                 
+            if not valid_capture:
+                print(f"[WARN] Skipping WiFi probe capture for TX node {Alice} after {max_capture_retries + 1} attempts")
             stopTXNode(Alice)
 
             if valid_capture:
@@ -814,6 +920,113 @@ def collect_data_ping_pong_3Nodes_wifi_probe(params, nodes, packages, metadata, 
         timestamp,
     )
 
+def collect_data_ping_pong_3Nodes_cast_probe(params, nodes, packages, metadata, channel_Labels=[1,2,3]):
+    i = 1
+    channel = []
+    instance = []
+    ids = []
+    tx = []
+    rx = []
+    timestamp = []
+    sample_id = 0
+    timeSleep = 0.1
+    Alice = nodes[0]
+    Bob = nodes[1]
+    Eve = nodes[2]
+    cast_metadata = metadata.get("castProbe", {})
+    numberOfSamples = int(cast_metadata.get("samples", 32768))
+    num_taps = int(cast_metadata.get("num_taps", 128))
+    max_capture_retries = int(cast_metadata.get("max_capture_retries", 5))
+
+    feature_store = {
+        "iq_I": [],
+        "iq_Q": [],
+        "taps_I": [],
+        "taps_Q": [],
+        "cir_I": [],
+        "cir_Q": [],
+        "pdp_db": [],
+        "detected": [],
+        "normalized_peak": [],
+        "pathloss_db": [],
+        "frame_phase": [],
+        "peak_index": [],
+    }
+
+    while i < packages * 2 + 1:
+        if i % 2 == 0:
+            tx_node = Bob
+            rx_nodes = [Alice, Eve]
+            labels = [channel_Labels[0], channel_Labels[1]]
+            instances = [1, 2]
+        else:
+            sample_id += 1
+            tx_node = Alice
+            rx_nodes = [Bob, Eve]
+            labels = [channel_Labels[0], channel_Labels[2]]
+            instances = [3, 4]
+
+        print("Setting TX Node: ", tx_node)
+        setTXNode(params, "castProbe", tx_node, metadata)
+        print("Setting RX Nodes: ", *rx_nodes)
+        setRXNodesParallel(params, rx_nodes, type="castProbe", metadata=metadata)
+        time.sleep(timeSleep)
+
+        rx_results = None
+        valid_capture = False
+        retry_idx = 0
+        while retry_idx <= max_capture_retries:
+            print("Recording RX Nodes: ", *rx_nodes)
+            rx_results = recordNodesParallel(rx_nodes, samples=numberOfSamples, type="castProbe", metadata=metadata)
+            valid_capture = all(
+                _cast_probe_is_valid(rx_results[node]["data"], min_iq_samples=1, min_taps=num_taps)
+                for node in rx_nodes
+            )
+            if valid_capture:
+                break
+            retry_idx += 1
+            if retry_idx <= max_capture_retries:
+                print(f"Retrying read: invalid/undetected CaST probe capture (attempt {retry_idx})")
+                time.sleep(timeSleep)
+
+        if not valid_capture:
+            print(f"[WARN] Skipping CaST probe capture for TX node {tx_node} after {max_capture_retries + 1} attempts")
+        stopTXNode(tx_node)
+
+        if valid_capture:
+            for rx_node, label, inst in zip(rx_nodes, labels, instances):
+                probe_data = rx_results[rx_node]["data"]
+                _append_cast_probe_sample(feature_store, probe_data, numberOfSamples, num_taps)
+                channel.append(label)
+                instance.append(inst)
+                ids.append(sample_id)
+                tx.append(tx_node)
+                rx.append(rx_node)
+                timestamp.append(rx_results[rx_node]["timestamp"])
+
+        i += 1
+
+    return (
+        feature_store["iq_I"],
+        feature_store["iq_Q"],
+        feature_store["taps_I"],
+        feature_store["taps_Q"],
+        feature_store["cir_I"],
+        feature_store["cir_Q"],
+        feature_store["pdp_db"],
+        feature_store["detected"],
+        feature_store["normalized_peak"],
+        feature_store["pathloss_db"],
+        feature_store["frame_phase"],
+        feature_store["peak_index"],
+        channel,
+        instance,
+        ids,
+        tx,
+        rx,
+        timestamp,
+    )
+
 def create_dataset(filename, i_samples, q_samples, channel, instance, ids, tx, rx, timestamp):
     with h5py.File(filename, "w") as data_file:
         data_file.create_dataset("I", data=i_samples)
@@ -826,6 +1039,48 @@ def create_dataset(filename, i_samples, q_samples, channel, instance, ids, tx, r
         data_file.create_dataset("timestamp", data=[timestamp])
     # Save dataset to file
     print("Dataset saved to", filename)
+
+def create_cast_probe_dataset(
+        filename,
+        iq_I,
+        iq_Q,
+        taps_I,
+        taps_Q,
+        cir_I,
+        cir_Q,
+        pdp_db,
+        detected,
+        normalized_peak,
+        pathloss_db,
+        frame_phase,
+        peak_index,
+        channel,
+        instance,
+        ids,
+        tx,
+        rx,
+        timestamp
+    ):
+    with h5py.File(filename, "w") as data_file:
+        data_file.create_dataset("iq_I", data=iq_I)
+        data_file.create_dataset("iq_Q", data=iq_Q)
+        data_file.create_dataset("taps_I", data=taps_I)
+        data_file.create_dataset("taps_Q", data=taps_Q)
+        data_file.create_dataset("cir_I", data=cir_I)
+        data_file.create_dataset("cir_Q", data=cir_Q)
+        data_file.create_dataset("pdp_db", data=pdp_db)
+        data_file.create_dataset("detected", data=detected)
+        data_file.create_dataset("normalized_peak", data=normalized_peak)
+        data_file.create_dataset("pathloss_db", data=pathloss_db)
+        data_file.create_dataset("frame_phase", data=frame_phase)
+        data_file.create_dataset("peak_index", data=peak_index)
+        data_file.create_dataset("ids", data=[ids])
+        data_file.create_dataset("instance", data=[instance])
+        data_file.create_dataset("channel", data=[channel])
+        data_file.create_dataset("tx", data=[tx])
+        data_file.create_dataset("rx", data=[rx])
+        data_file.create_dataset("timestamp", data=[timestamp])
+    print("CaST probe dataset saved to", filename)
 
 def create_wifi_probe_dataset(
         filename,
@@ -942,7 +1197,8 @@ def loadOTADenseConfig(
         4:gainConfigs["b210"],
         5:gainConfigs["b210"],
         6:gainConfigs["b210"],
-        7:gainConfigs["b210"]
+        7:gainConfigs["b210"],
+        8:gainConfigs["b210"],
     }
     if nodeIDs is None:
         nodeIDs = NodeIPs.keys()
@@ -983,7 +1239,7 @@ def loadOTARooftopConfig(
 if __name__ == "__main__":
     
     # nodeIDs = [2,3,4,5,6,7,8] #[1,2,3,4,5,6,7,8]
-    nodeIDs = [1,2,3] #[1,2,3,4,5,6,7,8]
+    nodeIDs = [1,2,3,4] #[1,2,3,4,5,6,7,8]
     # NodeIPs, NodeGains, nodeConfigs = loadOTALabConfig(nodeIDs = nodeIDs)
     NodeIPs, NodeGains, nodeConfigs = loadOTADenseConfig(nodeIDs = nodeIDs)
     # Removing certain nodes that data has been collected
@@ -993,7 +1249,7 @@ if __name__ == "__main__":
     #                     [5, 7, 8], [5, 8, 2], [5, 8, 3], 
     #                     [5, 8, 4], [5, 8, 6], [5, 8, 7], 
     #                     [6, 7, 2]]
-    configsToRemove = [[1,2,3]]
+    configsToRemove = []
     nodeConfigs = [config for config in nodeConfigs if config not in configsToRemove]
     # nodeConfigs = [[8,7,5]] # Testing with only one config
     print("Node configs: ", nodeConfigs)
@@ -1019,9 +1275,19 @@ if __name__ == "__main__":
     }
     params = {"tx":paramsTx,"rx":paramsRx}
 
-    type = "wifiProbe" #pnSequence, MPSK, sinusoid, deltaPulse, wifiProbe
+    type = "wifiProbe" #pnSequence, castProbe, MPSK, sinusoid, deltaPulse, wifiProbe
         
     metadata = {
+        "pnSequence": "glfsr",
+        "castProbe": {
+            "sequence": "cast",
+            "samples": 32768,
+            "num_taps": 128,
+            "max_wait_s": 2.0,
+            "record_timeout_s": 15.0,
+            "detection_threshold": 0.05,
+            "estimation_window_repetitions": 4
+        },
         "deltaPulse": {
             "num_bins": 1024,
             "amplitude": 1,
@@ -1034,14 +1300,18 @@ if __name__ == "__main__":
             "payload": "probe_request",
             "interval_ms": 300,
             "encoding": 0,
-            "tx_amplitude": 1,
+            "tx_amplitude": 0.6,
             "chan_est": 0,
-            "api_retries": 0,
-            "strict_counts": False,
+            "api_retries": 1,
+            "strict_counts": True,
+            "record_timeout_s": 20.0,
+            "max_wait_s": 8.0,
+            "max_capture_retries": 5,
+            "generate_plots": False,
             "sample_counts": {
-                "iq": 96,
-                "pilots": 0,
-                "csi": 104,
+                "iq": 720,
+                "pilots": 4,
+                "csi": 52,
                 "chan_est_samples": 128
             }
         }
@@ -1050,7 +1320,7 @@ if __name__ == "__main__":
     for nodes in nodeConfigs:
         print(f"Collecting data for node config: Alice={nodes[0]}, Bob={nodes[1]}, Eve={nodes[2]}")
         ts = int(time.time())
-        dataset_name = "Dataset_OTALab_Channels_"+type+"_"+str(examples)+"_"+"".join(str(node) for node in nodes)+"_"+str(ts)+".hdf5"
+        dataset_name = "Dataset_OTADense_Channels_"+type+"_"+str(examples)+"_"+"".join(str(node) for node in nodes)+"_"+str(ts)+".hdf5"
 
         if type == "wifiProbe":
             iq_I, iq_Q, pilots_I, pilots_Q, csi_I, csi_Q, chan_est_samples_I, chan_est_samples_Q, channel, instance, ids, tx, rx, timestamp = collect_data_ping_pong_3Nodes_wifi_probe(
@@ -1070,6 +1340,35 @@ if __name__ == "__main__":
                 np.array(csi_Q),
                 np.array(chan_est_samples_I),
                 np.array(chan_est_samples_Q),
+                np.array(channel),
+                np.array(instance),
+                np.array(ids),
+                np.array(tx),
+                np.array(rx),
+                np.array(timestamp)
+            )
+        elif type == "castProbe":
+            iq_I, iq_Q, taps_I, taps_Q, cir_I, cir_Q, pdp_db, detected, normalized_peak, pathloss_db, frame_phase, peak_index, channel, instance, ids, tx, rx, timestamp = collect_data_ping_pong_3Nodes_cast_probe(
+                                                params,
+                                                nodes,
+                                                examples,
+                                                metadata=metadata
+                                            )
+
+            create_cast_probe_dataset(
+                dataset_name,
+                np.array(iq_I),
+                np.array(iq_Q),
+                np.array(taps_I),
+                np.array(taps_Q),
+                np.array(cir_I),
+                np.array(cir_Q),
+                np.array(pdp_db),
+                np.array(detected),
+                np.array(normalized_peak),
+                np.array(pathloss_db),
+                np.array(frame_phase),
+                np.array(peak_index),
                 np.array(channel),
                 np.array(instance),
                 np.array(ids),

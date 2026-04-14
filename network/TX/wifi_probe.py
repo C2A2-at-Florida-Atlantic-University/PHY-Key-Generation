@@ -5,6 +5,7 @@ import os
 import sys
 import shutil
 import subprocess
+import sysconfig
 import pmt
 from gnuradio import blocks, gr, uhd
 import foo
@@ -29,41 +30,78 @@ def _get_grc_state_directory():
     return state_path
 
 
+def _get_python_site_packages():
+    try:
+        return sysconfig.get_path("platlib") or ""
+    except Exception:
+        return ""
+
+
+def _candidate_wifi_phy_hier_grc_files():
+    tx_dir = os.path.dirname(__file__)
+    workspace_root = os.path.abspath(os.path.join(tx_dir, "../../../"))
+    phy_root = os.path.abspath(os.path.join(tx_dir, "../../"))
+    prefixes = [os.environ.get("VIRTUAL_ENV", ""), sys.prefix, sys.base_prefix]
+
+    candidates = []
+    for prefix in prefixes:
+        if prefix:
+            candidates.append(
+                os.path.join(prefix, "share", "gnuradio", "examples", "ieee802_11", "wifi_phy_hier.grc")
+            )
+    candidates.extend(
+        [
+            os.path.join(workspace_root, "gr-ieee802-11", "examples", "wifi_phy_hier.grc"),
+            os.path.join(phy_root, "external", "gr-ieee802-11", "examples", "wifi_phy_hier.grc"),
+            os.path.join(workspace_root, "external", "gr-ieee802-11", "examples", "wifi_phy_hier.grc"),
+        ]
+    )
+    return [path for path in dict.fromkeys(os.path.abspath(path) for path in candidates if path)]
+
+
+def _grc_block_paths():
+    block_paths = []
+    for prefix in [os.environ.get("VIRTUAL_ENV", ""), sys.prefix, sys.base_prefix]:
+        if not prefix:
+            continue
+        candidate = os.path.join(prefix, "share", "gnuradio", "grc", "blocks")
+        if os.path.isdir(candidate):
+            block_paths.append(candidate)
+    return [path for path in dict.fromkeys(block_paths)]
+
+
+def _prepend_env_path(env, key, values):
+    entries = [value for value in values if value]
+    existing = env.get(key, "")
+    if existing:
+        entries.extend(part for part in existing.split(os.pathsep) if part)
+    if entries:
+        env[key] = os.pathsep.join(dict.fromkeys(entries))
+
+
 def _ensure_wifi_phy_hier_generated():
     grcc_path = shutil.which("grcc")
     if not grcc_path:
         return
 
-    candidate_grc_files = [
-        os.path.abspath(
-            os.path.join(
-                os.path.dirname(__file__),
-                "../../external/gr-ieee802-11/examples/wifi_phy_hier.grc",
-            )
-        ),
-        os.path.abspath(
-            os.path.join(
-                os.path.dirname(__file__),
-                "../../../external/gr-ieee802-11/examples/wifi_phy_hier.grc",
-            )
-        ),
-    ]
-    grc_file = next((path for path in candidate_grc_files if os.path.isfile(path)), "")
+    grc_file = next((path for path in _candidate_wifi_phy_hier_grc_files() if os.path.isfile(path)), "")
     if not grc_file:
         return
 
-    out_dir = os.environ.get("WIFI_GRC_HIER_PATH", "") or os.environ.get(
-        "GRC_HIER_PATH", ""
-    )
+    out_dir = os.environ.get("WIFI_GRC_HIER_PATH", "") or os.environ.get("GRC_HIER_PATH", "")
     if not out_dir:
-        out_dir = _get_grc_state_directory()
+        out_dir = _get_python_site_packages() or _get_grc_state_directory()
     os.makedirs(out_dir, exist_ok=True)
 
+    env = os.environ.copy()
+    _prepend_env_path(env, "PYTHONPATH", [_get_python_site_packages()])
+    _prepend_env_path(env, "GRC_BLOCKS_PATH", _grc_block_paths())
     subprocess.run(
-        [grcc_path, "-o", out_dir, grc_file],
+        [sys.executable, grcc_path, "-o", out_dir, grc_file],
         check=True,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        env=env,
     )
 
 
@@ -77,17 +115,8 @@ def _import_wifi_phy_hier():
     candidate_paths = [
         os.environ.get("WIFI_GRC_HIER_PATH", ""),
         os.environ.get("GRC_HIER_PATH", ""),
+        _get_python_site_packages(),
         _get_grc_state_directory(),
-        os.path.abspath(
-            os.path.join(
-                os.path.dirname(__file__), "../../external/gr-ieee802-11/examples"
-            )
-        ),
-        os.path.abspath(
-            os.path.join(
-                os.path.dirname(__file__), "../../../external/gr-ieee802-11/examples"
-            )
-        ),
     ]
     for path in candidate_paths:
         if path and path not in sys.path and os.path.isdir(path):
@@ -95,7 +124,6 @@ def _import_wifi_phy_hier():
 
     try:
         from wifi_phy_hier import wifi_phy_hier  # type: ignore
-
         return wifi_phy_hier
     except ImportError:
         _ensure_wifi_phy_hier_generated()
@@ -103,7 +131,6 @@ def _import_wifi_phy_hier():
             if path and path not in sys.path and os.path.isdir(path):
                 sys.path.append(path)
         from wifi_phy_hier import wifi_phy_hier  # type: ignore
-
         return wifi_phy_hier
 
 

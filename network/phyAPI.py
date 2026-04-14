@@ -25,9 +25,9 @@ class phyAPI(FlaskView):
     def _normalize_wifi_probe_samples(self, sample_counts, scalar_samples):
         if sample_counts is not None:
             return {
-                "iq": int(sample_counts.get("iq", 96)),
-                "pilots": int(sample_counts.get("pilots", 8)),
-                "csi": int(sample_counts.get("csi", 104)),
+                "iq": int(sample_counts.get("iq", 720)),
+                "pilots": int(sample_counts.get("pilots", 4)),
+                "csi": int(sample_counts.get("csi", 52)),
                 "chan_est_samples": int(sample_counts.get("chan_est_samples", 128)),
             }
         samples = int(scalar_samples)
@@ -69,6 +69,10 @@ class phyAPI(FlaskView):
             if available_counts.get(key, 0) < int(min_count):
                 return False
         return True
+
+    def _complex_payload(self, values):
+        array = np.asarray(values, dtype=np.complex64).reshape(-1)
+        return {"real": np.real(array).tolist(), "imag": np.imag(array).tolist()}
 
     @route('/tx/data', methods=['POST'])
     def tx_data(self):
@@ -119,6 +123,14 @@ class phyAPI(FlaskView):
         sequence=data["sequence"]
         phy.setTxPnSequence(sequence)
         callback = {"contents": "setTxPnSequence" }
+        return jsonify(callback), 201
+
+    @route('/tx/set/castProbe', methods=['POST'])
+    def tx_set_castProbe(self):
+        data = request.get_json() or {}
+        sequence = data.get("sequence", "cast")
+        phy.setTxCastProbe(sequence)
+        callback = {"contents": "setTxCastProbe" }
         return jsonify(callback), 201
     
     @route('/tx/set/fileSource', methods=['POST'])
@@ -191,6 +203,17 @@ class phyAPI(FlaskView):
             print("Error: ", error)
             return jsonify(callback), 500
 
+    @route('/rx/set/castProbe', methods=['POST'])
+    def rx_set_castProbe(self):
+        try:
+            contents = phy.set_receive_cast_probe()
+            callback = {"contents": contents}
+            return jsonify(callback), 200
+        except Exception as error:
+            callback = {"error": str(error)}
+            print("Error: ", error)
+            return jsonify(callback), 500
+
     @route('/rx/set/MPSK', methods=['POST'])
     def rx_setMPSK(self):
         data=request.get_json()
@@ -223,6 +246,34 @@ class phyAPI(FlaskView):
             print("Error: ", error)
             return jsonify(callback), 500
 
+    @route('/rx/recordCastProbe', methods=['POST'])
+    def rx_record_cast_probe(self):
+        try:
+            data = request.get_json() or {}
+            max_wait_s = data.get("max_wait_s", 2.0)
+            capture = phy.record_cast_probe_data(
+                samples=int(data.get("samples", 32768)),
+                sequence=data.get("sequence", "cast"),
+                num_taps=int(data.get("num_taps", 128)),
+                max_wait_s=None if max_wait_s is None else float(max_wait_s),
+                detection_threshold=float(data.get("detection_threshold", 0.05)),
+                estimation_window_repetitions=int(data.get("estimation_window_repetitions", 4)),
+            )
+            callback = {
+                "detected": bool(capture.get("detected", False)),
+                "iq": self._complex_payload(capture.get("iq", [])),
+                "probe": self._complex_payload(capture.get("probe", [])),
+                "cir": self._complex_payload(capture.get("cir", [])),
+                "taps": self._complex_payload(capture.get("taps", [])),
+                "pdp_db": np.asarray(capture.get("pdp_db", []), dtype=np.float32).tolist(),
+                "metadata": capture.get("metadata", {}),
+            }
+            return jsonify(callback), 200
+        except Exception as error:
+            callback = {"error": str(error)}
+            print("Error: ", error)
+            return jsonify(callback), 500
+
     @route('/rx/recordWiFiProbe', methods=['POST'])
     def rx_record_wifi_probe(self):
         try:
@@ -230,12 +281,14 @@ class phyAPI(FlaskView):
             sample_counts = data.get("sample_counts", None)
             strict_counts = bool(data.get("strict_counts", False))
             api_retries = int(data.get("api_retries", 0))
+            max_wait_s = data.get("max_wait_s", None)
+            max_wait_s = None if max_wait_s is None else float(max_wait_s)
             samples = self._normalize_wifi_probe_samples(sample_counts, data.get("samples", 1024))
             required_counts = self._receiver_required_counts(samples, strict_counts=strict_counts)
 
             eq_data = None
             for attempt_idx in range(max(0, api_retries) + 1):
-                eq_data = phy.record_wifi_probe_data(samples=samples)
+                eq_data = phy.record_wifi_probe_data(samples=samples, max_wait_s=max_wait_s)
                 if self._wifi_probe_has_required_counts(eq_data, required_counts):
                     break
 

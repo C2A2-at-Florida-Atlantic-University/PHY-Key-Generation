@@ -16,6 +16,10 @@ if __name__ != '__main__':
         from RX.wifi_probe import WiFiProbeRx
     except Exception:
         WiFiProbeRx = None
+    try:
+        from RX.cast_probe import estimate_cast_probe_channel
+    except Exception:
+        estimate_cast_probe_channel = None
 else:
     from mpsk import MPSK
     from pkt_rcv_gr38 import packetReceive
@@ -24,7 +28,18 @@ else:
         from wifi_probe import WiFiProbeRx
     except Exception:
         WiFiProbeRx = None
+    try:
+        from cast_probe import estimate_cast_probe_channel
+    except Exception:
+        estimate_cast_probe_channel = None
 import time
+
+WIFI_PROBE_FRAME_SAMPLES = {
+    "symbols": 720,
+    "pilots": 4,
+    "csi": 52,
+    "chan_est": 128,
+}
 class Receiver():
     def __init__(self,
                 gain,
@@ -142,6 +157,10 @@ class Receiver():
                 UDP_port=self.UDP_port
             )
 
+    def set_rx_cast_probe(self):
+        # CaST probing uses the raw IQ capture graph; frame detection happens after capture.
+        self.set_rx_IQ()
+
     def set_rx_wifi_probe(self, chan_est=0):
         if WiFiProbeRx is None:
             raise RuntimeError(
@@ -238,6 +257,28 @@ class Receiver():
                     break
         return list(latest_samples)
     
+    def retrieve_cast_probe_data(
+        self,
+        samples=32768,
+        dataSize=2**16,
+        max_wait_s=2.0,
+        sequence="cast",
+        num_taps=128,
+        detection_threshold=0.05,
+        estimation_window_repetitions=4,
+    ):
+        if estimate_cast_probe_channel is None:
+            raise RuntimeError("CaST probe estimator is unavailable. Check RX/cast_probe.py imports.")
+        wait_s = 2.0 if max_wait_s is None else float(max_wait_s)
+        iq_samples = self.retrieve_IQ(dataSize=dataSize, samples=samples, max_wait_s=wait_s)
+        return estimate_cast_probe_channel(
+            iq_samples,
+            sequence=sequence,
+            num_taps=num_taps,
+            detection_threshold=detection_threshold,
+            estimation_window_repetitions=estimation_window_repetitions,
+        )
+
     def clear_UDP_socket(self):
         print("clearing socket")
         try:
@@ -283,10 +324,10 @@ class Receiver():
             )
         if isinstance(samples, dict):
             per_stream_samples = {
-                "symbols": int(samples.get("symbols", samples.get("iq", 96))),
-                "pilots": int(samples.get("pilots", 8)),
-                "csi": int(samples.get("csi", 104)),
-                "chan_est": int(samples.get("chan_est", samples.get("chan_est_samples", 128))),
+                "symbols": int(samples.get("symbols", samples.get("iq", WIFI_PROBE_FRAME_SAMPLES["symbols"]))),
+                "pilots": int(samples.get("pilots", WIFI_PROBE_FRAME_SAMPLES["pilots"])),
+                "csi": int(samples.get("csi", WIFI_PROBE_FRAME_SAMPLES["csi"])),
+                "chan_est": int(samples.get("chan_est", samples.get("chan_est_samples", WIFI_PROBE_FRAME_SAMPLES["chan_est"]))),
             }
         else:
             scalar_samples = int(samples)
@@ -306,14 +347,24 @@ class Receiver():
             for key in self.wifi_probe_socks.keys()
         }
         t0 = time.time()
+        deadline = None if max_wait_s is None else t0 + max(0.0, float(max_wait_s))
 
         while True:
+            select_timeout = None
+            if deadline is not None:
+                remaining_s = deadline - time.time()
+                if remaining_s <= 0:
+                    break
+                select_timeout = min(self.socket_timeout, remaining_s)
+
             ready_socks, _, _ = select.select(
                 list(self.wifi_probe_socks.values()),
                 [],
                 [],
-                None,
+                select_timeout,
             )
+            if not ready_socks and deadline is not None and time.time() >= deadline:
+                break
 
             for sock in ready_socks:
                 try:
