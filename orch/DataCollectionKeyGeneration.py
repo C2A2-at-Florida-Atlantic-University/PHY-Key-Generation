@@ -254,23 +254,26 @@ def recordCastProbe(nodeID,port,samples,warmup=None):
     path = "/rx/recordCastProbe"
     warmup = warmup or {}
     sample_count = int(warmup.get("samples", 0) or samples)
+    estimation_repetitions = int(warmup.get("estimation_window_repetitions", warmup.get("num_repetitions", 4)))
+    num_repetitions = int(warmup.get("num_repetitions", estimation_repetitions))
+    capture_extra_repetitions = int(warmup.get("capture_extra_repetitions", 2))
+    capture_repetitions = warmup.get("capture_repetitions", num_repetitions + capture_extra_repetitions)
     data = {
         "samples": sample_count,
         "sequence": warmup.get("sequence", "cast"),
         "num_taps": int(warmup.get("num_taps", 128)),
         "detection_threshold": float(warmup.get("detection_threshold", 0.05)),
-        "estimation_window_repetitions": int(warmup.get("estimation_window_repetitions", warmup.get("num_repetitions", 4))),
-        "num_repetitions": int(warmup.get("num_repetitions", warmup.get("estimation_window_repetitions", 4))),
+        "estimation_window_repetitions": estimation_repetitions,
+        "num_repetitions": num_repetitions,
         "guard_len": int(warmup.get("guard_len", 0)),
         "sample_rate_hz": float(warmup.get("sample_rate_hz", warmup.get("tx_sampling_rate_hz", 1e6))),
         "rx_sample_rate_hz": float(warmup.get("rx_sample_rate_hz", warmup.get("sample_rate_hz", 1e6))),
         "estimation_mode": warmup.get("estimation_mode", "matched_filter"),
         "min_repetitions_detected": int(warmup.get("min_repetitions_detected", 1)),
         "capture_mode": warmup.get("capture_mode", "n_plus_2"),
-        "capture_extra_repetitions": int(warmup.get("capture_extra_repetitions", 2)),
+        "capture_extra_repetitions": capture_extra_repetitions,
+        "capture_repetitions": int(capture_repetitions),
     }
-    if warmup.get("capture_repetitions", None) is not None:
-        data["capture_repetitions"] = int(warmup["capture_repetitions"])
     if "repetition_detection_threshold" in warmup:
         data["repetition_detection_threshold"] = float(warmup["repetition_detection_threshold"])
     if "max_wait_s" in warmup:

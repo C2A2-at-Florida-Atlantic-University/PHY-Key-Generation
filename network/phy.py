@@ -147,11 +147,11 @@ class PHY:
     def set_receive_cast_probe(self):
         if hasattr(self.transmitter, "_cleanup_tx"):
             self.transmitter._cleanup_tx()
+        if self.mode["rx"] == "castProbe" and self.receiver.rx is not None:
+            return "Omitting setting mode: "+self.mode["rx"]
         self.receiver.set_rx_cast_probe()
-        if self.mode["rx"] != "castProbe":
-            self.mode["rx"] = "castProbe"
-            return "Setting mode: "+self.mode["rx"]
-        return "Omitting setting mode: "+self.mode["rx"]
+        self.mode["rx"] = "castProbe"
+        return "Setting mode: "+self.mode["rx"]
         
     def set_receive_MPSK(self,M=2):
         if self.mode["rx"] != str(M)+"PSK":
@@ -213,7 +213,8 @@ class PHY:
         capture_extra_repetitions=2,
         capture_mode="n_plus_2",
     ):
-        self.set_receive_cast_probe()
+        if self.mode["rx"] != "castProbe" or self.receiver.rx is None:
+            self.set_receive_cast_probe()
         self.receiver.clear_UDP_socket()
         self.receiver.start()
         try:
