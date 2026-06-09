@@ -31,9 +31,9 @@ CAST_INSTANCE_ROLES = {
 PIDML_CAST_PROFILE = {
     "name": "pidml_cast",
     "type": "castProbe",
-    "node_ids": [1, 2, 3, 4],
-    "examples": 10,
-    "freq": 2485000000,
+    "node_ids": [2,3,4,5,6,7,8],
+    "examples": 100,
+    "freq": 3500000000,
     "tx_sampling_rate_hz": 1000000,
     "rx_sampling_rate_hz": 2000000,
     "castProbe": {
@@ -1594,9 +1594,9 @@ def loadOTALabConfig(
     # OTA Lab node IPs
     NodeIPs = {
         1:"pc743.emulab.net",       # x310 radio node 1
-        2:"pc750.emulab.net",       # x310 radio node 2
-        3:"pc745.emulab.net",       # x310 radio node 3
-        4:"pc730.emulab.net",        # x310 radio node 4
+        2:"pc794.emulab.net",       # x310 radio node 2
+        3:"pc796.emulab.net",       # x310 radio node 3
+        4:"pc789.emulab.net",       # x310 radio node 4
         5:"ota-nuc1.emulab.net",    # b210 nuc node 1
         6:"ota-nuc2.emulab.net",    # b210 nuc node 2
         7:"ota-nuc3.emulab.net",    # b210 nuc node 3
@@ -1690,17 +1690,17 @@ if __name__ == "__main__":
     # nodeIDs = [2,3,4,5,6,7,8] #[1,2,3,4,5,6,7,8]
     collection_profile = "cast_debug_3p5"
     cast_profile = CAST_DEBUG_3P5_PROFILE if collection_profile == "cast_debug_3p5" else PIDML_CAST_PROFILE
-    nodeIDs = cast_profile["node_ids"] if collection_profile in ("pidml_cast", "cast_debug_3p5") else [1,2,3,4] #[1,2,3,4,5,6,7,8]
-    # NodeIPs, NodeGains, nodeConfigs = loadOTALabConfig(nodeIDs = nodeIDs)
-    NodeIPs, NodeGains, nodeConfigs = loadOTADenseConfig(nodeIDs = nodeIDs)
+    nodeIDs = cast_profile["node_ids"] if collection_profile in ("pidml_cast", "cast_debug_3p5") else [2,3,4,5,6,7,8] #[1,2,3,4,5,6,7,8]
+    NodeIPs, NodeGains, nodeConfigs = loadOTALabConfig(nodeIDs = nodeIDs)
+    # NodeIPs, NodeGains, nodeConfigs = loadOTADenseConfig(nodeIDs = nodeIDs)
     # Removing certain nodes that data has been collected
-    # configsToRemove = [[5, 6, 2], [5, 6, 3], [5, 6, 4], 
-    #                     [5, 6, 7], [5, 6, 8], [5, 7, 2], 
-    #                     [5, 7, 3], [5, 7, 4], [5, 7, 6], 
-    #                     [5, 7, 8], [5, 8, 2], [5, 8, 3], 
-    #                     [5, 8, 4], [5, 8, 6], [5, 8, 7], 
-    #                     [6, 7, 2]]
-    configsToRemove = []
+    configsToRemove = [[5, 6, 2], [5, 6, 3], [5, 6, 4], [5, 6, 7], [5, 6, 8],
+                       [5, 7, 2], [5, 7, 3], [5, 7, 4], [5, 7, 6], [5, 7, 8],
+                       [5, 8, 2], [5, 8, 3], [5, 8, 4], [5, 8, 6], [5, 8, 7],
+                       [6, 7, 2], [6, 7, 3], [6, 7, 4], [6, 7, 5], [6, 7, 8],
+                       [6, 8, 2], [6, 8, 3], [6, 8, 4], [6, 8, 5], [6, 8, 7],
+                       [7, 8, 2], [7, 8, 3],
+                       ]
     nodeConfigs = [config for config in nodeConfigs if config not in configsToRemove]
     # nodeConfigs = [[8,7,5]] # Testing with only one config
     print("Node configs: ", nodeConfigs)
@@ -1780,7 +1780,7 @@ if __name__ == "__main__":
     for nodes in nodeConfigs:
         print(f"Collecting data for node config: Alice={nodes[0]}, Bob={nodes[1]}, Eve={nodes[2]}")
         ts = int(time.time())
-        dataset_name = "Dataset_OTADense_Channels_"+type+"_"+str(examples)+"_"+"".join(str(node) for node in nodes)+"_"+str(ts)+".hdf5"
+        dataset_name = "Dataset_OTALab_Channels_"+type+"_"+str(examples)+"_"+"".join(str(node) for node in nodes)+"_"+str(ts)+".hdf5"
 
         if type == "wifiProbe":
             iq_I, iq_Q, pilots_I, pilots_Q, csi_I, csi_Q, chan_est_samples_I, chan_est_samples_Q, channel, instance, ids, tx, rx, timestamp = collect_data_ping_pong_3Nodes_wifi_probe(
